@@ -1,0 +1,20 @@
+devices_list = [
+    # {"host": "10.177.30.47", "device_type": "cisco_nxos"},
+    # {"host": "10.177.30.48", "device_type": "cisco_nxos"},
+    # {"host": "10.177.30.49", "device_type": "cisco_nxos"},
+    # {"host": "10.177.30.50", "device_type": "cisco_nxos"},
+    ##################################################
+    {"host": "10.177.30.251", "device_type": "cisco_ios"},
+    #     {"host": "10.177.30.226", "device_type": "cisco_ios"},
+    #     {"host": "10.177.30.56", "device_type": "cisco_ios"},
+    #     {"host": "10.177.30.57", "device_type": "cisco_ios"},
+    #     {"host": "10.177.30.202", "device_type": "cisco_ios"},
+    #     {"host": "10.177.30.219", "device_type": "cisco_ios"},
+    #     {"host": "10.195.40.41", "device_type": "cisco_ios"},
+    #     {"host": "10.195.40.45", "device_type": "cisco_ios"},
+    #     {"host": "10.177.30.209", "device_type": "cisco_ios"},
+    #     {"host": "10.195.40.43", "device_type": "cisco_ios"},
+    #     {"host": "10.177.30.224", "device_type": "cisco_ios"},
+    #     {"host": "10.195.227.218", "device_type": "cisco_ios"},
+    #     {"host": "10.195.40.60", "device_type": "cisco_ios"},
+]
