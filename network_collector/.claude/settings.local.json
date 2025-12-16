@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tree:*)",
+      "Bash(python3:*)",
+      "Bash(source myenv/bin/activate)",
+      "Bash(python -m network_collector:*)",
+      "Bash(source:*)",
+      "Bash(NET_USERNAME=admin NET_PASSWORD=admin python:*)",
+      "Bash(curl:*)",
+      "Bash(NET_USERNAME=admin NET_PASSWORD=admin python3:*)",
+      "Bash(echo:*)",
+      "Bash(python cli.py:*)",
+      "Bash(PYTHONPATH=. python cli.py:*)",
+      "Bash(cat:*)",
+      "Bash(PYTHONPATH=. python:*)",
+      "Bash(python -c:*)",
+      "Bash(PYTHONPATH=/home/sa/project/network_collector python:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(NETBOX_URL=http://localhost:8000 NETBOX_TOKEN=4dd51a78084a1c18c7dc95f56a5355c692811c02 python:*)",
+      "Bash(NET_USERNAME=admin NET_PASSWORD=admin NETBOX_URL=http://localhost:8000 NETBOX_TOKEN=4dd51a78084a1c18c7dc95f56a5355c692811c02 python:*)",
+      "Bash(rm:*)",
+      "Bash(NET_USERNAME=admin NET_PASSWORD=admin NETBOX_URL=http://localhost:8000 NETBOX_TOKEN=4dd51a78084a1c18c7dc95f56a5355c692811c02 python3:*)",
+      "Bash(NETBOX_URL=http://localhost:8000 NETBOX_TOKEN=4dd51a78084a1c18c7dc95f56a5355c692811c02 python3:*)",
+      "Bash(git clone:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

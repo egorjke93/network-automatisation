@@ -1,0 +1,58 @@
+# Virtual environment
+myenv/
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Reports and outputs
+reports/
+backups/
+*.xlsx
+*.csv
+matched_data.xlsx
+
+# Logs
+*.log
+
+# Credentials - keep local only
+devices_ips.py
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+*.tmp
+*.bak
+
+# Test folders
+проверка match mac/
