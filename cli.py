@@ -983,13 +983,15 @@ def cmd_push_descriptions(args) -> None:
     import pandas as pd  # для pd.isna()
 
     commands: dict = {}
+    device_names: dict = {}  # IP -> hostname для логирования
     for _, row in matched_df.iterrows():
         hostname = row.get("Device", "")
+        device_ip = row.get("IP", "")  # Колонка IP для поиска устройства
         interface = row.get("Interface", "")
         host_name = row.get("Host_Name", "")
         current_desc = row.get("Current_Description", "")
 
-        if not hostname or not interface or not host_name:
+        if not device_ip or not interface or not host_name:
             continue
 
         # Проверяем условия
@@ -1005,11 +1007,13 @@ def cmd_push_descriptions(args) -> None:
         if str(current_desc).strip() == str(host_name).strip():
             continue
 
-        if hostname not in commands:
-            commands[hostname] = []
+        # Используем IP как ключ для поиска устройства
+        if device_ip not in commands:
+            commands[device_ip] = []
+            device_names[device_ip] = hostname  # Сохраняем hostname для логов
 
-        commands[hostname].append(f"interface {interface}")
-        commands[hostname].append(f"description {host_name}")
+        commands[device_ip].append(f"interface {interface}")
+        commands[device_ip].append(f"description {host_name}")
 
     if not commands:
         logger.warning("Нет команд для применения")
@@ -1021,8 +1025,9 @@ def cmd_push_descriptions(args) -> None:
 
     if dry_run:
         logger.info("=== DRY RUN (команды не будут применены) ===")
-        for hostname, cmds in commands.items():
-            logger.info(f"\n{hostname}:")
+        for device_ip, cmds in commands.items():
+            display_name = device_names.get(device_ip, device_ip)
+            logger.info(f"\n{display_name} ({device_ip}):")
             for cmd in cmds:
                 logger.info(f"  {cmd}")
         logger.info("\nДля применения используйте флаг --apply")

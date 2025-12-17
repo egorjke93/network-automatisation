@@ -293,12 +293,22 @@ class InterfaceCollector(BaseCollector):
                         except Exception as e:
                             logger.debug(f"Ошибка получения switchport info: {e}")
 
+                # Определяем mode для LAG на основе members
+                # Если хотя бы один member в trunk → LAG тоже tagged
+                lag_modes: Dict[str, str] = {}
+                for member_iface, lag_name in lag_membership.items():
+                    if member_iface in switchport_modes:
+                        member_mode = switchport_modes[member_iface].get("mode", "")
+                        if member_mode == "tagged":
+                            lag_modes[lag_name] = "tagged"
+
                 # Добавляем metadata, LAG и switchport info к каждой записи
                 for row in data:
                     row["hostname"] = hostname
                     row["device_ip"] = device.host
 
                     iface = row.get("interface", "")
+                    iface_lower = iface.lower()
 
                     # Добавляем LAG для member интерфейсов
                     if iface in lag_membership:
@@ -310,6 +320,15 @@ class InterfaceCollector(BaseCollector):
                         row["mode"] = sw_data.get("mode", "")
                         row["native_vlan"] = sw_data.get("native_vlan", "")
                         row["access_vlan"] = sw_data.get("access_vlan", "")
+                    # Для LAG интерфейсов берём mode из members
+                    elif iface_lower.startswith(("po", "port-channel")):
+                        # Ищем mode по любому варианту имени (Po1, Port-channel1)
+                        for lag_name, lag_mode in lag_modes.items():
+                            if lag_name.lower() == iface_lower or \
+                               f"po{lag_name}".lower() == iface_lower or \
+                               lag_name.lower().replace("po", "port-channel") == iface_lower:
+                                row["mode"] = lag_mode
+                                break
 
                 logger.info(f"{hostname}: собрано {len(data)} интерфейсов")
                 return data

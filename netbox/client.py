@@ -215,6 +215,9 @@ class NetBoxClient:
         """
         Получает интерфейс по имени.
 
+        Поддерживает поиск по точному имени и нормализованному
+        (например, Po1 → Port-channel1).
+
         Args:
             device_id: ID устройства
             interface_name: Имя интерфейса
@@ -222,12 +225,26 @@ class NetBoxClient:
         Returns:
             Интерфейс или None
         """
+        from ..core.constants import normalize_interface_full
+
+        # Точное совпадение
         interfaces = list(self.api.dcim.interfaces.filter(
             device_id=device_id,
             name=interface_name,
         ))
         if interfaces:
             return interfaces[0]
+
+        # Попробуем нормализованное имя (Po1 → Port-channel1)
+        normalized_name = normalize_interface_full(interface_name)
+        if normalized_name != interface_name:
+            interfaces = list(self.api.dcim.interfaces.filter(
+                device_id=device_id,
+                name=normalized_name,
+            ))
+            if interfaces:
+                return interfaces[0]
+
         return None
 
     def create_interface(

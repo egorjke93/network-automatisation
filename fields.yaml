@@ -399,6 +399,10 @@ sync:
       exclude_interfaces:
         - "^Vlan1$"         # Vlan1 (дефолтный VLAN)
         - "^Null\\d+"       # Null интерфейсы
+      # MAC-адрес только на интерфейсы с IP (L3)
+      # Если true - MAC добавляется только на интерфейсы где есть ip_address
+      # Если false - MAC добавляется на все интерфейсы
+      sync_mac_only_with_ip: true
 
   # --- IP-адреса ---
   ip_addresses:

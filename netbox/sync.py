@@ -167,7 +167,17 @@ class NetBoxSync:
         # Фильтры исключения интерфейсов
         exclude_patterns = sync_cfg.get_option("exclude_interfaces", [])
 
-        for intf_data in interfaces:
+        # Сортируем: сначала LAG интерфейсы (Po*), потом остальные
+        # Это нужно чтобы LAG был создан до привязки member интерфейсов
+        def is_lag_interface(intf: Dict[str, Any]) -> int:
+            name = intf.get("interface", intf.get("name", "")).lower()
+            if name.startswith(("port-channel", "po")):
+                return 0  # LAG первые
+            return 1  # остальные после
+
+        sorted_interfaces = sorted(interfaces, key=is_lag_interface)
+
+        for intf_data in sorted_interfaces:
             intf_name = intf_data.get("interface", intf_data.get("name"))
             if not intf_name:
                 continue
@@ -225,9 +235,15 @@ class NetBoxSync:
         if sync_cfg.is_field_enabled("enabled"):
             kwargs["enabled"] = data.get("status", "up") == "up"
         # MAC будет добавлен отдельно через assign_mac_to_interface (NetBox 4.x)
+        # Опция sync_mac_only_with_ip: MAC только на интерфейсы с IP
         mac_to_assign = None
         if sync_cfg.is_field_enabled("mac_address") and data.get("mac"):
-            mac_to_assign = self._normalize_mac(data.get("mac", ""))
+            sync_mac_only_with_ip = sync_cfg.get_option("sync_mac_only_with_ip", False)
+            if sync_mac_only_with_ip and not data.get("ip_address"):
+                # Пропускаем MAC для интерфейсов без IP
+                pass
+            else:
+                mac_to_assign = self._normalize_mac(data.get("mac", ""))
         if sync_cfg.is_field_enabled("mtu") and data.get("mtu"):
             try:
                 kwargs["mtu"] = int(data.get("mtu"))
@@ -249,8 +265,9 @@ class NetBoxSync:
             lag_interface = self.client.get_interface_by_name(device_id, lag_name)
             if lag_interface:
                 kwargs["lag"] = lag_interface.id
+                logger.debug(f"Привязка {name} к LAG {lag_name} (id={lag_interface.id})")
             else:
-                logger.debug(f"LAG интерфейс {lag_name} не найден в NetBox")
+                logger.warning(f"LAG интерфейс {lag_name} не найден в NetBox для {name}")
 
         interface = self.client.create_interface(
             device_id=device_id,
@@ -439,14 +456,20 @@ class NetBoxSync:
                     updates["enabled"] = enabled
 
         # MAC обрабатывается отдельно через assign_mac_to_interface (NetBox 4.x)
+        # Опция sync_mac_only_with_ip: MAC только на интерфейсы с IP
         mac_to_assign = None
         if sync_cfg.is_field_enabled("mac_address"):
             if data.get("mac"):
-                new_mac = self._normalize_mac(data.get("mac", ""))
-                # Проверяем текущий MAC через client
-                current_mac = self.client.get_interface_mac(interface.id) if not self.dry_run else None
-                if new_mac and new_mac != (current_mac or ""):
-                    mac_to_assign = new_mac
+                sync_mac_only_with_ip = sync_cfg.get_option("sync_mac_only_with_ip", False)
+                if sync_mac_only_with_ip and not data.get("ip_address"):
+                    # Пропускаем MAC для интерфейсов без IP
+                    pass
+                else:
+                    new_mac = self._normalize_mac(data.get("mac", ""))
+                    # Проверяем текущий MAC через client
+                    current_mac = self.client.get_interface_mac(interface.id) if not self.dry_run else None
+                    if new_mac and new_mac != (current_mac or ""):
+                        mac_to_assign = new_mac
 
         if sync_cfg.is_field_enabled("mtu"):
             if data.get("mtu"):
