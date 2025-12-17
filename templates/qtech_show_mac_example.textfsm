@@ -1,0 +1,25 @@
+# Пример шаблона для QTech show mac address-table
+#
+# ВАЖНО: Это пример! Переименуй в qtech_show_mac.textfsm
+# и добавь маппинг в core/constants.py:
+#   ("qtech", "show mac address-table"): "qtech_show_mac.textfsm"
+#
+# Адаптируй под реальный вывод твоего QTech оборудования!
+#
+# Пример вывода QTech:
+# Vlan    Mac Address       Type        Ports
+# ----    -----------       ----        -----
+# 1       0011.2233.4455    dynamic     Gi0/1
+# 1       aabb.ccdd.eeff    static      Gi0/2
+
+Value VLAN (\d+)
+Value MAC ([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4}|[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2})
+Value TYPE (\w+)
+Value INTERFACE (\S+)
+
+Start
+  # Пропускаем заголовки
+  ^Vlan\s+Mac -> Continue
+  ^-+ -> Continue
+  # Парсим строки с данными
+  ^\s*${VLAN}\s+${MAC}\s+${TYPE}\s+${INTERFACE}\s*$$ -> Record
