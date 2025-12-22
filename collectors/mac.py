@@ -132,10 +132,10 @@ class MACCollector(BaseCollector):
             List[Dict]: Данные с устройства
         """
         command = self._get_command(device)
-        ntc_platform = get_ntc_platform(device.device_type)
+        ntc_platform = get_ntc_platform(device.platform)
 
         if not command:
-            logger.warning(f"Нет команды для {device.device_type}")
+            logger.warning(f"Нет команды для {device.platform}")
             return []
 
         try:
@@ -739,7 +739,7 @@ class MACCollector(BaseCollector):
             List[Dict]: Список sticky MAC записей
         """
         sticky_macs = []
-        platform = device.device_type
+        platform = device.platform
 
         # Проверяем есть ли шаблон для этой платформы
         template_key = (platform, "port-security")

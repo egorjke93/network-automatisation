@@ -157,7 +157,7 @@ class ConfigBackupCollector:
 
         # Получаем команду для платформы
         command = CONFIG_COMMANDS.get(
-            device.device_type.lower(),
+            device.platform.lower(),
             "show running-config"
         )
 

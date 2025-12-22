@@ -168,7 +168,7 @@ class BaseCollector(ABC):
         command = self._get_command(device)
 
         if not command:
-            logger.warning(f"Нет команды для {device.device_type}")
+            logger.warning(f"Нет команды для {device.platform}")
             return []
 
         try:
@@ -209,8 +209,8 @@ class BaseCollector(ABC):
             str: Команда для выполнения
         """
         # Сначала проверяем платформо-зависимые команды
-        if device.device_type in self.platform_commands:
-            return self.platform_commands[device.device_type]
+        if device.platform in self.platform_commands:
+            return self.platform_commands[device.platform]
 
         # Иначе используем общую команду
         return self.command
@@ -256,7 +256,7 @@ class BaseCollector(ABC):
             return []
 
         cmd = command or self._get_command(device)
-        ntc_platform = get_ntc_platform(device.device_type)
+        ntc_platform = get_ntc_platform(device.platform)
 
         try:
             return self._parser.parse(
@@ -266,7 +266,7 @@ class BaseCollector(ABC):
                 fields=self.ntc_fields,
             )
         except Exception as e:
-            logger.warning(f"NTC парсинг не удался для {device.device_type}/{cmd}: {e}")
+            logger.warning(f"NTC парсинг не удался для {device.platform}/{cmd}: {e}")
             return []
 
     # Алиас для обратной совместимости

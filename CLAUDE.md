@@ -133,12 +133,43 @@ python -m network_collector push-descriptions --matched-file matched.xlsx --over
 
 ## Файл устройств (devices_ips.py)
 
+### Ключевые поля
+
+| Поле | Описание | Пример |
+|------|----------|--------|
+| `host` | IP-адрес устройства (обязательный) | `192.168.1.1` |
+| `platform` | Драйвер для SSH (Scrapli/Netmiko/NTC) | `cisco_iosxe`, `arista_eos` |
+| `device_type` | Модель для NetBox (опционально) | `C9200L-24P-4X` |
+| `role` | Роль устройства для NetBox | `switch`, `router` |
+
+### Новый формат (рекомендуется)
+
 ```python
+devices_list = [
+    # platform - драйвер для SSH (обязательный)
+    # device_type - модель для NetBox (опционально, определяется из show version)
+    {"host": "192.168.1.1", "platform": "cisco_iosxe", "device_type": "C9200L-24P-4X"},
+    {"host": "192.168.1.2", "platform": "cisco_iosxe"},  # модель определится из show version
+    {"host": "192.168.1.3", "platform": "arista_eos", "role": "switch"},
+    {"host": "192.168.1.4", "platform": "juniper_junos"},
+]
+```
+
+### Старый формат (backward compatible)
+
+```python
+# device_type используется как platform (автоматически конвертируется)
 devices_list = [
     {"host": "192.168.1.1", "device_type": "cisco_ios"},
     {"host": "192.168.1.2", "device_type": "cisco_ios"},
 ]
 ```
+
+### Автоопределение
+
+- **vendor** — определяется автоматически из platform (cisco, arista, juniper)
+- **device_type (модель)** — если не указан, определяется из `show version`
+- При синхронизации с NetBox, если device_type не существует — создаётся автоматически
 
 ## Поддерживаемые платформы
 
@@ -154,9 +185,17 @@ devices_list = [
 ### Архитектура маппингов
 
 ```
-devices_ips.py           core/constants.py              collectors/
-─────────────────        ─────────────────              ───────────
-device_type: "qtech" →   SCRAPLI_PLATFORM_MAP:          platform_commands:
+devices_ips.py           core/device.py                 core/constants.py
+─────────────────        ─────────────                  ─────────────────
+platform: "qtech"  →     vendor = get_vendor_by_platform("qtech")  →  VENDOR_MAP
+                              ↓ автоопределение                        "qtech": ["qtech"]
+                         vendor = "qtech"                                    ↓
+                              ↓                           manufacturer = "Qtech" (для NetBox)
+device_type: "QSW-M3..."  →  model для NetBox (если указан)
+
+                         core/connection.py             collectors/
+                         ───────────────────            ───────────
+                         SCRAPLI_PLATFORM_MAP:          platform_commands:
                           "qtech": "cisco_iosxe"         "qtech": "show mac-address-table"
                                     ↓ SSH драйвер                  ↓ своя команда
                          NTC_PLATFORM_MAP:

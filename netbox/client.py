@@ -25,6 +25,8 @@ import os
 import logging
 from typing import List, Dict, Any, Optional, Union
 
+from ..core.credentials import get_netbox_token
+
 logger = logging.getLogger(__name__)
 
 # Пробуем импортировать pynetbox
@@ -72,9 +74,13 @@ class NetBoxClient:
         """
         Инициализация клиента NetBox.
 
+        Токен ищется в следующем порядке:
+        1. Параметр token
+        2. get_netbox_token() - проверяет env NETBOX_TOKEN, Credential Manager, config.yaml
+
         Args:
             url: URL NetBox сервера (или env NETBOX_URL)
-            token: API токен (или env NETBOX_TOKEN)
+            token: API токен (опционально, если не указан - использует get_netbox_token())
             ssl_verify: Проверять SSL сертификат
 
         Raises:
@@ -86,9 +92,12 @@ class NetBoxClient:
                 "pynetbox не установлен. Установите: pip install pynetbox"
             )
 
-        # Получаем URL и токен из параметров или переменных окружения
+        # Получаем URL из параметров или переменных окружения
         self.url = url or os.environ.get("NETBOX_URL")
-        self._token = token or os.environ.get("NETBOX_TOKEN")
+
+        # Получаем токен через безопасное хранилище
+        # Приоритет: параметр → env var → Credential Manager → config.yaml
+        self._token = get_netbox_token(config_token=token)
 
         if not self.url:
             raise ValueError(
@@ -96,7 +105,8 @@ class NetBoxClient:
             )
         if not self._token:
             raise ValueError(
-                "NetBox токен не указан. Укажите token или установите NETBOX_TOKEN"
+                "NetBox токен не указан. Добавьте токен в Windows Credential Manager "
+                "или установите NETBOX_TOKEN. См. документацию SECURITY.md"
             )
 
         # Инициализируем pynetbox API
@@ -177,6 +187,52 @@ class NetBoxClient:
                 return interface.device
         return None
 
+    def get_device_by_mac(self, mac: str) -> Optional[Any]:
+        """
+        Находит устройство по MAC-адресу.
+
+        Поиск выполняется в таблице dcim.mac_addresses (NetBox 4.x).
+        Если MAC привязан к интерфейсу, возвращает устройство этого интерфейса.
+
+        Args:
+            mac: MAC-адрес в любом формате (будет нормализован)
+
+        Returns:
+            Device или None
+        """
+        if not mac:
+            return None
+
+        # Нормализуем MAC к формату AA:BB:CC:DD:EE:FF
+        mac_normalized = mac.replace(":", "").replace("-", "").replace(".", "").lower()
+        if len(mac_normalized) != 12:
+            logger.debug(f"Некорректный MAC: {mac}")
+            return None
+
+        mac_formatted = ":".join(mac_normalized[i:i+2] for i in range(0, 12, 2))
+
+        try:
+            # Ищем в таблице MAC-адресов (NetBox 4.x)
+            mac_objs = list(self.api.dcim.mac_addresses.filter(mac_address=mac_formatted))
+            if mac_objs:
+                for mac_obj in mac_objs:
+                    if mac_obj.assigned_object and hasattr(mac_obj.assigned_object, "device"):
+                        device = mac_obj.assigned_object.device
+                        logger.debug(f"Устройство найдено по MAC {mac_formatted}: {device.name}")
+                        return device
+
+            # Fallback: ищем в интерфейсах напрямую (старый метод)
+            interfaces = list(self.api.dcim.interfaces.filter(mac_address=mac_formatted))
+            if interfaces and interfaces[0].device:
+                device = interfaces[0].device
+                logger.debug(f"Устройство найдено по MAC интерфейса {mac_formatted}: {device.name}")
+                return device
+
+        except Exception as e:
+            logger.debug(f"Ошибка поиска по MAC {mac}: {e}")
+
+        return None
+
     # ==================== ИНТЕРФЕЙСЫ ====================
 
     def get_interfaces(
@@ -215,8 +271,8 @@ class NetBoxClient:
         """
         Получает интерфейс по имени.
 
-        Поддерживает поиск по точному имени и нормализованному
-        (например, Po1 → Port-channel1).
+        Поддерживает поиск по точному имени, нормализованному и регистронезависимому
+        (например, Po1 → Port-channel1, port-channel1).
 
         Args:
             device_id: ID устройства
@@ -244,6 +300,15 @@ class NetBoxClient:
             ))
             if interfaces:
                 return interfaces[0]
+
+        # Для LAG попробуем регистронезависимый поиск
+        # NX-OS: port-channel4 vs Port-channel4
+        if interface_name.lower().startswith(("po", "port-channel")):
+            all_interfaces = list(self.api.dcim.interfaces.filter(device_id=device_id))
+            name_lower = normalized_name.lower()
+            for intf in all_interfaces:
+                if intf.name.lower() == name_lower:
+                    return intf
 
         return None
 
@@ -333,6 +398,38 @@ class NetBoxClient:
         ips = list(self.api.ipam.ip_addresses.filter(**params))
         logger.debug(f"Получено IP-адресов: {len(ips)}")
         return ips
+
+    def get_ip_by_address(self, address: str) -> Optional[Any]:
+        """
+        Находит IP-адрес по его значению.
+
+        Args:
+            address: IP-адрес (с маской или без)
+
+        Returns:
+            IPAddress объект или None
+        """
+        if not address:
+            return None
+
+        # Убираем маску если есть, pynetbox сам найдёт
+        ip_only = address.split("/")[0]
+
+        try:
+            # Ищем по точному адресу
+            ip_obj = self.api.ipam.ip_addresses.get(address=ip_only)
+            if ip_obj:
+                return ip_obj
+
+            # Пробуем с фильтром (может вернуть несколько)
+            ips = list(self.api.ipam.ip_addresses.filter(address=ip_only))
+            if ips:
+                return ips[0]
+
+        except Exception as e:
+            logger.debug(f"Ошибка поиска IP {address}: {e}")
+
+        return None
 
     def create_ip_address(
         self,
@@ -670,3 +767,269 @@ class NetBoxClient:
         if macs:
             return macs[0].mac_address
         return None
+
+    # ==================== DEVICE TYPES ====================
+
+    def get_device_type(
+        self,
+        model: str,
+        manufacturer: Optional[str] = None,
+    ) -> Optional[Any]:
+        """
+        Находит device type по модели.
+
+        Args:
+            model: Модель устройства (C9200L-24P-4X, WS-C2960X-48FPS-L)
+            manufacturer: Производитель (опционально, для уточнения)
+
+        Returns:
+            DeviceType или None
+        """
+        params = {"model": model}
+        if manufacturer:
+            mfr = self.get_or_create_manufacturer(manufacturer)
+            if mfr:
+                params["manufacturer_id"] = mfr.id
+
+        return self.api.dcim.device_types.get(**params)
+
+    def get_or_create_device_type(
+        self,
+        model: str,
+        manufacturer: str,
+        slug: Optional[str] = None,
+        u_height: float = 1,
+        is_full_depth: bool = True,
+        **kwargs,
+    ) -> Any:
+        """
+        Получает или создаёт device type в NetBox.
+
+        Args:
+            model: Модель устройства (C9200L-24P-4X)
+            manufacturer: Производитель (Cisco, Arista)
+            slug: Slug (опционально, генерируется из model)
+            u_height: Высота в юнитах (по умолчанию 1)
+            is_full_depth: Полная глубина (по умолчанию True)
+            **kwargs: Дополнительные параметры
+
+        Returns:
+            DeviceType объект
+        """
+        # Получаем или создаём manufacturer
+        mfr = self.get_or_create_manufacturer(manufacturer)
+
+        # Ищем существующий device type
+        existing = self.api.dcim.device_types.get(
+            model=model,
+            manufacturer_id=mfr.id,
+        )
+        if existing:
+            logger.debug(f"Device type '{model}' уже существует")
+            return existing
+
+        # Генерируем slug если не указан
+        if not slug:
+            slug = model.lower().replace(" ", "-").replace("/", "-")
+
+        # Создаём новый device type
+        data = {
+            "manufacturer": mfr.id,
+            "model": model,
+            "slug": slug,
+            "u_height": u_height,
+            "is_full_depth": is_full_depth,
+            **kwargs,
+        }
+
+        device_type = self.api.dcim.device_types.create(data)
+        logger.info(f"Создан device type: {manufacturer} {model}")
+        return device_type
+
+    # ==================== MANUFACTURERS ====================
+
+    def get_manufacturer(self, name: str) -> Optional[Any]:
+        """
+        Находит производителя по имени.
+
+        Args:
+            name: Имя производителя (Cisco, Arista, Juniper)
+
+        Returns:
+            Manufacturer или None
+        """
+        # Сначала по slug
+        slug = name.lower().replace(" ", "-")
+        mfr = self.api.dcim.manufacturers.get(slug=slug)
+        if mfr:
+            return mfr
+
+        # Затем по имени
+        return self.api.dcim.manufacturers.get(name=name)
+
+    def get_or_create_manufacturer(self, name: str) -> Any:
+        """
+        Получает или создаёт производителя.
+
+        Args:
+            name: Имя производителя (Cisco, Arista, Juniper)
+
+        Returns:
+            Manufacturer объект
+        """
+        existing = self.get_manufacturer(name)
+        if existing:
+            return existing
+
+        # Создаём нового производителя
+        slug = name.lower().replace(" ", "-")
+        mfr = self.api.dcim.manufacturers.create({
+            "name": name,
+            "slug": slug,
+        })
+        logger.info(f"Создан производитель: {name}")
+        return mfr
+
+    # ==================== DEVICE ROLES ====================
+
+    def get_device_role(self, name: str) -> Optional[Any]:
+        """
+        Находит роль устройства по имени.
+
+        Args:
+            name: Имя роли (Switch, Router, Firewall)
+
+        Returns:
+            DeviceRole или None
+        """
+        slug = name.lower().replace(" ", "-")
+        role = self.api.dcim.device_roles.get(slug=slug)
+        if role:
+            return role
+        return self.api.dcim.device_roles.get(name=name)
+
+    def get_or_create_device_role(
+        self,
+        name: str,
+        color: str = "9e9e9e",
+        vm_role: bool = False,
+    ) -> Any:
+        """
+        Получает или создаёт роль устройства.
+
+        Args:
+            name: Имя роли (Switch, Router, Firewall)
+            color: Цвет в hex (по умолчанию серый)
+            vm_role: Роль для виртуальных машин
+
+        Returns:
+            DeviceRole объект
+        """
+        existing = self.get_device_role(name)
+        if existing:
+            return existing
+
+        slug = name.lower().replace(" ", "-")
+        role = self.api.dcim.device_roles.create({
+            "name": name,
+            "slug": slug,
+            "color": color,
+            "vm_role": vm_role,
+        })
+        logger.info(f"Создана роль устройства: {name}")
+        return role
+
+    # ==================== SITES ====================
+
+    def get_site(self, name: str) -> Optional[Any]:
+        """
+        Находит сайт по имени.
+
+        Args:
+            name: Имя сайта
+
+        Returns:
+            Site или None
+        """
+        slug = name.lower().replace(" ", "-")
+        site = self.api.dcim.sites.get(slug=slug)
+        if site:
+            return site
+        return self.api.dcim.sites.get(name=name)
+
+    def get_or_create_site(self, name: str, status: str = "active") -> Any:
+        """
+        Получает или создаёт сайт.
+
+        Args:
+            name: Имя сайта
+            status: Статус (active, planned, retired)
+
+        Returns:
+            Site объект
+        """
+        existing = self.get_site(name)
+        if existing:
+            return existing
+
+        slug = name.lower().replace(" ", "-")
+        site = self.api.dcim.sites.create({
+            "name": name,
+            "slug": slug,
+            "status": status,
+        })
+        logger.info(f"Создан сайт: {name}")
+        return site
+
+    # ==================== PLATFORMS ====================
+
+    def get_platform(self, name: str) -> Optional[Any]:
+        """
+        Находит платформу по имени.
+
+        Платформа в NetBox — это NAPALM/Netmiko driver type (cisco_ios, arista_eos).
+
+        Args:
+            name: Имя платформы (cisco_ios, arista_eos)
+
+        Returns:
+            Platform или None
+        """
+        slug = name.lower().replace(" ", "-").replace("_", "-")
+        platform = self.api.dcim.platforms.get(slug=slug)
+        if platform:
+            return platform
+        return self.api.dcim.platforms.get(name=name)
+
+    def get_or_create_platform(
+        self,
+        name: str,
+        manufacturer: Optional[str] = None,
+    ) -> Any:
+        """
+        Получает или создаёт платформу.
+
+        Args:
+            name: Имя платформы (cisco_ios, cisco_iosxe, arista_eos)
+            manufacturer: Производитель (опционально)
+
+        Returns:
+            Platform объект
+        """
+        existing = self.get_platform(name)
+        if existing:
+            return existing
+
+        slug = name.lower().replace(" ", "-").replace("_", "-")
+        data = {
+            "name": name,
+            "slug": slug,
+        }
+
+        if manufacturer:
+            mfr = self.get_or_create_manufacturer(manufacturer)
+            data["manufacturer"] = mfr.id
+
+        platform = self.api.dcim.platforms.create(data)
+        logger.info(f"Создана платформа: {name}")
+        return platform

@@ -1,455 +1,9 @@
 
+1.	
+{"host": "10.177.30.49", "platform": "cisco_ nxos ", "device_type": "C9200L-24P-4X"},
 
 
-1.	не работает python -m network_collector sync-netbox --update-devices 
-
-И как он обновляет интерфейсы? Если нет расхождений все равно обновляет?При перезапуске статус обновлено, а не пропущено
-
-2. То что мы меняли схему тоже не работает, надо чтобы при синхронизации отрабатывала информация, бралась из device type, platform, role. из файла с утройствами, при выводе в  excel json  в export , пусть парсится из устройства информация, а при синхронизации с нет бокс берется отсюда, а если не заполнено, то парсинг. Надо так сделать и все проверить. Пока не работает. Ни экспорт ни синхронизация.
-{
-        "host": "10.177.30.200",
-        "device_type": " C2960S-48TS ",
-        "platform": "cisco_ios",
-        "role": "Switch",
-    },
-
-Имя пользователя: rozhkov_E_adm
-Пароль: 
-Enable пароль (Enter если не требуется):
-Traceback (most recent call last):
-  File "<frozen runpy>", line 198, in _run_module_as_main
-  File "<frozen runpy>", line 88, in _run_code
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\__main__.py", line 18, in <module>
-    main()
-    ~~~~^^
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\cli.py", line 1288, in main
-    cmd_mac(args)
-    ~~~~~~~^^^^^^
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\cli.py", line 674, in cmd_mac
-    data = collector.collect(devices)
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\collectors\base.py", line 123, in collect
-    data = self._collect_from_device(device)
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\collectors\mac.py", line 135, in _collect_from_device
-    ntc_platform = get_ntc_platform(device.platform)
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\core\connection.py", line 97, in get_ntc_platform
-    if device_type.lower() in NTC_PLATFORM_MAP:
-       ^^^^^^^^^^^^^^^^^
-
-3. Не работает описание только для включенных портов. Присвается и тем что выключены при синхронизации. Надо исправить. Но пока оставим, не такая важная задача.
-
-4. Интерфейсы синхронизируются, lag порт добавляется. Ip адрес например на vlan 30. Но есть еще в устройстве в разделе управления , основной ipv4 адрес, и возможно ли адрес, по которому мы подключаемся, добавить туда, только после того уже как мы синхронизировали ip адреса, так как добавить надо существующий. Можно выполнить эту задачу? Какова сложность?Там вроде при добавлении ip адреса есть галочка – сделать этот ip основным. Может так, если этот тот ip через который мы подключаемся.
-
-5. При создании кабелей отрабатывает только cdp , both не отрабатывает, ищет по hostname , mac но не находит. ПО cdp находит. 
-Нашло, но создать уже не получилось.в Lag кабель не добавляется.
-И надо убрать создание соседей через lag ,
-  warnings.warn(
-2025-12-18 10:59:44 - ERROR - Ошибка создания кабеля: The request failed with code 400 Bad Request: {'__all__': ['Cables cannot be terminated to Link Aggregation Group (LAG) interfaces']}
-2025-12-18 10:59:44 - INFO - Синхронизация кабелей: создано=0, существует=0, пропущено=14, ошибок=4
-Net box не поддерживает создания кабелей для виртуального интерфейса port channel , возвращаем все как было. Создаем кабели через обычные физические интерфейсы. Удаляем лишний код, возвращаем логику создания через простые интерфейсы физические. Но по cdp он только нашел этих соседей и хотел применить , через both ничего не нашел вообще.
-
-6. на коммутаторе есть порты в LAG в режиме доступ, на портах режим доступ отрисовался, а в port-channel нет режима. 
-Еще в  net box есть режим просто тегированный, а есть режим тегированный(все). То есть полный транк, у нас всегда просто тегированный отрисовывается, хоть и полный транк.  Есть есть транк для определенных vlan. Можем это подправить красиво аккуратно, лишь бы все работало.
-
-
-
-7. Загрузил интерфейсы в net box там :
-GigabitEthernet3/12 —  SFP+ (10GE)
-
-Гигабитный порт без трансивера определился как подключаемый модуль SFP+ (10GE) а должен быть SFP(1GE).
-Вывод порта GigabitEthernet2/6 is down, line protocol is down (notconnect)
-  Hardware is C6k 1000Mb 802.3, address is 001d.70dc.54a1 (bia 001d.70dc.54a1)
-  MTU 1500 bytes, BW 1000000 Kbit, DLY 10 usec, 
-     reliability 255/255, txload 0/255, rxload 0/255
-  Encapsulation ARPA, loopback not set
-  Keepalive set (10 sec)
-  Full-duplex, 1000Mb/s
-  input flow-control is off, output flow-control is off
-
-
-надо сделать чтобы было корректно.
-
-HundredGigE1/0/49 is up, line protocol is up (connected) 
-  Hardware is Hundred Gigabit Ethernet, address is 689e.0b1e.7d51 (bia 689e.0b1e.7d51)
-  MTU 1500 bytes, BW 100000000 Kbit/sec, DLY 10 usec, 
-     reliability 255/255, txload 1/255, rxload 1/255
-  Encapsulation ARPA, loopback not set
-  Keepalive set (10 sec)
-  Full-duplex, 100Gb/s, link type is force-up, media type is QSFP 40/100GE SRBD
-  input flow-control is on, output flow-control is off
-
-вот тоже порт в нет бокс как подучаемый модуль QSFP28(100GE)
-SU-C9500-48Y4C-01#show interfaces hundredGigE 1/0/51
-HundredGigE1/0/51 is up, line protocol is up (connected) 
-  Hardware is Hundred Gigabit Ethernet, address is 689e.0b1e.7d53 (bia 689e.0b1e.7d53)
-  Description: ---=== Nexus ===---
-  MTU 1500 bytes, BW 40000000 Kbit/sec, DLY 10 usec, 
-     reliability 255/255, txload 1/255, rxload 1/255
-  Encapsulation ARPA, loopback not set
-  Keepalive set (10 sec)
-  Full-duplex, 40Gb/s, link type is auto, media type is QSFP 40G CU3M
-
-
-Такой порт отображается QSFP28(100GE) так же.
-Это же как подключаемый порт, то есть будто трансивера нету, я так понимаю.
-  Keepalive set (10 sec)
-  Full-duplex, 100Gb/s, link type is force-up, media type is QSFP 100G LR4
-  input flow-control is on, output flow-control is off
-
-этот так же QSFP28(100GE)
-
-
-SU-C9500-48Y4C-01#show interfaces twentyFiveGigE 1/0/26
-TwentyFiveGigE1/0/26 is up, line protocol is up (connected) 
-  Hardware is Twenty Five Gigabit Ethernet, address is 689e.0b1e.7d3a (bia 689e.0b1e.7d3a)
-  Description: SU-BACKUP02
-  MTU 1500 bytes, BW 25000000 Kbit/sec, DLY 10 usec, 
-     reliability 255/255, txload 1/255, rxload 1/255
-  Encapsulation ARPA, loopback not set
-  Keepalive set (10 sec)
-  Full-duplex, 25Gb/s, link type is force-up, media type is SFP-25GBase-AOC3M
-Отображается как SFP28(25GE)
-
-
-
-И вот такой порт TwentyFiveGigE1/0/24 is down, line protocol is down (notconnect) 
-  Hardware is Twenty Five Gigabit Ethernet, address is 689e.0b1e.7d38 (bia 689e.0b1e.7d38)
-  MTU 1500 bytes, BW 25000000 Kbit/sec, DLY 10 usec, 
-     reliability 255/255, txload 1/255, rxload 1/255
-  Encapsulation ARPA, loopback not set
-  Keepalive set (10 sec)
-
-
-Я так понимаю там модуля нету но скорость 25G а порт выставился 1000base-T(1GE)
-Тоже надо подправить, неправильная информация.
-
-
-Port         Name               Status       Vlan       Duplex  Speed Type
-Twe1/0/1     ---=== 6509 ===--- connected    trunk        full    10G SFP-10GBase-LR
-Twe1/0/2     ---=== 6509 ===--- connected    trunk        full    10G SFP-10GBase-LR
-Twe1/0/3     SU-820-C9200L-48P- disabled     1            full    10G SFP-10GBase-LR
-Twe1/0/4     SU-226-SRV-9200-4X connected    trunk        full    10G SFP-10GBase-LR
-Twe1/0/5     9500-SU-NGFW01     connected    trunk        full    10G SFP-10GBase-LR
-Twe1/0/6     9500-SU-NGFW02     connected    trunk        full    10G SFP-10GBase-LR
-Twe1/0/7     SU-ELTEX-01        connected    trunk        full    10G SFP-10GBase-LR
-Twe1/0/8     SU-LAZ-C9200L-48P- connected    trunk        full    10G SFP-10GBase-LR
-Twe1/0/9                        notconnect   1            full    10G SFP-10GBase-LR
-Twe1/0/10                       notconnect   1            full    10G SFP-10GBase-LR
-Twe1/0/11    SU-829-C9200-48PoE connected    trunk        full    10G SFP-10GBase-LR
-Twe1/0/12                       notconnect   1            full    10G SFP-10GBase-LR
-Twe1/0/13    SU-CSU-P47-9200L   connected    trunk        full    10G SFP-10GBase-LR
-Twe1/0/14    SU-LOC-C9200L-24P- connected    trunk        full    10G SFP-10GBase-LR
-Twe1/0/15    SU-9200-PGU        connected    trunk        full    10G SFP-10GBase-LR
-Twe1/0/16    SU-804-2960X-TDL   connected    trunk        full    10G SFP-10GBase-LR
-Twe1/0/17    SU-316-C9200L-48P  connected    trunk        full    10G SFP-10GBase-LR
-Twe1/0/18                       notconnect   1            full    10G SFP-10GBase-LR
-Twe1/0/19                       notconnect   1            full    10G unknown
-Twe1/0/20                       notconnect   1            full    10G unknown
-Twe1/0/21                       notconnect   227          auto   auto unknown
-Twe1/0/22                       notconnect   1            auto   auto unknown
-Twe1/0/23                       notconnect   1            auto   auto unknown
-Twe1/0/24                       notconnect   1            auto   auto unknown
-Twe1/0/25    SU-BACKUP02        connected    125          full    25G SFP-25GBase-AOC3M
-Twe1/0/26    SU-BACKUP02        connected    125          full    25G SFP-25GBase-AOC3M
-Twe1/0/27    SU-HV001-25GBE     connected    trunk        full    25G SFP-25GBase-AOC3M
-Twe1/0/28    SU-HV001-25GBE     connected    trunk        full    25G SFP-25GBase-AOC3M
-Twe1/0/29    SU-HV002-25GbE     connected    trunk        full    25G SFP-25GBase-AOC3M
-Twe1/0/30    SU-HV002-25GbE     connected    trunk        full    25G SFP-25GBase-AOC3M
-Twe1/0/31    SU-HV003-25GbE     connected    trunk        full    25G SFP-25GBase-AOC3M
-Twe1/0/32    SU-HV003-25GbE     connected    trunk        full    25G SFP-25GBase-AOC3M
-Twe1/0/33                       notconnect   1            auto   auto unknown
-Twe1/0/34                       notconnect   1            auto   auto unknown
-Twe1/0/35                       notconnect   1            auto   auto unknown
-Twe1/0/36                       notconnect   1            auto   auto unknown
-Twe1/0/37                       notconnect   1            auto   auto unknown
-Twe1/0/38                       notconnect   1            auto   auto unknown
-Twe1/0/39                       notconnect   1            auto   auto unknown
-Twe1/0/40                       notconnect   1            auto   auto unknown
-Twe1/0/41                       notconnect   1            full    10G SFP-10GBase-LR
-Twe1/0/42                       notconnect   1            full    10G SFP-10GBase-LR
-Twe1/0/43                       notconnect   1            auto   auto unknown
-Twe1/0/44                       notconnect   1            auto   auto unknown
-Twe1/0/45                       notconnect   1            full    10G SFP-10GBase-LR
-Twe1/0/46                       notconnect   1            full    10G SFP-10GBase-LR
-Twe1/0/47                       notconnect   1            auto   auto unknown
-Twe1/0/48                       connected    4094         full   1000 1000BaseSX SFP
-Hu1/0/49                        connected    4094         full   100G QSFP 40/100GE SRBD
-Hu1/0/50                        connected    4094         full   100G QSFP 40/100GE SRBD
-Hu1/0/51     ---=== Nexus ===-- connected    trunk        full    40G QSFP 40G CU3M
-Hu1/0/52     --== QTECH ==--    connected    trunk        full   100G QSFP 100G LR4
-Twe2/0/1     ---=== 6509 ===--- connected    trunk        full    10G SFP-10GBase-LR
-Twe2/0/2     ---=== 6509 ===--- connected    trunk        full    10G SFP-10GBase-LR
-Twe2/0/3     SU-820-C9200L-48P- disabled     1            full    10G SFP-10GBase-LR
-Twe2/0/4     SU-226-SRV-9200-4X connected    trunk        full    10G SFP-10GBase-LR
-Twe2/0/5     9500-SU-NGFW01     connected    trunk        full    10G SFP-10GBase-LR
-Twe2/0/6     9500-SU-NGFW02     connected    trunk        full    10G SFP-10GBase-LR
-Twe2/0/7     SU-ELTEX-01        connected    trunk        full    10G SFP-10GBase-LR
-Twe2/0/8     SU-LAZ-C9200L-48P- connected    trunk        full    10G SFP-10GBase-LR
-Twe2/0/9                        notconnect   1            full    10G SFP-10GBase-LR
-Twe2/0/10                       notconnect   1            full    10G SFP-10GBase-LR
-Twe2/0/11    SU-829-C9200-48PoE connected    trunk        full    10G SFP-10GBase-LR
-Twe2/0/12                       notconnect   1            full   1000 1000BaseLX SFP
-Twe2/0/13    SU-CSU-P47-9200L   connected    trunk        full    10G SFP-10GBase-LR
-Twe2/0/14    SU-LOC-C9200L-24P- connected    trunk        full    10G SFP-10GBase-LR
-Twe2/0/15    SU-9200-PGU        connected    trunk        full    10G SFP-10GBase-LR
-          
-Port         Name               Status       Vlan       Duplex  Speed Type
-Twe2/0/16    SU-804-2960X-TDL   connected    trunk        full    10G SFP-10GBase-LR
-Twe2/0/17    SU-316-C9200L-48P  connected    trunk        full    10G SFP-10GBase-LR
-Twe2/0/18                       notconnect   1            full    10G SFP-10GBase-LR
-Twe2/0/19                       notconnect   1            full    10G unknown
-Twe2/0/20                       notconnect   1            full    10G unknown
-Twe2/0/21                       notconnect   1            auto   auto unknown
-Twe2/0/22                       notconnect   1            auto   auto unknown
-Twe2/0/23                       notconnect   1            auto   auto unknown
-Twe2/0/24                       notconnect   1            auto   auto unknown
-Twe2/0/25    SU-BACKUP02        connected    125          full    25G SFP-25GBase-AOC3M
-Twe2/0/26    SU-BACKUP02        connected    125          full    25G SFP-25GBase-AOC3M
-Twe2/0/27    SU-HV001-25GBE     connected    trunk        full    25G SFP-25GBase-AOC3M
-Twe2/0/28    SU-HV001-25GBE     connected    trunk        full    25G SFP-25GBase-AOC3M
-Twe2/0/29    SU-HV002-25GbE     connected    trunk        full    25G SFP-25GBase-AOC3M
-Twe2/0/30    SU-HV002-25GbE     connected    trunk        full    25G SFP-25GBase-AOC3M
-Twe2/0/31    SU-HV003-25GbE     connected    trunk        full    25G SFP-25GBase-AOC3M
-Twe2/0/32    SU-HV003-25GbE     connected    trunk        full    25G SFP-25GBase-AOC3M
-Twe2/0/33                       notconnect   1            auto   auto unknown
-Twe2/0/34                       notconnect   1            auto   auto unknown
-Twe2/0/35                       notconnect   1            auto   auto unknown
-Twe2/0/36                       notconnect   1            auto   auto unknown
-Twe2/0/37                       notconnect   1            auto   auto unknown
-Twe2/0/38                       notconnect   1            auto   auto unknown
-Twe2/0/39                       notconnect   1            auto   auto unknown
-Twe2/0/40                       notconnect   1            auto   auto unknown
-Twe2/0/41                       notconnect   1            auto   auto unknown
-Twe2/0/42                       notconnect   1            auto   auto unknown
-Twe2/0/43                       notconnect   1            auto   auto unknown
-Twe2/0/44                       notconnect   1            auto   auto unknown
-Twe2/0/45                       notconnect   1            full    10G SFP-10GBase-LR
-Twe2/0/46                       notconnect   1            full    10G SFP-10GBase-LR
-Twe2/0/47                       notconnect   1            auto   auto unknown
-Twe2/0/48                       connected    4094         full   1000 1000BaseSX SFP
-Hu2/0/49                        connected    4094         full   100G QSFP 40/100GE SRBD
-Hu2/0/50                        connected    4094         full   100G QSFP 40/100GE SRBD
-Hu2/0/51     ---=== Nexus ===-- connected    trunk        full    40G QSFP 40G CU3M
-Hu2/0/52     --== QTECH ==--    connected    trunk        full   100G QSFP 100G LR4
-Po11         SU-HV001-25GBE     connected    trunk      a-full    25G N/A
-Po12         SU-HV002-25GbE     connected    trunk      a-full    25G N/A
-Po13         SU-HV003-25GbE     connected    trunk      a-full    25G N/A
-Po14         SU-BACKUP02        connected    125        a-full    25G N/A
-Po20         SU-820-C9200L-48P- disabled     1            auto   auto N/A
-Po21         SU-226-SRV-9200-4X connected    trunk      a-full  a-10G N/A
-Po22         SU-849-C9200-48PoE notconnect   1            auto   auto N/A
-Po23         SU-724-C9200-48PoE notconnect   1            auto   auto N/A
-Po24         SU-CSU-P47-9200L   connected    trunk      a-full  a-10G N/A
-Po25         SU-LOC-C9200L-24P- connected    trunk      a-full  a-10G N/A
-Po26         SU-9200-PGU        connected    trunk      a-full  a-10G N/A
-Po27         SU-829-C9200-48PoE connected    trunk      a-full  a-10G N/A
-Po28         SU-LAZ-C9200L-48P- connected    trunk      a-full  a-10G N/A
-Po29         SU-804-2960X-TDL   connected    trunk      a-full  a-10G N/A
-Po30         SU-316-C9200L-48P  connected    trunk      a-full  a-10G N/A
-Po31         SU-ELTEX-01        connected    trunk      a-full  a-10G N/A
-Po45         9500-SU-NGFW01     connected    trunk      a-full  a-10G N/A
-Po46         9500-SU-NGFW02     connected    trunk      a-full  a-10G N/A
-Po49         ---=== 6509 ===--- connected    trunk      a-full  a-10G N/A
-Po50         ---=== Nexus ===-- connected    trunk      a-full  a-40G N/A
-Po89                            notconnect   unassigned   auto   auto N/A
-Po90         ---=== QTECH ===-- connected    trunk      a-full   100G N/A
-
-
-
-
-Вот весь вывод с 9500.
-
-
-
-А это с 6509
-
-
-Port          Name               Status       Vlan       Duplex  Speed Type
-Te1/1         --== SU-N9K-C93180 connected    trunk        full    10G 10Gbase-LR
-Te1/2         SU-512-C9200L-48P- notconnect   1            full    10G 10Gbase-SR
-Te1/3         --== SU-N9K-C93180 connected    trunk        full    10G 10Gbase-ER
-Te1/4                            notconnect   1            full    10G 10Gbase-SR
-Te1/5         ---=== 9500 ===--- connected    trunk        full    10G 10Gbase-LR
-Te1/6         ---=== 9500 ===--- connected    trunk        full    10G 10Gbase-LR
-Te1/7         ---=== 9500 ===--- connected    trunk        full    10G 10Gbase-LR
-Te1/8         ---=== 9500 ===--- connected    trunk        full    10G 10Gbase-LR
-Gi2/1         SU-I-2960S-545-01  connected    trunk        full   1000 1000BaseSX
-Gi2/2                            disabled     1            full   1000 No Transceiver
-Gi2/3         SU-545-C3650C      connected    trunk        full   1000 1000BaseSX
-Gi2/4         LINK_TO_COMSTAR    connected    trunk        full   1000 1000BaseSX
-Gi2/5         SU-545-C2960S-48TS connected    trunk        full   1000 1000BaseSX
-Gi2/6                            notconnect   1            full   1000 No Transceiver
-Gi2/7         SU-CSU-C2960S-AIIS connected    trunk        full   1000 1000BaseSX
-Gi2/8                            connected    trunk        full   1000 1000BaseSX
-Gi2/9                            disabled     routed       full   1000 No Transceiver
-Gi2/10                           notconnect   1            full   1000 1000BaseLH
-Gi2/11                           disabled     routed       full   1000 1000BaseLH
-Gi2/12                           disabled     routed       full   1000 No Transceiver
-Gi2/13        SU-723-2960S-48-TS connected    trunk        full   1000 1000BaseLH
-Gi2/14        LINK_TO_COMSTAR    connected    trunk        full   1000 1000BaseLX
-Gi2/15        SU-WS2960-BCU3     connected    trunk        full   1000 1000BaseLH
-Gi2/16        SU-WS2960-BCU1     connected    trunk        full   1000 1000BaseLH
-Gi2/17        SU-WS2960-BCU2     connected    trunk        full   1000 1000BaseLH
-Gi2/18        SU-WS2960-BNS1     connected    trunk        full   1000 1000BaseLH
-Gi2/19        SU-WS-2960X-0AB44  connected    trunk        full   1000 1000BaseLH
-Gi2/20                           notconnect   1            full   1000 No Transceiver
-Gi2/21        5508-WIFI          connected    trunk        full   1000 1000BaseSX
-Gi2/22        5508-WIFI          connected    trunk        full   1000 1000BaseSX
-Gi2/23        5508-WIFI          connected    trunk        full   1000 1000BaseSX
-Gi2/24        5508-WIFI          connected    trunk        full   1000 1000BaseSX
-Gi3/1         SU-C2960C-GD-89-0  connected    trunk        full   1000 1000BaseLH
-Gi3/2         US-GRES2-C3550     connected    trunk        full   1000 1000BaseLH
-Gi3/3         SU-C2969-8-DISEL   connected    trunk        full   1000 1000BaseLH
-Gi3/4         SU-C2960G-GD-XX    connected    trunk        full   1000 1000BaseLH
-Gi3/5         SU-C3560CX-ELAB01  connected    trunk        full   1000 1000BaseLH
-Gi3/6         SU-C3560CX-ELAB02  connected    trunk        full   1000 1000BaseLH
-Gi3/7         Link_C3650cx-11-b3 connected    trunk        full   1000 1000BaseBX10U
-Gi3/8         SU-C3560CX-11-BV44 connected    trunk        full   1000 1000BaseLH
-Gi3/9         SU-512-C2950-48-sx connected    trunk        full   1000 1000BaseSX
-Gi3/10        SU-418-C2950-48sx  connected    trunk        full   1000 1000BaseSX
-Gi3/11                           connected    trunk        full   1000 1000BaseSX
-Gi3/12                           notconnect   1            full   1000 No Transceiver
-Gi3/13        SU-HVO1-C2960X-48T connected    trunk        full   1000 1000BaseSX
-Gi3/14        SU-C2950-ORU500    connected    trunk        full   1000 1000BaseSX
-Gi3/15                           notconnect   1            full   1000 No Transceiver
-Gi3/16        GTC-SM             connected    trunk        full   1000 1000BaseLH
-Gi3/17        SU-WS-C3550-0A28   connected    trunk        full   1000 1000BaseLH
-Gi3/18        ABK-ORO            connected    trunk        full   1000 1000BaseLH
-Gi3/19        PGTC               connected    trunk        full   1000 1000BaseLH
-Gi3/20                           notconnect   1            full   1000 No Transceiver
-Gi3/21        5508-WIFI          connected    trunk        full   1000 No Transceiver
-Gi3/22        5508-WIFI          connected    trunk        full   1000 1000BaseSX
-Gi3/23        5508-WIFI          connected    trunk        full   1000 1000BaseSX
-Gi3/24        5508-WIFI          connected    trunk        full   1000 1000BaseSX
-Gi5/1                            notconnect   1            full   1000 No Transceiver
-Gi5/2                            notconnect   10           full   1000 No Transceiver
-Gi7/1                            notconnect   44           auto   auto 10/100/1000BaseT
-Gi7/2                            connected    trunk      a-full  a-100 10/100/1000BaseT
-Gi7/3                            notconnect   1            auto   auto 10/100/1000BaseT
-Gi7/4                            notconnect   1            auto   auto 10/100/1000BaseT
-Gi7/5         SU-AHO101-I-C2950T connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi7/6                            notconnect   1            auto   auto 10/100/1000BaseT
-Gi7/7         SU-418-2-C2960     connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi7/8         SU-I-C2950T-48-SI- connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi7/9                            notconnect   1            full   auto 10/100/1000BaseT
-          
-Port          Name               Status       Vlan       Duplex  Speed Type
-Gi7/10                           disabled     38           full   auto 10/100/1000BaseT
-Gi7/11        SU-804-c2950-48-2  connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi7/12        SPAN               monitoring   1          a-full a-1000 10/100/1000BaseT
-Gi7/13                           notconnect   1            auto   auto 10/100/1000BaseT
-Gi7/14                           connected    2          a-full  a-100 10/100/1000BaseT
-Gi7/15                           notconnect   1            full    100 10/100/1000BaseT
-Gi7/16                           notconnect   1            auto   auto 10/100/1000BaseT
-Gi7/17                           notconnect   1            full    100 10/100/1000BaseT
-Gi7/18                           notconnect   30           auto   auto 10/100/1000BaseT
-Gi7/19        6509-PA_INTERNAL   connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi7/20        6509-PA_INTERNAL   connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi7/21        6509-PA02_INTERNAL notconnect   1            full   auto 10/100/1000BaseT
-Gi7/22        6509-PA02_INTERNAL notconnect   1            full   auto 10/100/1000BaseT
-Gi7/23        CCTV-SERVER        connected    34         a-full a-1000 10/100/1000BaseT
-Gi7/24                           notconnect   2            full   auto 10/100/1000BaseT
-Gi7/25                           notconnect   40           auto   auto 10/100/1000BaseT
-Gi7/26                           connected    40         a-full a-1000 10/100/1000BaseT
-Gi7/27        SU-TEP01           connected    40         a-full  a-100 10/100/1000BaseT
-Gi7/28        SU-ASUTP-835       notconnect   1            full   auto 10/100/1000BaseT
-Gi7/29        Policom-REC-DATA   connected    51         a-full a-1000 10/100/1000BaseT
-Gi7/30        MGM-PA-01          connected    10         a-full a-1000 10/100/1000BaseT
-Gi7/31        MGM-PA-02          connected    10         a-full a-1000 10/100/1000BaseT
-Gi7/32        PA01-227           connected    227        a-full a-1000 10/100/1000BaseT
-Gi7/33        PA02-227           notconnect   227          full   auto 10/100/1000BaseT
-Gi7/34        Policom_REC_MGT    connected    51         a-full a-1000 10/100/1000BaseT
-Gi7/35        PIX-OUTSIDE        connected    506        a-full  a-100 10/100/1000BaseT
-Gi7/36        PIX-INSIDE         connected    67         a-full  a-100 10/100/1000BaseT
-Gi7/37        SU-829-WS2960R-FEN connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi7/38        SU-829-WS2960R-FEN connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi7/39        SU-NGFW-EDGE02     connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi7/40        SU-NGFW-EDGE02     connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi7/41        SU-NGFW-EDGE01     connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi7/42        SU-NGFW-EDGE01     connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi7/43                           disabled     unassigned   auto   auto 10/100/1000BaseT
-Gi7/44                           disabled     unassigned   auto   auto 10/100/1000BaseT
-Gi7/45                           notconnect   227          full   auto 10/100/1000BaseT
-Gi7/46                           notconnect   8            auto   auto 10/100/1000BaseT
-Gi7/47        SU-I-829-2950S-48  connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi7/48        RT-RESERV-IA-MSK   connected    991        a-full a-1000 10/100/1000BaseT
-Gi9/1         PA3050-01-MGT      connected    10         a-full a-1000 10/100/1000BaseT
-Gi9/2         PA3050-02-MGT      connected    10         a-full a-1000 10/100/1000BaseT
-Gi9/3                            disabled     38           full   auto 10/100/1000BaseT
-Gi9/4         SU-ISEC-ISI-DC02   connected    30         a-full a-1000 10/100/1000BaseT
-Gi9/5         SU-ISEC-ISI-DC01   connected    30         a-full a-1000 10/100/1000BaseT
-Gi9/6                            notconnect   119          full   auto 10/100/1000BaseT
-Gi9/7                            notconnect   routed       auto   auto 10/100/1000BaseT
-Gi9/8                            notconnect   routed       auto   auto 10/100/1000BaseT
-Gi9/9                            disabled     unassigned   auto   auto 10/100/1000BaseT
-Gi9/10                           disabled     unassigned   auto   auto 10/100/1000BaseT
-Gi9/11        SU-WSUS            connected    40         a-full  a-100 10/100/1000BaseT
-Gi9/12        SU-WSUS            connected    40         a-full  a-100 10/100/1000BaseT
-Gi9/13        SU_PA01_OUTSIDE    connected    506        a-full a-1000 10/100/1000BaseT
-Gi9/14        SU_PA02_OUTSIDE    notconnect   506          full   auto 10/100/1000BaseT
-Gi9/15        SU_PA01_DMZ        connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi9/16        SU_PA02_DMZ        connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi9/17        SU_PA01_VLAN16     connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi9/18        SU_PA02_VLAN16     notconnect   1            full   auto 10/100/1000BaseT
-Gi9/19        6509-PA_INTERNAL   connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi9/20        6509-PA_INTERNAL   connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi9/21        6509-PA02_INTERNAL notconnect   1            full   auto 10/100/1000BaseT
-Gi9/22        6509-PA02_INTERNAL notconnect   1            full   auto 10/100/1000BaseT
-Gi9/23                           notconnect   10           auto   auto 10/100/1000BaseT
-Gi9/24                           notconnect   10           auto   auto 10/100/1000BaseT
-Gi9/25                           notconnect   65           full   auto 10/100/1000BaseT
-Gi9/26        Link 3745 to LAN   connected    2          a-full a-1000 10/100/1000BaseT
-Gi9/27        Policom            connected    506        a-full a-1000 10/100/1000BaseT
-Gi9/28        Policom            connected    51         a-full a-1000 10/100/1000BaseT
-Gi9/29        Policom            connected    10         a-full a-1000 10/100/1000BaseT
-Gi9/30        SU-MP01            connected    25         a-full a-1000 10/100/1000BaseT
-          
-Port          Name               Status       Vlan       Duplex  Speed Type
-Gi9/31                           connected    40         a-full  a-100 10/100/1000BaseT
-Gi9/32        SU-MP01-IMM        connected    30         a-full a-1000 10/100/1000BaseT
-Gi9/33                           notconnect   10           full   auto 10/100/1000BaseT
-Gi9/34                           notconnect   10           full   auto 10/100/1000BaseT
-Gi9/35        SU-DC01-1/2        connected    40         a-full a-1000 10/100/1000BaseT
-Gi9/36                           notconnect   16           auto   auto 10/100/1000BaseT
-Gi9/37        SU-DC01-2/2        connected    40         a-full a-1000 10/100/1000BaseT
-Gi9/38                           notconnect   38           auto   auto 10/100/1000BaseT
-Gi9/39        TSPD-PA3050        connected    992        a-full a-1000 10/100/1000BaseT
-Gi9/40        TSPD-PA3050        connected    992        a-full a-1000 10/100/1000BaseT
-Gi9/41        IMM to Lync Server connected    10         a-full a-1000 10/100/1000BaseT
-Gi9/42                           notconnect   18           auto   auto 10/100/1000BaseT
-Gi9/43        SU-829-C2960-48TT- connected    trunk      a-full a-1000 10/100/1000BaseT
-Gi9/44        SU-ISEC-ISI-BCK01  connected    30         a-full a-1000 10/100/1000BaseT
-Gi9/45        9500 Management    connected    30         a-full a-1000 10/100/1000BaseT
-Gi9/46        9500 Management    connected    30         a-full a-1000 10/100/1000BaseT
-Gi9/47                           notconnect   38           auto   auto 10/100/1000BaseT
-Gi9/48        gi 9/48            connected    trunk      a-full a-1000 10/100/1000BaseT
-Po1           SU-SMTP-CLUSTER    connected    trunk      a-full a-1000 
-Po2                              notconnect   unassigne    auto   auto 
-Po3                              disabled     unassigned   auto   auto 
-Po4           TSPD-PA3050        notconnect   992          full   auto 
-Po4A                             connected    992        a-full a-1000 
-Po6           SU-WIFI-5508       connected    trunk      a-full a-1000 
-Po7                              connected    trunk      a-full a-1000 
-Po8                              notconnect   1            full   auto 
-Po9           SU-NGFW-EDGE02     connected    trunk      a-full a-1000 
-Po10          SU-NGFW-EDGE01     connected    trunk      a-full a-1000 
-Po49          C9500-40G          connected    trunk      a-full    10G 
-Po50          --== SU-N9K-C93180 connected    trunk      a-full    10G
-
-
-
-
-Глянь по всем типам что тут вывелись. Чтобы корректно все было при синхронизации.
-
-
-И еще такой моментик попробовал запустить синхронизацию inventory модулей
-
-И ошибка 
-
-2025-12-18 17:00:07 - INFO - connection to '10.177.30.219' on port '22' closed successfully
-2025-12-18 17:00:07 - INFO - Собрано записей: 7 с 1 устройств
-C:\Users\Rozhkov_E\Desktop\p\venv\Lib\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'ipam.it.unipro.energy'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
-  warnings.warn(
-2025-12-18 17:00:08 - INFO - Синхронизация inventory для SU-316-C9200L-48P-4X-01: 7 компонентов
+При такой строке, не может законнектится. Тайм аут проходит
 Traceback (most recent call last):
   File "<frozen runpy>", line 198, in _run_module_as_main
   File "<frozen runpy>", line 88, in _run_code
@@ -459,18 +13,180 @@ Traceback (most recent call last):
   File "C:\Users\Rozhkov_E\Desktop\p\network_collector\cli.py", line 1302, in main
     cmd_sync_netbox(args)
     ~~~~~~~~~~~~~~~^^^^^^
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\cli.py", line 1238, in cmd_sync_netbox
-    sync.sync_inventory(hostname, data)
-    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\netbox\sync.py", line 1665, in sync_inventory
-    sync_cfg = config.sync.inventory
-               ^^^^^^
-NameError: name 'config' is not defined
+  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\cli.py", line 1129, in cmd_sync_netbox
+    inventory_data = collector.collect(devices)
+  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\collectors\device.py", line 131, in collect
+    data = self._collect_from_device(device)
+  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\collectors\device.py", line 189, in _collect_from_device
+    with self._conn_manager.connect(device, self.credentials) as conn:
+         ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Rozhkov_E\AppData\Local\Programs\Python\Python313\Lib\contextlib.py", line 141, in __enter__
+    return next(self.gen)
+  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\core\connection.py", line 218, in connect
+    connection.open()
+    ~~~~~~~~~~~~~~~^^
+  File "C:\Users\Rozhkov_E\Desktop\p\venv\Lib\site-packages\scrapli\driver\base\sync_driver.py", line 116, in open
+    self.on_open(self)
+    ~~~~~~~~~~~~^^^^^^
+  File "C:\Users\Rozhkov_E\Desktop\p\venv\Lib\site-packages\scrapli\driver\core\cisco_iosxe\sync_driver.py", line 26, in iosxe_on_open
+    conn.acquire_priv(desired_priv=conn.default_desired_privilege_level)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Rozhkov_E\Desktop\p\venv\Lib\site-packages\scrapli\driver\network\sync_driver.py", line 165, in acquire_priv
+    current_prompt = self.channel.get_prompt()
+  File "C:\Users\Rozhkov_E\Desktop\p\venv\Lib\site-packages\scrapli\decorators.py", line 224, in decorate
+    return _multiprocessing_timeout(
+        transport=transport,
+    ...<4 lines>...
+        kwargs=kwargs,
+    )
+  File "C:\Users\Rozhkov_E\Desktop\p\venv\Lib\site-packages\scrapli\decorators.py", line 108, in _multiprocessing_timeout
+    wait([future], timeout=timeout)
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Rozhkov_E\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\_base.py", line 305, in wait
+    waiter.event.wait(timeout)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "C:\Users\Rozhkov_E\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 659, in wait
+    signaled = self._cond.wait(timeout)
+  File "C:\Users\Rozhkov_E\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 363, in wait
+    gotit = waiter.acquire(True, timeout)
+KeyboardInterrupt
 
-(venv) C:\Users\Rozhkov_E\Desktop\p>
+{"host": "10.177.30.49", "device_type": "cisco_nxos"},
+
+Делаем так и все окей. Где то ты что то недоработал по изменению формата .
 
 
----
+
+Проблема 2. Синхронизация интерфейсов.
+SU-NX01# show interface ethernet 1/1
+Ethernet1/1 is up
+admin state is up, Dedicated Interface
+  Belongs to Po4
+  Hardware: 100/1000/10000 Ethernet, address: 5087.89d3.d642 (bia 5087.89d3.d642)
+  Description: SU-SMTP01
+  MTU 1500 bytes, BW 1000000 Kbit, DLY 10 usec
+  reliability 255/255, txload 1/255, rxload 3/255
+в нет бокс 1000BASE-T (1GE)
+по факту тип интерфейса SFP+ (10GE), как другие назначены, где скорость 10G.
+А у этих скорость 1 G, но это не значит что тип другой. Надо подправить логику.
+
+Еще проблема 3.
+SU-NX01# show port
+port-channel   port-profile   
+SU-NX01# show port-channel summary
+Flags:  D - Down        P - Up in port-channel (members)
+        I - Individual  H - Hot-standby (LACP only)
+        s - Suspended   r - Module-removed
+        b - BFD Session Wait
+        S - Switched    R - Routed
+        U - Up (port-channel)
+        p - Up in delay-lacp mode (member)
+        M - Not in use. Min-links not met
+--------------------------------------------------------------------------------
+Group Port-       Type     Protocol  Member Ports
+      Channel
+--------------------------------------------------------------------------------
+4     Po4(SU)     Eth      LACP      Eth1/1(P)    
+5     Po5(SU)     Eth      LACP      Eth1/3(P)    
+6     Po6(SU)     Eth      LACP      Eth1/2(P)    
+7     Po7(SU)     Eth      LACP      Eth1/4(P)    
+8     Po8(SD)     Eth      LACP      Eth1/5(s)    
+9     Po9(SD)     Eth      LACP      Eth1/6(s)    
+10    Po10(SU)    Eth      LACP      Eth2/1(P)    Eth2/2(P)    Eth2/3(P)
+                                     Eth2/4(P)    
+11    Po11(SU)    Eth      LACP      Eth1/17(P)   Eth1/18(P)   
+12    Po12(SU)    Eth      LACP      Eth1/19(P)   Eth1/20(P)   
+13    Po13(SU)    Eth      LACP      Eth1/21(P)   Eth1/22(P)   
+15    Po15(SU)    Eth      LACP      Eth1/33(P)   
+17    Po17(SU)    Eth      LACP      Eth1/46(P)   Eth1/48(P)   
+21    Po21(SU)    Eth      LACP      Eth1/41(P)   
+22    Po22(SU)    Eth      LACP      Eth1/89(P)   Eth1/90(D)   
+23    Po23(SD)    Eth      LACP      Eth1/81(D)   Eth1/82(D)   
+24    Po24(SD)    Eth      LACP      Eth1/83(D)   Eth1/84(D)   
+25    Po25(SU)    Eth      LACP      Eth1/43(P)   
+26    Po26(SU)    Eth      LACP      Eth1/91(P)   Eth1/92(D)   
+27    Po27(SD)    Eth      LACP      Eth1/42(D)   
+28    Po28(SD)    Eth      LACP      Eth1/44(D)   
+31    Po31(SU)    Eth      LACP      Eth1/45(P)   
+32    Po32(SU)    Eth      LACP      Eth1/93(P)   Eth1/94(D)   
+35    Po35(SU)    Eth      LACP      Eth1/47(P)   
+36    Po36(SU)    Eth      LACP      Eth1/95(P)   Eth1/96(D)   
+50    Po50(SU)    Eth      LACP      Eth2/5(P)    Eth2/6(D)    
+51    Po51(SD)    Eth      LACP      Eth1/9(D)    
+52    Po52(SD)    Eth      LACP      Eth1/10(D)   
+100   Po100(RU)   Eth      LACP      Eth1/49(P)   Eth1/50(P)   
+SU-NX01#  
+
+
+ 
+Вот например вывод port-channel в nexus .Port-channel  в netbox добавились, но нет tagged  или tagged-all. Проверь логику. Делал update но ничего не изменилось. Так же режим портов не отображается в nx и не добавились member в port-channel
+Ethernet1/37 is up
+admin state is up, Dedicated Interface
+  Hardware: 100/1000/10000 Ethernet, address: 5087.89d3.d666 (bia 5087.89d3.d666)
+  Description: ---= SU-DC01=--
+  MTU 1500 bytes, BW 100000 Kbit, DLY 10 usec
+  reliability 255/255, txload 1/255, rxload 1/255
+  Encapsulation ARPA, medium is broadcast
+  Port mode is access
+  full-duplex, 100 Mb/s
+  Beacon is turned off
+
+Здесь так же, в нет бокс вообще 1000BASE-T (1GE) тип интерфейса. Хотя там 10G поддерживает. Там трансиверов нет получается как таковых, надо скорость делать 10g Сколько порт поддерживает SFP+ (10GE) а по факту скорость указывается уже.В нексусах так, надо сделать чтобы с нексусами было так и корректно и с другими не сломалось. И объясни логику вывода трансиверов.
+
+Проблема 4.  Tagged all назначился почему то тольк portchannel а его member нет. 
+Это на 6509. На nx вообще не назначается
+
+
+
+Проблема 5.На 9500 member  не добавились.. проверь логику. Может сделай логи более подробные чтобы видеть где и на каком шаге проблема. Ключ -v не работает. И Скажи могу прислать вывод какой надо, что бы ты проверил в чем дело.Если ошибка не явная.
+
+Можем ли мы при создании ip  адресов так же присваивать им  tenant. И если на интерфейсе есть описание, так же это описание присваивать ip адресу , который на этом интерфейсе. Чтобы я мог обновить и прогнать их. 
+
+И Объясни как работает логика добавления primary интерфеса, при создании устройства она добавляется, но если ip адреса еще не синхронизированы и интерфейсы. Как это происходит? Может правильней будет при синхронизации ip  адресов это сделать? Или как?как сейчас это работает? 
+Проблема 6.
+Делаю соседство через both
+  warnings.warn(
+2025-12-19 12:56:57 - WARNING - Интерфейс соседа не найден: SU-316-C2960X-48LPD-L-01:SU-316-C9200L-48P-4X-01
+C:\Users\Rozhkov_E\Desktop\p\venv\Lib\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'ipam.it.unipro.energy'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+
+
+Пишет интерфейс соседа не найден. Как делаю cdp , сразу находится, как то матчится не правильно из двух протоколов? Почему так? Надо исправить.
+
+
+Device ID        Local Intrfce     Holdtme    Capability  Platform  Port ID
+SU-C9500-48Y4C-01.corp.ogk4.ru
+                 Ten 1/1/1         176             R S I  C9500-48Y Twe 1/0/17
+SU-C9500-48Y4C-01.corp.ogk4.ru
+                 Ten 1/1/2         141             R S I  C9500-48Y Twe 2/0/17
+SU-316-C2960X-48LPD-L-01.corp.ogk4.ru
+                 Ten 1/1/4         152              S I   WS-C2960X Ten 1/0/2
+SU-316-C2960X-48LPD-L-01.corp.ogk4.ru
+                 Ten 1/1/3         158              S I   WS-C2960X Ten 1/0/1
+
+Total cdp entries displayed : 4
+SU-316-C9200L-48P-4X-01#show lld
+SU-316-C9200L-48P-4X-01#show lldp  ne
+SU-316-C9200L-48P-4X-01#show lldp  neighbors 
+Capability codes:
+    (R) Router, (B) Bridge, (T) Telephone, (C) DOCSIS Cable Device
+    (W) WLAN Access Point, (P) Repeater, (S) Station, (O) Other
+
+Device ID           Local Intf     Hold-time  Capability      Port ID
+su-vcs-cod01.corp.ogGi1/0/41       120        O               00e0.db43.8145
+SU-316-C2960X-48LPD-Te1/1/4        120        B               Te1/0/2
+SU-316-C2960X-48LPD-Te1/1/3        120        B               Te1/0/1
+SU-C9500-48Y4C-01.coTe1/1/2        120        B,R             Twe2/0/17
+SU-C9500-48Y4C-01.coTe1/1/1        120        B,R             Twe1/0/17
+
+Вижу выводы слегка отличаются. В lldp Te в cdp Ten. Надо предусмотреть на разные случаи такое исход.
+
+
+
+
+
+
+
 
 ## СПРАВОЧНИК КОМАНД CLI
 

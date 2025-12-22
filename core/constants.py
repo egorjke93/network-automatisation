@@ -76,7 +76,10 @@ NETMIKO_PLATFORM_MAP: Dict[str, str] = {
 
 # Маппинг вендоров по типу устройства
 VENDOR_MAP: Dict[str, List[str]] = {
-    "cisco": ["cisco_ios", "cisco_xe", "cisco_xr", "cisco_nxos", "cisco_asa"],
+    "cisco": [
+        "cisco_ios", "cisco_iosxe", "cisco_xe",
+        "cisco_iosxr", "cisco_xr", "cisco_nxos", "cisco_asa",
+    ],
     "arista": ["arista_eos"],
     "juniper": ["juniper", "juniper_junos"],
     "huawei": ["huawei", "huawei_vrp"],
@@ -157,23 +160,26 @@ def normalize_interface_full(interface: str) -> str:
     return interface
 
 
-def get_vendor_by_device_type(device_type: str) -> str:
+def get_vendor_by_platform(platform: str) -> str:
     """
-    Определяет вендора по типу устройства.
+    Определяет вендора по платформе.
 
     Args:
-        device_type: Тип устройства
+        platform: Платформа устройства (cisco_ios, arista_eos, etc.)
 
     Returns:
         str: Название вендора
     """
-    device_type_lower = device_type.lower()
-    for vendor, types in VENDOR_MAP.items():
-        if device_type_lower in types:
+    if not platform:
+        return "unknown"
+
+    platform_lower = platform.lower()
+    for vendor, platforms in VENDOR_MAP.items():
+        if platform_lower in platforms:
             return vendor
 
-    # Пробуем извлечь из device_type
-    return device_type.split("_")[0]
+    # Пробуем извлечь из platform
+    return platform.split("_")[0]
 
 
 # =============================================================================
@@ -195,6 +201,10 @@ def get_vendor_by_device_type(device_type: str) -> str:
 # Порядок важен! Более специфичные паттерны должны быть первыми
 NETBOX_INTERFACE_TYPE_MAP: Dict[str, str] = {
     # === 100G ===
+    "qsfp 100g lr4": "100gbase-lr4",       # QSFP 100G LR4
+    "qsfp 100g sr4": "100gbase-sr4",
+    "qsfp 100g er4": "100gbase-er4",
+    "qsfp 40/100ge srbd": "100gbase-x-qsfp28",  # QSFP 40/100GE SRBD (BiDi)
     "100gbase-sr4": "100gbase-sr4",
     "100g-sr4": "100gbase-sr4",
     "100gbase-lr4": "100gbase-lr4",
@@ -204,28 +214,35 @@ NETBOX_INTERFACE_TYPE_MAP: Dict[str, str] = {
     "qsfp28": "100gbase-x-qsfp28",
     "qsfp-100g": "100gbase-x-qsfp28",
     # === 40G ===
+    "qsfp 40g cu": "40gbase-x-qsfpp",      # QSFP 40G CU3M (DAC)
     "40gbase-sr4": "40gbase-sr4",
     "40g-sr4": "40gbase-sr4",
     "40gbase-lr4": "40gbase-lr4",
     "40g-lr4": "40gbase-lr4",
     "qsfp-40g": "40gbase-x-qsfpp",
+    "qsfp 40g": "40gbase-x-qsfpp",         # QSFP 40G ...
     # === 25G ===
+    "sfp-25gbase-aoc": "25gbase-x-sfp28",  # SFP-25GBase-AOC3M
+    "sfp-25gbase": "25gbase-x-sfp28",      # SFP-25GBase-...
     "25gbase-sr": "25gbase-sr",
     "25gbase-lr": "25gbase-lr",
     "sfp28": "25gbase-x-sfp28",
     "sfp-25g": "25gbase-x-sfp28",
     # === 10G Оптика ===
-    "10gbase-sr": "10gbase-sr",
-    "10g-sr": "10gbase-sr",
+    "sfp-10gbase-lr": "10gbase-lr",        # SFP-10GBase-LR
+    "sfp-10gbase-sr": "10gbase-sr",        # SFP-10GBase-SR
+    "sfp-10gbase-er": "10gbase-er",
     "10gbase-lr": "10gbase-lr",
-    "10g-lr": "10gbase-lr",
+    "10gbase-sr": "10gbase-sr",
     "10gbase-er": "10gbase-er",
+    "10g-sr": "10gbase-sr",
+    "10g-lr": "10gbase-lr",
     "10g-er": "10gbase-er",
     "10gbase-zr": "10gbase-zr",
     "10g-zr": "10gbase-zr",
     "10gbase-lx4": "10gbase-lx4",
     "10gbase-lrm": "10gbase-lrm",
-    "10gbase-cu": "10gbase-cx4",  # DAC кабель
+    "10gbase-cu": "10gbase-cx4",           # DAC кабель
     "10g-cu": "10gbase-cx4",
     "sfp+": "10gbase-x-sfpp",
     "sfp-10g": "10gbase-x-sfpp",
@@ -235,27 +252,33 @@ NETBOX_INTERFACE_TYPE_MAP: Dict[str, str] = {
     "10gbaset": "10gbase-t",
     "10gbase-t": "10gbase-t",
     # === 1G SFP (оптика) ===
+    "1000basesx": "1000base-sx",           # 1000BaseSX (Cisco 6509 format)
     "1000base-sx": "1000base-sx",
-    "1000basesx": "1000base-sx",
+    "1000baselx": "1000base-lx",           # 1000BaseLX
     "1000base-lx": "1000base-lx",
-    "1000baselx": "1000base-lx",
-    "1000base-zx": "1000base-zx",
+    "1000baselh": "1000base-lx",           # 1000BaseLH = Long Haul ≈ LX
+    "1000base-lh": "1000base-lx",
     "1000basezx": "1000base-zx",
-    "1000base-ex": "1000base-ex",
+    "1000base-zx": "1000base-zx",
     "1000baseex": "1000base-ex",
-    "1000base-bx": "1000base-bx10-d",  # BiDi
+    "1000base-ex": "1000base-ex",
+    "1000basebx10u": "1000base-bx10-u",    # 1000BaseBX10U (BiDi upstream)
+    "1000basebx10d": "1000base-bx10-d",    # 1000BaseBX10D (BiDi downstream)
     "1000basebx": "1000base-bx10-d",
-    "1000base-cx": "1000base-cx",
+    "1000base-bx": "1000base-bx10-d",
     "1000basecx": "1000base-cx",
+    "1000base-cx": "1000base-cx",
+    "1000base sfp": "1000base-x-sfp",      # Generic SFP
     # === Медные (RJ45) ===
     "basetx": "1000base-t",
     "base-tx": "1000base-t",
     "rj45": "1000base-t",
+    "10/100/1000baset": "1000base-t",      # 10/100/1000BaseT
     "10/100/1000": "1000base-t",
-    "10/100": "1000base-t",
+    "10/100": "100base-tx",
     "1000baset": "1000base-t",
-    "100baset": "1000base-t",
-    "10baset": "1000base-t",
+    "100baset": "100base-tx",
+    "10baset": "10base-t",
     # === 2.5G / 5G ===
     "2.5gbase": "2.5gbase-t",
     "5gbase": "5gbase-t",
@@ -272,6 +295,7 @@ NETBOX_HARDWARE_TYPE_MAP: Dict[str, str] = {
     "fortygig": "40gbase-x-qsfpp",
     "40g": "40gbase-x-qsfpp",
     # 25G
+    "twenty five gig": "25gbase-x-sfp28",
     "twenty-five": "25gbase-x-sfp28",
     "twentyfive": "25gbase-x-sfp28",
     "25g": "25gbase-x-sfp28",
@@ -279,11 +303,15 @@ NETBOX_HARDWARE_TYPE_MAP: Dict[str, str] = {
     "ten gig": "10gbase-x-sfpp",
     "tengig": "10gbase-x-sfpp",
     "10g": "10gbase-x-sfpp",
-    # 1G
+    # 1G - SFP порты на Cisco 6500 серии
+    "c6k 1000mb 802.3": "1000base-x-sfp",  # Cisco 6500 SFP порт
+    "c6k 1000mb": "1000base-x-sfp",
+    # 1G - медные
     "gigabit": "1000base-t",
     "gige": "1000base-t",
     "igbe": "1000base-t",
     "1g": "1000base-t",
+    "1000mb": "1000base-t",
     # 100M (FastEthernet) - NetBox использует 100base-tx
     "fast ethernet": "100base-tx",
     "fastethernet": "100base-tx",

@@ -98,10 +98,10 @@ class LLDPCollector(BaseCollector):
         from ..core.connection import get_ntc_platform
 
         command = self._get_command(device)
-        ntc_platform = get_ntc_platform(device.device_type)
+        ntc_platform = get_ntc_platform(device.platform)
 
         if not command:
-            logger.warning(f"Нет команды для {device.device_type}")
+            logger.warning(f"Нет команды для {device.platform}")
             return []
 
         try:
@@ -145,7 +145,7 @@ class LLDPCollector(BaseCollector):
         cdp_data = []
 
         # Собираем LLDP
-        lldp_command = self.lldp_commands.get(device.device_type)
+        lldp_command = self.lldp_commands.get(device.platform)
         if lldp_command:
             self.protocol = "lldp"
             response = conn.send_command(lldp_command)
@@ -154,7 +154,7 @@ class LLDPCollector(BaseCollector):
                 row["protocol"] = "LLDP"
 
         # Собираем CDP
-        cdp_command = self.cdp_commands.get(device.device_type)
+        cdp_command = self.cdp_commands.get(device.platform)
         if cdp_command:
             self.protocol = "cdp"
             response = conn.send_command(cdp_command)
@@ -181,7 +181,11 @@ class LLDPCollector(BaseCollector):
         """
         Объединяет данные LLDP и CDP.
 
-        Берёт LLDP как базу (есть MAC) и дополняет из CDP (platform).
+        Берёт LLDP как базу (есть MAC chassis_id) и дополняет из CDP:
+        - remote_hostname (если LLDP не дал system_name)
+        - remote_platform
+        - remote_ip
+
         Соседи сопоставляются по local_interface.
 
         Args:
@@ -206,11 +210,38 @@ class LLDPCollector(BaseCollector):
 
             if cdp_row:
                 # Дополняем пустые поля из CDP
+                # ВАЖНО: hostname из CDP если LLDP не дал system_name
+                lldp_hostname = lldp_row.get("remote_hostname", "")
+                # Если hostname пустой или это MAC-адрес в квадратных скобках
+                if not lldp_hostname or lldp_hostname.startswith("["):
+                    cdp_hostname = cdp_row.get("remote_hostname", "")
+                    if cdp_hostname and not cdp_hostname.startswith("["):
+                        lldp_row["remote_hostname"] = cdp_hostname
+                        # Переопределяем neighbor_type т.к. теперь есть hostname
+                        lldp_row["neighbor_type"] = "hostname"
+                        logger.debug(
+                            f"Hostname из CDP для {local_intf}: {cdp_hostname}"
+                        )
+
                 if not lldp_row.get("remote_platform") and cdp_row.get("remote_platform"):
                     lldp_row["remote_platform"] = cdp_row["remote_platform"]
 
                 if not lldp_row.get("remote_ip") and cdp_row.get("remote_ip"):
                     lldp_row["remote_ip"] = cdp_row["remote_ip"]
+
+                # remote_port: проверяем что это интерфейс, а не hostname
+                lldp_port = lldp_row.get("remote_port", "")
+                cdp_port = cdp_row.get("remote_port", "")
+
+                # Если LLDP port пустой или похож на hostname (нет / и много букв)
+                if not lldp_port or (
+                    "/" not in lldp_port and
+                    len(lldp_port) > 15 and
+                    not lldp_port[0:2].lower() in ("gi", "fa", "te", "et", "po")
+                ):
+                    if cdp_port:
+                        lldp_row["remote_port"] = cdp_port
+                        logger.debug(f"remote_port из CDP: {cdp_port} (LLDP был: {lldp_port})")
 
                 # Убираем из CDP индекса — уже обработан
                 del cdp_by_interface[local_intf]
@@ -226,17 +257,32 @@ class LLDPCollector(BaseCollector):
         return merged
 
     def _normalize_interface(self, interface: str) -> str:
-        """Нормализует имя интерфейса для сравнения."""
+        """
+        Нормализует имя интерфейса для сравнения.
+
+        Примеры:
+            Ten 1/1/4 -> te1/1/4
+            Te1/1/4 -> te1/1/4
+            TenGigabitEthernet1/1/4 -> te1/1/4
+            GigabitEthernet0/1 -> gi0/1
+            Twe1/0/17 -> twe1/0/17
+        """
         if not interface:
             return ""
-        # Убираем пробелы и приводим к нижнему регистру
-        intf = interface.strip().lower()
+        # Убираем пробелы везде и приводим к нижнему регистру
+        intf = interface.replace(" ", "").strip().lower()
+
         # Убираем префиксы типа Ethernet -> Et, GigabitEthernet -> Gi
+        # Важно: порядок имеет значение - сначала длинные префиксы
         for full, short in [
-            ("ethernet", "et"),
+            ("twentyfivegigabitethernet", "twe"),  # TwentyFiveGigE
+            ("tengigabitethernet", "te"),
             ("gigabitethernet", "gi"),
             ("fastethernet", "fa"),
-            ("tengigabitethernet", "te"),
+            ("ethernet", "eth"),
+            # Короткие формы CDP/LLDP
+            ("ten", "te"),   # Ten 1/1/4 (CDP) -> te1/1/4
+            ("twe", "twe"),  # Twe1/0/17 (CDP)
         ]:
             if intf.startswith(full):
                 intf = short + intf[len(full):]

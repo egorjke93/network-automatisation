@@ -70,35 +70,40 @@ NTC_PLATFORM_MAP = {
 }
 
 
-def get_scrapli_platform(device_type: str) -> str:
+def get_scrapli_platform(platform: str) -> str:
     """
-    Преобразует тип устройства в платформу Scrapli.
+    Преобразует платформу устройства в драйвер Scrapli.
 
     Args:
-        device_type: Тип устройства (cisco_ios, cisco_nxos, etc.)
+        platform: Платформа устройства (cisco_ios, cisco_iosxe, arista_eos, etc.)
 
     Returns:
-        str: Платформа для Scrapli
+        str: Драйвер для Scrapli
     """
-    return SCRAPLI_PLATFORM_MAP.get(device_type.lower(), "cisco_iosxe")
+    if not platform:
+        return "cisco_iosxe"
+    return SCRAPLI_PLATFORM_MAP.get(platform.lower(), "cisco_iosxe")
 
 
-def get_ntc_platform(device_type: str) -> str:
+def get_ntc_platform(platform: str) -> str:
     """
-    Преобразует тип устройства в платформу NTC Templates.
+    Преобразует платформу устройства в формат NTC Templates.
 
     Args:
-        device_type: Тип устройства
+        platform: Платформа устройства (cisco_ios, cisco_iosxe, arista_eos, etc.)
 
     Returns:
         str: Платформа для NTC Templates
     """
+    if not platform:
+        return "cisco_ios"
+
     # Сначала пробуем прямое соответствие
-    if device_type.lower() in NTC_PLATFORM_MAP:
-        return NTC_PLATFORM_MAP[device_type.lower()]
+    if platform.lower() in NTC_PLATFORM_MAP:
+        return NTC_PLATFORM_MAP[platform.lower()]
 
     # Пробуем через Scrapli платформу
-    scrapli_platform = get_scrapli_platform(device_type)
+    scrapli_platform = get_scrapli_platform(platform)
     return NTC_PLATFORM_MAP.get(scrapli_platform, "cisco_ios")
 
 
@@ -157,7 +162,7 @@ class ConnectionManager:
         Returns:
             Dict: Параметры для Scrapli
         """
-        scrapli_platform = get_scrapli_platform(device.device_type)
+        scrapli_platform = get_scrapli_platform(device.platform)
 
         params = {
             "host": device.host,

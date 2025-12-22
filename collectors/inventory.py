@@ -21,6 +21,7 @@ from typing import List, Dict, Any
 
 from .base import BaseCollector
 from ..core.device import Device
+from ..core.constants import get_vendor_by_platform
 
 logger = logging.getLogger(__name__)
 
@@ -145,29 +146,22 @@ class InventoryCollector(BaseCollector):
         """
         Определяет производителя по платформе устройства.
 
+        Использует централизованный маппинг из core/constants.py.
+
         Args:
             device: Устройство
 
         Returns:
-            str: Название производителя
+            str: Название производителя (Cisco, Arista, Juniper, etc.)
         """
-        if not device:
+        if not device or not device.platform:
             return ""
 
-        platform = device.device_type.lower()
+        # Используем централизованный маппинг
+        vendor = get_vendor_by_platform(device.platform)
 
-        if "cisco" in platform:
-            return "Cisco"
-        elif "arista" in platform:
-            return "Arista"
-        elif "juniper" in platform:
-            return "Juniper"
-        elif "huawei" in platform:
-            return "Huawei"
-        elif "qtech" in platform:
-            return "QTech"
-
-        return ""
+        # Capitalize для NetBox (cisco -> Cisco)
+        return vendor.capitalize() if vendor and vendor != "unknown" else ""
 
     def _detect_manufacturer_by_pid(self, pid: str) -> str:
         """

@@ -43,9 +43,9 @@ DEFAULT_DEVICE_FIELDS = {
 }
 
 # Дополнительные поля со статическими значениями или функциями
+# manufacturer определяется динамически из device.vendor
 DEFAULT_EXTRA_FIELDS = {
     "status": "active",
-    "manufacturer": "Cisco",
     "u_height": "1",
 }
 
@@ -176,13 +176,14 @@ class DeviceCollector:
         """
         data = {}
 
-        # Добавляем IP и платформу
+        # Добавляем IP, платформу и manufacturer
         data["ip_address"] = device.host
-        data["platform"] = device.device_type
+        data["platform"] = device.platform
+        data["manufacturer"] = device.vendor.capitalize() if device.vendor else "Cisco"
 
         # Определяем платформы
-        scrapli_platform = get_scrapli_platform(device.device_type)
-        ntc_platform = get_ntc_platform(device.device_type)
+        scrapli_platform = get_scrapli_platform(device.platform)
+        ntc_platform = get_ntc_platform(device.platform)
 
         try:
             with self._conn_manager.connect(device, self.credentials) as conn:
@@ -213,6 +214,9 @@ class DeviceCollector:
                 # Нормализуем модель (убираем WS- и лицензии)
                 if "model" in data and data["model"]:
                     data["model"] = normalize_device_model(data["model"])
+                # Fallback: используем device.device_type если модель не найдена в show version
+                elif device.device_type:
+                    data["model"] = normalize_device_model(device.device_type)
 
                 # Получаем hostname
                 hostname = self._conn_manager.get_hostname(conn)

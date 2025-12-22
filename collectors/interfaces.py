@@ -254,7 +254,7 @@ class InterfaceCollector(BaseCollector):
 
         command = self._get_command(device)
         if not command:
-            logger.warning(f"Нет команды для {device.device_type}")
+            logger.warning(f"Нет команды для {device.platform}")
             return []
 
         try:
@@ -270,12 +270,14 @@ class InterfaceCollector(BaseCollector):
                 # Собираем LAG membership если включено
                 lag_membership = {}
                 if self.collect_lag_info:
-                    lag_cmd = self.lag_commands.get(device.device_type)
+                    lag_cmd = self.lag_commands.get(device.platform)
                     if lag_cmd:
                         try:
                             lag_response = conn.send_command(lag_cmd)
                             lag_membership = self._parse_lag_membership(
-                                lag_response.result, get_ntc_platform(device.device_type)
+                                lag_response.result,
+                                get_ntc_platform(device.platform),
+                                lag_cmd,  # Передаём команду для NTC
                             )
                         except Exception as e:
                             logger.debug(f"Ошибка получения LAG info: {e}")
@@ -283,23 +285,28 @@ class InterfaceCollector(BaseCollector):
                 # Собираем switchport mode если включено
                 switchport_modes = {}
                 if self.collect_switchport:
-                    sw_cmd = self.switchport_commands.get(device.device_type)
+                    sw_cmd = self.switchport_commands.get(device.platform)
                     if sw_cmd:
                         try:
                             sw_response = conn.send_command(sw_cmd)
                             switchport_modes = self._parse_switchport_modes(
-                                sw_response.result, get_ntc_platform(device.device_type)
+                                sw_response.result,
+                                get_ntc_platform(device.platform),
+                                sw_cmd,  # Передаём команду для NTC
                             )
                         except Exception as e:
                             logger.debug(f"Ошибка получения switchport info: {e}")
 
                 # Определяем mode для LAG на основе members
-                # Если хотя бы один member в trunk → LAG тоже tagged
+                # Если хотя бы один member в trunk → LAG тоже tagged/tagged-all
                 lag_modes: Dict[str, str] = {}
                 for member_iface, lag_name in lag_membership.items():
                     if member_iface in switchport_modes:
                         member_mode = switchport_modes[member_iface].get("mode", "")
-                        if member_mode == "tagged":
+                        # tagged-all имеет приоритет над tagged
+                        if member_mode == "tagged-all":
+                            lag_modes[lag_name] = "tagged-all"
+                        elif member_mode == "tagged" and lag_modes.get(lag_name) != "tagged-all":
                             lag_modes[lag_name] = "tagged"
 
                 # Добавляем metadata, LAG и switchport info к каждой записи
@@ -309,6 +316,10 @@ class InterfaceCollector(BaseCollector):
 
                     iface = row.get("interface", "")
                     iface_lower = iface.lower()
+
+                    # Нормализуем port_type (платформонезависимо)
+                    # Это поле используется в sync.py для определения типа интерфейса
+                    row["port_type"] = self._detect_port_type(row, iface_lower)
 
                     # Добавляем LAG для member интерфейсов
                     if iface in lag_membership:
@@ -329,6 +340,11 @@ class InterfaceCollector(BaseCollector):
                                lag_name.lower().replace("po", "port-channel") == iface_lower:
                                 row["mode"] = lag_mode
                                 break
+                    # Для member интерфейсов без mode - наследуем от LAG
+                    elif iface in lag_membership and not row.get("mode"):
+                        lag_name = lag_membership[iface]
+                        if lag_name in lag_modes:
+                            row["mode"] = lag_modes[lag_name]
 
                 logger.info(f"{hostname}: собрано {len(data)} интерфейсов")
                 return data
@@ -341,16 +357,18 @@ class InterfaceCollector(BaseCollector):
         self,
         output: str,
         ntc_platform: str,
+        command: str = "show etherchannel summary",
     ) -> Dict[str, str]:
         """
-        Парсит show etherchannel summary для определения LAG membership.
+        Парсит show etherchannel/port-channel summary для определения LAG membership.
 
         Args:
-            output: Вывод show etherchannel summary
+            output: Вывод команды
             ntc_platform: Платформа для NTC
+            command: Команда для NTC парсера (show etherchannel summary / show port-channel summary)
 
         Returns:
-            Dict: {member_interface: lag_interface} например {"Gi0/1": "Po1", "Gi0/2": "Po1"}
+            Dict: {member_interface: lag_interface} например {"Gi0/1": "Po1", "Eth1/1": "Po1"}
         """
         from ntc_templates.parse import parse_output
 
@@ -359,7 +377,7 @@ class InterfaceCollector(BaseCollector):
         try:
             parsed = parse_output(
                 platform=ntc_platform,
-                command="show etherchannel summary",
+                command=command,
                 data=output
             )
 
@@ -381,15 +399,31 @@ class InterfaceCollector(BaseCollector):
 
                 for member in members:
                     if member:
-                        # Убираем статус из имени (Gi0/1(P) -> Gi0/1)
+                        # Убираем статус из имени (Gi0/1(P) -> Gi0/1, Eth1/1(P) -> Eth1/1)
                         member_clean = re.sub(r'\([^)]*\)', '', member).strip()
                         if member_clean:
                             membership[member_clean] = lag_name
-                            # Добавляем полное имя тоже
-                            if member_clean.startswith("Gi"):
-                                membership[f"GigabitEthernet{member_clean[2:]}"] = lag_name
+                            # Добавляем полное имя тоже (для сопоставления с show interface)
+                            if member_clean.startswith("Hu"):
+                                # C9500: Hu1/0/51 -> HundredGigE1/0/51
+                                membership[f"HundredGigE{member_clean[2:]}"] = lag_name
+                                membership[f"HundredGigabitEthernet{member_clean[2:]}"] = lag_name
+                            elif member_clean.startswith("Fo"):
+                                # Fo1/0/1 -> FortyGigabitEthernet1/0/1
+                                membership[f"FortyGigabitEthernet{member_clean[2:]}"] = lag_name
+                            elif member_clean.startswith("Twe"):
+                                # C9500: Twe1/0/27 -> TwentyFiveGigE1/0/27
+                                membership[f"TwentyFiveGigE{member_clean[3:]}"] = lag_name
+                                membership[f"TwentyFiveGigabitEthernet{member_clean[3:]}"] = lag_name
                             elif member_clean.startswith("Te"):
                                 membership[f"TenGigabitEthernet{member_clean[2:]}"] = lag_name
+                            elif member_clean.startswith("Gi"):
+                                membership[f"GigabitEthernet{member_clean[2:]}"] = lag_name
+                            elif member_clean.startswith("Eth"):
+                                # NX-OS: Eth1/1 -> Ethernet1/1
+                                membership[f"Ethernet{member_clean[3:]}"] = lag_name
+                            elif member_clean.startswith("Fa"):
+                                membership[f"FastEthernet{member_clean[2:]}"] = lag_name
 
         except Exception as e:
             logger.debug(f"Ошибка парсинга LAG через NTC: {e}")
@@ -428,16 +462,27 @@ class InterfaceCollector(BaseCollector):
             lag_name = match.group(1)  # Po1
             members_str = match.group(2)
 
-            # Парсим member порты: Gi0/1(P) Gi0/2(P) Te0/3(P)
+            # Парсим member порты: Gi0/1(P) Twe1/0/27(P) Hu1/0/51(P) Eth1/1(P)
             member_pattern = re.compile(r"([A-Za-z]+[\d/]+)\([^)]*\)")
             for member_match in member_pattern.finditer(members_str):
                 member = member_match.group(1)
                 membership[member] = lag_name
-                # Добавляем полное имя
-                if member.startswith("Gi"):
-                    membership[f"GigabitEthernet{member[2:]}"] = lag_name
+                # Добавляем полное имя (для сопоставления с show interface)
+                if member.startswith("Hu"):
+                    membership[f"HundredGigE{member[2:]}"] = lag_name
+                    membership[f"HundredGigabitEthernet{member[2:]}"] = lag_name
+                elif member.startswith("Fo"):
+                    membership[f"FortyGigabitEthernet{member[2:]}"] = lag_name
+                elif member.startswith("Twe"):
+                    membership[f"TwentyFiveGigE{member[3:]}"] = lag_name
+                    membership[f"TwentyFiveGigabitEthernet{member[3:]}"] = lag_name
                 elif member.startswith("Te"):
                     membership[f"TenGigabitEthernet{member[2:]}"] = lag_name
+                elif member.startswith("Gi"):
+                    membership[f"GigabitEthernet{member[2:]}"] = lag_name
+                elif member.startswith("Eth"):
+                    # NX-OS: Eth1/1 -> Ethernet1/1
+                    membership[f"Ethernet{member[3:]}"] = lag_name
                 elif member.startswith("Fa"):
                     membership[f"FastEthernet{member[2:]}"] = lag_name
 
@@ -447,13 +492,15 @@ class InterfaceCollector(BaseCollector):
         self,
         output: str,
         ntc_platform: str,
+        command: str = "show interfaces switchport",
     ) -> Dict[str, Dict[str, str]]:
         """
         Парсит show interfaces switchport для определения режимов портов.
 
         Args:
-            output: Вывод show interfaces switchport
+            output: Вывод команды
             ntc_platform: Платформа для NTC
+            command: Команда для NTC парсера
 
         Returns:
             Dict: {interface: {mode, native_vlan, access_vlan}}
@@ -465,7 +512,7 @@ class InterfaceCollector(BaseCollector):
         try:
             parsed = parse_output(
                 platform=ntc_platform,
-                command="show interfaces switchport",
+                command=command,
                 data=output
             )
 
@@ -480,13 +527,25 @@ class InterfaceCollector(BaseCollector):
 
                 # Конвертируем режим в формат NetBox
                 # NetBox: access, tagged, tagged-all
+                # tagged-all = полный транк (все VLAN)
+                # tagged = транк с ограниченным списком VLAN
                 netbox_mode = ""
                 if "access" in mode:
                     netbox_mode = "access"
-                elif "trunk" in mode:
-                    netbox_mode = "tagged"
-                elif "dynamic" in mode:
-                    netbox_mode = "tagged"  # DTP обычно в trunk
+                elif "trunk" in mode or "dynamic" in mode:
+                    # Проверяем список VLAN - если ALL или полный диапазон, то tagged-all
+                    trunking_vlans = row.get("trunking_vlans", "").lower().strip()
+                    # Варианты "все VLAN":
+                    # - "all" (IOS)
+                    # - "" (пустая строка)
+                    # - "1-4094" (NX-OS полный диапазон)
+                    # - "1-4093" (некоторые устройства)
+                    if (not trunking_vlans or
+                        trunking_vlans == "all" or
+                        trunking_vlans in ("1-4094", "1-4093", "1-4095")):
+                        netbox_mode = "tagged-all"
+                    else:
+                        netbox_mode = "tagged"
 
                 modes[iface] = {
                     "mode": netbox_mode,
@@ -501,6 +560,9 @@ class InterfaceCollector(BaseCollector):
                     modes[f"FastEthernet{iface[2:]}"] = modes[iface]
                 elif iface.startswith("Te"):
                     modes[f"TenGigabitEthernet{iface[2:]}"] = modes[iface]
+                elif iface.startswith("Eth"):
+                    # NX-OS: Eth1/1 -> Ethernet1/1
+                    modes[f"Ethernet{iface[3:]}"] = modes[iface]
 
         except Exception as e:
             logger.debug(f"Ошибка парсинга switchport через NTC: {e}")
@@ -546,9 +608,15 @@ class InterfaceCollector(BaseCollector):
                     mode = line.split(":", 1)[1].strip().lower()
                     if "access" in mode:
                         current_data["mode"] = "access"
-                    elif "trunk" in mode:
-                        current_data["mode"] = "tagged"
-                    elif "dynamic" in mode:
+                    elif "trunk" in mode or "dynamic" in mode:
+                        # По умолчанию tagged-all, если не указаны конкретные VLAN
+                        current_data["mode"] = "tagged-all"
+
+                # Trunking VLANs Enabled: ALL / 1,10,20
+                elif "Trunking VLANs Enabled:" in line:
+                    vlans = line.split(":", 1)[1].strip().lower()
+                    if vlans != "all" and vlans and current_data.get("mode") in ("tagged-all", "tagged"):
+                        # Есть конкретные VLAN - это tagged, не tagged-all
                         current_data["mode"] = "tagged"
 
                 # Access Mode VLAN: 1
@@ -568,3 +636,97 @@ class InterfaceCollector(BaseCollector):
             modes[current_interface] = current_data
 
         return modes
+
+    def _detect_port_type(self, row: Dict[str, Any], iface_lower: str) -> str:
+        """
+        Определяет тип порта на основе данных интерфейса.
+
+        Нормализует данные с разных платформ в единый формат:
+        - "100g-sfp28" - 100GE QSFP28
+        - "40g-qsfp" - 40GE QSFP+
+        - "25g-sfp28" - 25GE SFP28
+        - "10g-sfp+" - 10GE SFP+
+        - "1g-sfp" - 1GE SFP
+        - "1g-rj45" - 1GE RJ45 (copper)
+        - "100m-rj45" - 100M RJ45
+        - "lag" - Port-channel/LAG
+        - "virtual" - Vlan, Loopback, etc.
+        - "" - не определён
+
+        Args:
+            row: Данные интерфейса от NTC
+            iface_lower: Имя интерфейса в нижнем регистре
+
+        Returns:
+            str: Тип порта
+        """
+        hardware_type = row.get("hardware_type", "").lower()
+        media_type = row.get("media_type", "").lower()
+
+        # LAG интерфейсы
+        if iface_lower.startswith(("port-channel", "po")):
+            return "lag"
+
+        # Виртуальные интерфейсы
+        if iface_lower.startswith(("vlan", "loopback", "null", "tunnel", "nve")):
+            return "virtual"
+
+        # Management - обычно copper
+        if iface_lower.startswith(("mgmt", "management")):
+            return "1g-rj45"
+
+        # 1. По media_type (наиболее точный - есть информация о трансивере)
+        if media_type and media_type not in ("unknown", "not present", ""):
+            if "100gbase" in media_type or "100g" in media_type:
+                return "100g-qsfp28"
+            if "40gbase" in media_type or "40g" in media_type:
+                return "40g-qsfp"
+            if "25gbase" in media_type or "25g" in media_type:
+                return "25g-sfp28"
+            if "10gbase" in media_type or "10g" in media_type:
+                return "10g-sfp+"
+            if "1000base-t" in media_type or "rj45" in media_type:
+                return "1g-rj45"
+            if "1000base" in media_type or "sfp" in media_type:
+                return "1g-sfp"
+
+        # 2. По hardware_type (максимальная скорость порта)
+        # NX-OS: "100/1000/10000 Ethernet" = порт поддерживает 10G = SFP+
+        if hardware_type:
+            if "100000" in hardware_type or "100g" in hardware_type:
+                return "100g-qsfp28"
+            if "40000" in hardware_type or "40g" in hardware_type:
+                return "40g-qsfp"
+            if "25000" in hardware_type or "25g" in hardware_type:
+                return "25g-sfp28"
+            if "10000" in hardware_type or "10g" in hardware_type:
+                return "10g-sfp+"
+            # Только 1G без 10G - copper
+            if "1000" in hardware_type and "10000" not in hardware_type:
+                if "sfp" in hardware_type:
+                    return "1g-sfp"
+                return "1g-rj45"
+
+        # 3. По имени интерфейса (IOS/IOS-XE)
+        if iface_lower.startswith(("hundredgig", "hu")):
+            return "100g-qsfp28"
+        if iface_lower.startswith(("fortygig", "fo")):
+            return "40g-qsfp"
+        if iface_lower.startswith(("twentyfivegig", "twe")):
+            return "25g-sfp28"
+        if iface_lower.startswith("tengig"):
+            return "10g-sfp+"
+        # Te1/1 - короткий формат
+        if len(iface_lower) >= 3 and iface_lower[:2] == "te" and iface_lower[2].isdigit():
+            return "10g-sfp+"
+        if iface_lower.startswith(("gigabit", "gi")):
+            # GigabitEthernet по умолчанию RJ45, если нет SFP в hardware/media
+            if "sfp" in hardware_type or "sfp" in media_type:
+                return "1g-sfp"
+            return "1g-rj45"
+        if iface_lower.startswith(("fastethernet", "fa")):
+            return "100m-rj45"
+
+        # 4. Ethernet (NX-OS, Arista) - уже обработан через hardware_type выше
+        # Если дошли сюда - не удалось определить
+        return ""

@@ -857,7 +857,7 @@ def cmd_run(args) -> None:
                 # Парсим с NTC Templates
                 if NTC_AVAILABLE:
                     parser = NTCParser()
-                    platform = args.platform or get_ntc_platform(device.device_type)
+                    platform = args.platform or get_ntc_platform(device.platform)
                     try:
                         parsed = parser.parse(
                             output=output,
@@ -1201,7 +1201,7 @@ def cmd_sync_netbox(args) -> None:
                     if row.get("ip_address")
                 ]
                 if ip_data:
-                    sync.sync_ip_addresses(hostname, ip_data)
+                    sync.sync_ip_addresses(hostname, ip_data, device_ip=device.host)
 
     # Синхронизация VLAN из SVI интерфейсов
     if getattr(args, "vlans", False):

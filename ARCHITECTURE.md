@@ -296,28 +296,49 @@ cli.py
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ 5. INTERFACE TYPE DETECTION                                                  │
-│    NetBoxSync._get_interface_type(interface_data)                            │
+│ 5. INTERFACE TYPE DETECTION (двухуровневая архитектура)                      │
 │                                                                              │
-│    Использует маппинги из core/constants.py:                                 │
+│    УРОВЕНЬ 1: Коллектор (collectors/interfaces.py)                          │
+│    _detect_port_type() — нормализует сырые данные в единый port_type        │
 │    ┌─────────────────────────────────────────────────────────────────────┐   │
-│    │ NETBOX_INTERFACE_TYPE_MAP = {                                       │   │
-│    │     "10gbase-sr": "10gbase-x-sfpp",                                 │   │
-│    │     "1000base-sx": "1000base-x-sfp",                                │   │
-│    │     "basetx": "1000base-t",                                         │   │
-│    │     ...                                                             │   │
-│    │ }                                                                   │   │
+│    │ Приоритет:                                                          │   │
+│    │ 1. media_type → если трансивер определён ("SFP-10GBase-SR")        │   │
+│    │ 2. hardware_type → макс. скорость ("100/1000/10000" → 10g-sfp+)    │   │
+│    │ 3. interface_name → по имени ("TenGig" → 10g-sfp+, "Gi" → 1g-rj45) │   │
 │    │                                                                     │   │
-│    │ VIRTUAL_INTERFACE_PREFIXES = ("vlan", "loopback", ...)              │   │
-│    │ MGMT_INTERFACE_PATTERNS = ("mgmt", "management", ...)               │   │
+│    │ Результат — унифицированный port_type:                              │   │
+│    │ • "100g-qsfp28", "40g-qsfp", "25g-sfp28", "10g-sfp+"               │   │
+│    │ • "1g-sfp", "1g-rj45", "100m-rj45"                                  │   │
+│    │ • "lag", "virtual"                                                  │   │
 │    └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
-│    Логика:                                                                   │
-│    1. Виртуальный? (Vlan*, Loopback*) → "virtual"                            │
-│    2. Management? (mgmt*, fxp*) → "1000base-t"                               │
-│    3. По media_type через NETBOX_INTERFACE_TYPE_MAP                          │
-│    4. По hardware_type через NETBOX_HARDWARE_TYPE_MAP                        │
-│    5. Fallback → defaults.type из fields.yaml                                │
+│    УРОВЕНЬ 2: Sync (netbox/sync.py)                                         │
+│    _get_interface_type() — конвертирует port_type в формат NetBox           │
+│    ┌─────────────────────────────────────────────────────────────────────┐   │
+│    │ port_type → NetBox type:                                            │   │
+│    │ "10g-sfp+"   → "10gbase-x-sfpp"                                    │   │
+│    │ "1g-rj45"    → "1000base-t"                                        │   │
+│    │ "25g-sfp28"  → "25gbase-x-sfp28"                                   │   │
+│    │ "lag"        → "lag"                                               │   │
+│    │ "virtual"    → "virtual"                                           │   │
+│    │                                                                     │   │
+│    │ Если port_type пустой — fallback на старую логику:                  │   │
+│    │ 1. media_type → NETBOX_INTERFACE_TYPE_MAP                          │   │
+│    │ 2. hardware_type → NETBOX_HARDWARE_TYPE_MAP                        │   │
+│    │ 3. interface_name → по префиксу                                    │   │
+│    │ 4. defaults.type из fields.yaml                                    │   │
+│    └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+│    ПЛАТФОРМОНЕЗАВИСИМОСТЬ:                                                   │
+│    ┌─────────────────────────────────────────────────────────────────────┐   │
+│    │ NX-OS:   hardware="100/1000/10000"  → port_type="10g-sfp+"         │   │
+│    │ IOS:     interface="TenGigabit..."  → port_type="10g-sfp+"         │   │
+│    │ Arista:  media_type="10GBASE-SR"    → port_type="10g-sfp+"         │   │
+│    │ C9500:   interface="Twe1/0/27"      → port_type="25g-sfp28"        │   │
+│    │ C9500:   interface="Hu1/0/51"       → port_type="100g-qsfp28"      │   │
+│    │                                                                     │   │
+│    │ Все платформы → единый port_type → единый код в sync.py            │   │
+│    └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -406,7 +427,7 @@ class BaseCollector:
 
     def _get_command(self, device: Device) -> str:
         """Возвращает команду для платформы."""
-        return self.platform_commands.get(device.device_type, self.default_command)
+        return self.platform_commands.get(device.platform, self.default_command)
 
     def _parse_output(self, output: str, device: Device) -> List[Dict]:
         """Парсинг вывода (переопределяется)."""
@@ -744,7 +765,7 @@ def _collect_sticky_macs(self, conn, device, interface_status):
     # 2. Парсим с виртуальным ключом "port-security"
     parsed = self._textfsm_parser.parse(
         output=response.result,
-        platform=device.device_type,  # cisco_ios
+        platform=device.platform,  # cisco_ios
         command="port-security"       # виртуальный ключ
     )
 
@@ -1075,6 +1096,276 @@ network_collector/
 ├── USAGE.md                 # Инструкция пользователя
 ├── WORK_IN_PROGRESS.md      # Текущие задачи
 └── requirements.txt         # Зависимости
+```
+
+---
+
+## Добавление нового вендора (полный процесс)
+
+### Обзор: что нужно добавить
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. core/constants.py — МАППИНГИ                                              │
+│    • SCRAPLI_PLATFORM_MAP  → какой SSH драйвер использовать                 │
+│    • NTC_PLATFORM_MAP      → какой парсер NTC использовать                  │
+│    • VENDOR_MAP            → определение производителя (Cisco, Arista)      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 2. collectors/*.py — КОМАНДЫ                                                 │
+│    • platform_commands = {"newvendor": "show ..."}                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 3. templates/*.textfsm — КАСТОМНЫЕ ШАБЛОНЫ (если NTC не парсит)             │
+│    • CUSTOM_TEXTFSM_TEMPLATES + файл шаблона                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 4. collectors/interfaces.py — ТИП ИНТЕРФЕЙСА (опционально)                  │
+│    • _detect_port_type() если hardware_type/media_type отличается           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Шаг 1: Маппинги в core/constants.py
+
+```python
+# ═══════════════════════════════════════════════════════════════════════════
+# SSH ДРАЙВЕР — какой Scrapli driver использовать для подключения
+# ═══════════════════════════════════════════════════════════════════════════
+SCRAPLI_PLATFORM_MAP = {
+    # Если вендор использует CLI как Cisco IOS:
+    "eltex": "cisco_iosxe",
+    "qtech": "cisco_iosxe",
+
+    # Если есть нативный драйвер Scrapli:
+    # "arista_eos": "arista_eos",  # уже есть в Scrapli
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# NTC ПАРСЕР — какой шаблон NTC Templates использовать
+# ═══════════════════════════════════════════════════════════════════════════
+NTC_PLATFORM_MAP = {
+    # Если вывод похож на Cisco IOS:
+    "eltex": "cisco_ios",
+    "qtech": "cisco_ios",
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# VENDOR MAP — для определения производителя (используется в inventory)
+# ═══════════════════════════════════════════════════════════════════════════
+VENDOR_MAP = {
+    "eltex": ["eltex", "eltex_mes", "eltex_esr"],
+    "dlink": ["dlink", "dlink_dgs"],
+}
+```
+
+### Шаг 2: Команды в collectors/*.py
+
+Добавить команды для каждого коллектора, который должен работать с новым вендором:
+
+```python
+# collectors/mac.py
+class MACCollector(BaseCollector):
+    platform_commands = {
+        "cisco_ios": "show mac address-table",
+        "eltex": "show mac address-table",      # ← ДОБАВИТЬ
+    }
+
+# collectors/interfaces.py
+class InterfaceCollector(BaseCollector):
+    platform_commands = {
+        "cisco_ios": "show interfaces",
+        "eltex": "show interfaces",              # ← ДОБАВИТЬ
+    }
+
+    lag_commands = {
+        "cisco_ios": "show etherchannel summary",
+        "eltex": "show lacp summary",            # ← если команда другая
+    }
+
+    switchport_commands = {
+        "cisco_ios": "show interfaces switchport",
+        "eltex": "show interfaces switchport",   # ← ДОБАВИТЬ
+    }
+
+# collectors/lldp.py
+class LLDPCollector(BaseCollector):
+    lldp_commands = {
+        "cisco_ios": "show lldp neighbors detail",
+        "eltex": "show lldp neighbors",          # ← ДОБАВИТЬ
+    }
+
+# collectors/inventory.py, collectors/config_backup.py — аналогично
+```
+
+### Шаг 3: Кастомные шаблоны (если NTC не парсит)
+
+Если вывод команды отличается от стандартного и NTC Templates не парсит:
+
+```python
+# core/constants.py
+CUSTOM_TEXTFSM_TEMPLATES = {
+    # (платформа, команда): "файл_шаблона.textfsm"
+    ("eltex", "show mac address-table"): "eltex_show_mac.textfsm",
+    ("eltex", "show lacp summary"): "eltex_show_lacp.textfsm",
+}
+```
+
+Создать файл `templates/eltex_show_mac.textfsm`:
+
+```textfsm
+Value Required VLAN (\d+)
+Value Required MAC ([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})
+Value Required INTERFACE (\S+)
+Value TYPE (\S+)
+
+Start
+  ^${VLAN}\s+${MAC}\s+${TYPE}\s+${INTERFACE} -> Record
+```
+
+### Шаг 4: Тип интерфейса (опционально)
+
+Если `hardware_type` или `media_type` отличается от стандартных:
+
+```python
+# collectors/interfaces.py → _detect_port_type()
+
+def _detect_port_type(self, row: Dict[str, Any], iface_lower: str) -> str:
+    hardware_type = row.get("hardware_type", "").lower()
+
+    # ... существующие проверки ...
+
+    # ДОБАВИТЬ: Eltex с особым форматом
+    # Например: hardware_type = "GigabitEthernet SFP"
+    if "eltex" in hardware_type or iface_lower.startswith("ge"):
+        if "10g" in hardware_type:
+            return "10g-sfp+"
+        return "1g-rj45"
+
+    return ""
+```
+
+### Пример: полное добавление Eltex
+
+```python
+# ═══════════════════════════════════════════════════════════════════════════
+# 1. core/constants.py
+# ═══════════════════════════════════════════════════════════════════════════
+
+SCRAPLI_PLATFORM_MAP = {
+    "eltex": "cisco_iosxe",
+    "eltex_mes": "cisco_iosxe",
+}
+
+NTC_PLATFORM_MAP = {
+    "eltex": "cisco_ios",
+    "eltex_mes": "cisco_ios",
+}
+
+VENDOR_MAP = {
+    "eltex": ["eltex", "eltex_mes", "eltex_esr"],
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 2. collectors/mac.py
+# ═══════════════════════════════════════════════════════════════════════════
+
+platform_commands = {
+    "eltex": "show mac address-table",
+    "eltex_mes": "show mac address-table",
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 3. devices_ips.py — использование
+# ═══════════════════════════════════════════════════════════════════════════
+
+devices_list = [
+    {"host": "192.168.1.100", "platform": "eltex"},
+    {"host": "192.168.1.101", "platform": "eltex_mes", "device_type": "MES-3124"},
+]
+```
+
+### Таблица: где что добавлять
+
+| Что | Файл | Переменная/Функция |
+|-----|------|-------------------|
+| SSH драйвер | `core/constants.py` | `SCRAPLI_PLATFORM_MAP` |
+| NTC парсер | `core/constants.py` | `NTC_PLATFORM_MAP` |
+| Производитель | `core/constants.py` | `VENDOR_MAP` |
+| Команда MAC | `collectors/mac.py` | `platform_commands` |
+| Команда interfaces | `collectors/interfaces.py` | `platform_commands` |
+| Команда LAG | `collectors/interfaces.py` | `lag_commands` |
+| Команда switchport | `collectors/interfaces.py` | `switchport_commands` |
+| Команда LLDP | `collectors/lldp.py` | `lldp_commands` / `cdp_commands` |
+| Команда inventory | `collectors/inventory.py` | `platform_commands` |
+| Команда backup | `collectors/config_backup.py` | `BACKUP_COMMANDS` |
+| Кастомный шаблон | `core/constants.py` | `CUSTOM_TEXTFSM_TEMPLATES` |
+| Тип интерфейса | `collectors/interfaces.py` | `_detect_port_type()` |
+| Маппинг в NetBox | `netbox/sync.py` | `port_type_map` |
+
+### Проверка после добавления
+
+```bash
+# 1. Проверить подключение
+python -m network_collector run "show version" --format raw
+
+# 2. Проверить парсинг MAC
+python -m network_collector mac --format json
+
+# 3. Проверить интерфейсы
+python -m network_collector interfaces --format json
+
+# 4. Проверить sync (dry-run)
+python -m network_collector sync-netbox --interfaces --dry-run
+```
+
+---
+
+## Добавление нового типа интерфейса
+
+### Приоритет определения типа
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ 1. port_type (из коллектора) — платформонезависимый            │
+│    ↓ если пустой                                               │
+│ 2. media_type (SFP-10GBase-SR) — самый точный                  │
+│    ↓ если пустой                                               │
+│ 3. hardware_type (100/1000/10000 Ethernet) — макс. скорость    │
+│    ↓ если пустой                                               │
+│ 4. interface_name (TenGigabitEthernet) — по имени              │
+│    ↓ если не определился                                       │
+│ 5. Fallback → defaults.type из fields.yaml                     │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Пример: добавить 400G
+
+```python
+# 1. collectors/interfaces.py → _detect_port_type()
+if iface_lower.startswith(("fourhundredgig", "fh")):
+    return "400g-qsfp-dd"
+
+# 2. netbox/sync.py → _get_interface_type() → port_type_map
+port_type_map = {
+    "400g-qsfp-dd": "400gbase-x-qsfpdd",
+}
+```
+
+### Отладка
+
+```bash
+# Посмотреть сырые данные
+python -m network_collector interfaces --format json > interfaces.json
+
+# Проверить поля
+cat interfaces.json | jq '.[0] | {interface, hardware_type, media_type, port_type}'
+```
+
+### LAG member маппинг
+
+При парсинге `show etherchannel summary` имена короткие (`Gi0/1`, `Twe1/0/27`).
+Для сопоставления с `show interface` добавить в `_parse_lag_membership()`:
+
+```python
+if member_clean.startswith("NewPrefix"):
+    membership[f"NewFullName{member_clean[9:]}"] = lag_name
 ```
 
 ---

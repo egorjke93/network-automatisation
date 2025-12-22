@@ -90,9 +90,9 @@ class ConfigPusher:
         Returns:
             Dict: Параметры для Netmiko
         """
-        # Конвертируем device_type в формат Netmiko
+        # Конвертируем platform в формат Netmiko
         netmiko_device_type = NETMIKO_PLATFORM_MAP.get(
-            device.device_type, device.device_type
+            device.platform, device.platform
         )
         params = {
             "device_type": netmiko_device_type,
