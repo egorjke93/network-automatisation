@@ -332,8 +332,8 @@ class NetBoxSync:
         Определяет тип интерфейса для NetBox.
 
         Приоритет определения:
-        1. port_type (нормализованный в коллекторе) - РЕКОМЕНДУЕТСЯ
-        2. media_type (наиболее точный: "10/100/1000BaseTX", "SFP-10GBase-SR")
+        1. media_type (наиболее точный: "SFP-10GBase-LR", "SFP-10GBase-SR") - ВЫСШИЙ ПРИОРИТЕТ
+        2. port_type (нормализованный в коллекторе)
         3. hardware_type ("Gigabit Ethernet", "Ten Gigabit Ethernet SFP+")
         4. speed + имя интерфейса (fallback)
 
@@ -349,8 +349,40 @@ class NetBoxSync:
         if not sync_cfg.get_option("auto_detect_type", True):
             return sync_cfg.get_default("type", "1000base-t")
 
-        # 0. Используем нормализованный port_type из коллектора (платформонезависимо)
+        hardware_type = data.get("hardware_type", "").lower()
+        media_type = data.get("media_type", "").lower()
+        interface_name = data.get("interface", data.get("name", "")).lower()
+        speed_str = data.get("speed", "")
         port_type = data.get("port_type", "")
+
+        # LAG интерфейсы (Port-channel, Po)
+        if interface_name.startswith(("port-channel", "po")) or port_type == "lag":
+            return "lag"
+
+        # Виртуальные интерфейсы (Vlan, Loopback, и т.д.)
+        if interface_name.startswith(VIRTUAL_INTERFACE_PREFIXES) or port_type == "virtual":
+            return "virtual"
+
+        # Management интерфейсы - всегда медь
+        if any(x in interface_name for x in MGMT_INTERFACE_PATTERNS):
+            return "1000base-t"
+
+        # 1. MEDIA_TYPE - ВЫСШИЙ ПРИОРИТЕТ (самая точная информация о трансивере)
+        # Проверяем ПЕРВЫМ, даже если есть port_type
+        if media_type and media_type not in ("unknown", "not present", "no transceiver", ""):
+            for pattern, netbox_type in NETBOX_INTERFACE_TYPE_MAP.items():
+                if pattern in media_type:
+                    logger.debug(f"Тип определён по media_type: {media_type} → {netbox_type}")
+                    return netbox_type
+
+            # Универсальный SFP для 1G если не определился конкретный
+            if "sfp" in media_type and ("1000base" in media_type or "1g" in media_type):
+                if "baset" in media_type:
+                    return "1000base-t"  # SFP-T (медный SFP)
+                return "1000base-x-sfp"
+
+        # 2. PORT_TYPE - нормализованный тип из коллектора (платформонезависимо)
+        # Используется только если media_type не определён или пустой
         if port_type:
             port_type_map = {
                 "100g-qsfp28": "100gbase-x-qsfp28",
@@ -360,40 +392,10 @@ class NetBoxSync:
                 "1g-sfp": "1000base-x-sfp",
                 "1g-rj45": "1000base-t",
                 "100m-rj45": "100base-tx",
-                "lag": "lag",
-                "virtual": "virtual",
             }
             if port_type in port_type_map:
+                logger.debug(f"Тип определён по port_type: {port_type} → {port_type_map[port_type]}")
                 return port_type_map[port_type]
-
-        hardware_type = data.get("hardware_type", "").lower()
-        media_type = data.get("media_type", "").lower()
-        interface_name = data.get("interface", data.get("name", "")).lower()
-        speed_str = data.get("speed", "")
-
-        # LAG интерфейсы (Port-channel, Po)
-        if interface_name.startswith(("port-channel", "po")):
-            return "lag"
-
-        # Виртуальные интерфейсы (Vlan, Loopback, и т.д.)
-        if interface_name.startswith(VIRTUAL_INTERFACE_PREFIXES):
-            return "virtual"
-
-        # Management интерфейсы - всегда медь
-        if any(x in interface_name for x in MGMT_INTERFACE_PATTERNS):
-            return "1000base-t"
-
-        # 1. Определяем по media_type (маппинг из constants.py)
-        if media_type and media_type not in ("unknown", "not present", ""):
-            for pattern, netbox_type in NETBOX_INTERFACE_TYPE_MAP.items():
-                if pattern in media_type:
-                    return netbox_type
-
-            # Универсальный SFP для 1G если не определился конкретный
-            if "sfp" in media_type and ("1000base" in media_type or "1g" in media_type):
-                if "baset" in media_type:
-                    return "1000base-t"  # SFP-T (медный SFP)
-                return "1000base-x-sfp"
 
         # 2. Определяем по hardware_type (маппинг из constants.py)
         if hardware_type and hardware_type not in ("amdp2", "ethersvi", ""):
@@ -1156,7 +1158,6 @@ class NetBoxSync:
         serial: str = "",
         status: Optional[str] = None,
         platform: str = "",
-        primary_ip: str = "",
         tenant: Optional[str] = None,
     ) -> Optional[Any]:
         """
@@ -1178,8 +1179,12 @@ class NetBoxSync:
             serial: Серийный номер
             status: Статус (None = из config)
             platform: Платформа (cisco_ios, etc.)
-            primary_ip: Primary IP (без маски)
             tenant: Арендатор (None = из config)
+
+        Note:
+            Primary IP НЕ устанавливается при создании устройства.
+            Используйте sync_ip_addresses() для установки primary IP после
+            синхронизации IP адресов.
 
         Returns:
             Device или None при ошибке
@@ -1266,11 +1271,8 @@ class NetBoxSync:
 
             device = self.client.api.dcim.devices.create(device_data)
             logger.info(f"Создано устройство: {name}")
-
-            # Добавляем Primary IP если указан
-            if primary_ip and device:
-                self._set_primary_ip(device, primary_ip)
-
+            # ПРИМЕЧАНИЕ: Primary IP НЕ устанавливается здесь
+            # Он будет установлен позже при синхронизации IP адресов (sync_ip_addresses)
             return device
 
         except Exception as e:
@@ -1367,9 +1369,9 @@ class NetBoxSync:
                 manufacturer=manufacturer,
                 serial=serial,
                 platform=platform,
-                primary_ip=ip_address,
                 tenant=tenant,
             )
+            # Primary IP будет установлен позже при sync_ip_addresses()
 
             if result:
                 stats["created"] += 1

@@ -508,15 +508,24 @@ def load_devices(devices_file: str) -> List:
             logger.warning(f"Пропущен элемент #{idx}: отсутствует 'host'")
             continue
 
+        # Новый формат (рекомендуется):
+        # {"host": "10.0.0.1", "platform": "cisco_iosxe", "device_type": "C9200L-24P-4X", "role": "Switch"}
+        platform = d.get("platform")
         device_type = d.get("device_type")
-        if not device_type:
-            logger.warning(f"Устройство {host}: 'device_type' не указан, используется 'cisco_ios'")
-            device_type = "cisco_ios"
+        role = d.get("role")
+
+        # Backward compatibility: если platform не указан, используем device_type
+        # (в Device.__post_init__ есть логика конвертации device_type → platform)
+        if not platform and not device_type:
+            logger.warning(f"Устройство {host}: ни 'platform' ни 'device_type' не указаны, используется 'cisco_ios'")
+            platform = "cisco_ios"
 
         devices.append(
             Device(
                 host=host,
+                platform=platform,
                 device_type=device_type,
+                role=role,
             )
         )
 

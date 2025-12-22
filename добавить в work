@@ -1,185 +1,54 @@
 
-1.	
-{"host": "10.177.30.49", "platform": "cisco_ nxos ", "device_type": "C9200L-24P-4X"},
+Проблема 1. 
+Вот интерфейс  {
+      "Device": "SU-C9500-48Y4C-01",
+      "Interface": "TwentyFiveGigE1/0/1",
+      "Status": "up",
+      "Protocol": "up (connected)",
+      "Description": "---=== 6509 ===---",
+      "IP Address": "",
+      "Prefix": "",
+      "MAC": "689e.0b1e.7d21",
+      "MTU": "1500",
+      "Speed": "10000000 Kbit",
+      "Duplex": "Full-duplex",
+      "Hardware Type": "Twenty Five Gigabit Ethernet",
+      "Media Type": "SFP-10GBase-LR"
+    },
 
 
-При такой строке, не может законнектится. Тайм аут проходит
-Traceback (most recent call last):
-  File "<frozen runpy>", line 198, in _run_module_as_main
-  File "<frozen runpy>", line 88, in _run_code
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\__main__.py", line 18, in <module>
-    main()
-    ~~~~^^
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\cli.py", line 1302, in main
-    cmd_sync_netbox(args)
-    ~~~~~~~~~~~~~~~^^^^^^
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\cli.py", line 1129, in cmd_sync_netbox
-    inventory_data = collector.collect(devices)
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\collectors\device.py", line 131, in collect
-    data = self._collect_from_device(device)
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\collectors\device.py", line 189, in _collect_from_device
-    with self._conn_manager.connect(device, self.credentials) as conn:
-         ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Rozhkov_E\AppData\Local\Programs\Python\Python313\Lib\contextlib.py", line 141, in __enter__
-    return next(self.gen)
-  File "C:\Users\Rozhkov_E\Desktop\p\network_collector\core\connection.py", line 218, in connect
-    connection.open()
-    ~~~~~~~~~~~~~~~^^
-  File "C:\Users\Rozhkov_E\Desktop\p\venv\Lib\site-packages\scrapli\driver\base\sync_driver.py", line 116, in open
-    self.on_open(self)
-    ~~~~~~~~~~~~^^^^^^
-  File "C:\Users\Rozhkov_E\Desktop\p\venv\Lib\site-packages\scrapli\driver\core\cisco_iosxe\sync_driver.py", line 26, in iosxe_on_open
-    conn.acquire_priv(desired_priv=conn.default_desired_privilege_level)
-    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Rozhkov_E\Desktop\p\venv\Lib\site-packages\scrapli\driver\network\sync_driver.py", line 165, in acquire_priv
-    current_prompt = self.channel.get_prompt()
-  File "C:\Users\Rozhkov_E\Desktop\p\venv\Lib\site-packages\scrapli\decorators.py", line 224, in decorate
-    return _multiprocessing_timeout(
-        transport=transport,
-    ...<4 lines>...
-        kwargs=kwargs,
-    )
-  File "C:\Users\Rozhkov_E\Desktop\p\venv\Lib\site-packages\scrapli\decorators.py", line 108, in _multiprocessing_timeout
-    wait([future], timeout=timeout)
-    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\Rozhkov_E\AppData\Local\Programs\Python\Python313\Lib\concurrent\futures\_base.py", line 305, in wait
-    waiter.event.wait(timeout)
-    ~~~~~~~~~~~~~~~~~^^^^^^^^^
-  File "C:\Users\Rozhkov_E\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 659, in wait
-    signaled = self._cond.wait(timeout)
-  File "C:\Users\Rozhkov_E\AppData\Local\Programs\Python\Python313\Lib\threading.py", line 363, in wait
-    gotit = waiter.acquire(True, timeout)
-KeyboardInterrupt
+В  net box строчка 2025-12-22 11:43:18 - INFO - [DRY-RUN] Обновление интерфейса TwentyFiveGigE1/0/1: {'type': '10gbase-x-sfpp'}
 
-{"host": "10.177.30.49", "device_type": "cisco_nxos"},
+# Порядок важен! Более специфичные паттерны должны быть первыми
+NETBOX_INTERFACE_TYPE_MAP: Dict[str, str] = {
 
-Делаем так и все окей. Где то ты что то недоработал по изменению формата .
+ === 10G Оптика ===
+    "SFP-10GBase-LR": "10gbase-lr",  # SFP-10GBase-LR
+    "sfp-10gbase-lr": "10gbase-lr",  # SFP-10GBase-LR
+
+Должно быть  SFP-10GBase-LR. Почему не отрабатывает по media type.
+
+Проблема 2.
+	Убрать из create device добавление primary ip. Мы это реализовали при синхронизации интерфейсов. Все равно он не добавится в create device пока не синхронизируем ip. 
 
 
+Проблема 3 
+    {
+        "host": "10.177.30.243",
+        "device_type": "C9200L-24P-4X",
+        "platform": "cisco_iosxe",
+        "role": "Switch",
+    },
 
-Проблема 2. Синхронизация интерфейсов.
-SU-NX01# show interface ethernet 1/1
-Ethernet1/1 is up
-admin state is up, Dedicated Interface
-  Belongs to Po4
-  Hardware: 100/1000/10000 Ethernet, address: 5087.89d3.d642 (bia 5087.89d3.d642)
-  Description: SU-SMTP01
-  MTU 1500 bytes, BW 1000000 Kbit, DLY 10 usec
-  reliability 255/255, txload 1/255, rxload 3/255
-в нет бокс 1000BASE-T (1GE)
-по факту тип интерфейса SFP+ (10GE), как другие назначены, где скорость 10G.
-А у этих скорость 1 G, но это не значит что тип другой. Надо подправить логику.
+Enable пароль (Enter если не требуется):
+2025-12-22 13:04:45 - INFO - Сбор inventory (модули, SFP, PSU)...
+2025-12-22 13:04:45 - WARNING - Нет команды для None
+2025-12-22 13:04:45 - INFO - Собрано записей: 0 с 1 устройств
+До сих пор не удается работать с утройствами в формате, под который мы переделывали. 
+И еще роль у нас парсится для netbox?  role
 
-Еще проблема 3.
-SU-NX01# show port
-port-channel   port-profile   
-SU-NX01# show port-channel summary
-Flags:  D - Down        P - Up in port-channel (members)
-        I - Individual  H - Hot-standby (LACP only)
-        s - Suspended   r - Module-removed
-        b - BFD Session Wait
-        S - Switched    R - Routed
-        U - Up (port-channel)
-        p - Up in delay-lacp mode (member)
-        M - Not in use. Min-links not met
---------------------------------------------------------------------------------
-Group Port-       Type     Protocol  Member Ports
-      Channel
---------------------------------------------------------------------------------
-4     Po4(SU)     Eth      LACP      Eth1/1(P)    
-5     Po5(SU)     Eth      LACP      Eth1/3(P)    
-6     Po6(SU)     Eth      LACP      Eth1/2(P)    
-7     Po7(SU)     Eth      LACP      Eth1/4(P)    
-8     Po8(SD)     Eth      LACP      Eth1/5(s)    
-9     Po9(SD)     Eth      LACP      Eth1/6(s)    
-10    Po10(SU)    Eth      LACP      Eth2/1(P)    Eth2/2(P)    Eth2/3(P)
-                                     Eth2/4(P)    
-11    Po11(SU)    Eth      LACP      Eth1/17(P)   Eth1/18(P)   
-12    Po12(SU)    Eth      LACP      Eth1/19(P)   Eth1/20(P)   
-13    Po13(SU)    Eth      LACP      Eth1/21(P)   Eth1/22(P)   
-15    Po15(SU)    Eth      LACP      Eth1/33(P)   
-17    Po17(SU)    Eth      LACP      Eth1/46(P)   Eth1/48(P)   
-21    Po21(SU)    Eth      LACP      Eth1/41(P)   
-22    Po22(SU)    Eth      LACP      Eth1/89(P)   Eth1/90(D)   
-23    Po23(SD)    Eth      LACP      Eth1/81(D)   Eth1/82(D)   
-24    Po24(SD)    Eth      LACP      Eth1/83(D)   Eth1/84(D)   
-25    Po25(SU)    Eth      LACP      Eth1/43(P)   
-26    Po26(SU)    Eth      LACP      Eth1/91(P)   Eth1/92(D)   
-27    Po27(SD)    Eth      LACP      Eth1/42(D)   
-28    Po28(SD)    Eth      LACP      Eth1/44(D)   
-31    Po31(SU)    Eth      LACP      Eth1/45(P)   
-32    Po32(SU)    Eth      LACP      Eth1/93(P)   Eth1/94(D)   
-35    Po35(SU)    Eth      LACP      Eth1/47(P)   
-36    Po36(SU)    Eth      LACP      Eth1/95(P)   Eth1/96(D)   
-50    Po50(SU)    Eth      LACP      Eth2/5(P)    Eth2/6(D)    
-51    Po51(SD)    Eth      LACP      Eth1/9(D)    
-52    Po52(SD)    Eth      LACP      Eth1/10(D)   
-100   Po100(RU)   Eth      LACP      Eth1/49(P)   Eth1/50(P)   
-SU-NX01#  
+Работает только в {"host": "10.177.30.51", "device_type": "cisco_iosxe"}
 
-
- 
-Вот например вывод port-channel в nexus .Port-channel  в netbox добавились, но нет tagged  или tagged-all. Проверь логику. Делал update но ничего не изменилось. Так же режим портов не отображается в nx и не добавились member в port-channel
-Ethernet1/37 is up
-admin state is up, Dedicated Interface
-  Hardware: 100/1000/10000 Ethernet, address: 5087.89d3.d666 (bia 5087.89d3.d666)
-  Description: ---= SU-DC01=--
-  MTU 1500 bytes, BW 100000 Kbit, DLY 10 usec
-  reliability 255/255, txload 1/255, rxload 1/255
-  Encapsulation ARPA, medium is broadcast
-  Port mode is access
-  full-duplex, 100 Mb/s
-  Beacon is turned off
-
-Здесь так же, в нет бокс вообще 1000BASE-T (1GE) тип интерфейса. Хотя там 10G поддерживает. Там трансиверов нет получается как таковых, надо скорость делать 10g Сколько порт поддерживает SFP+ (10GE) а по факту скорость указывается уже.В нексусах так, надо сделать чтобы с нексусами было так и корректно и с другими не сломалось. И объясни логику вывода трансиверов.
-
-Проблема 4.  Tagged all назначился почему то тольк portchannel а его member нет. 
-Это на 6509. На nx вообще не назначается
-
-
-
-Проблема 5.На 9500 member  не добавились.. проверь логику. Может сделай логи более подробные чтобы видеть где и на каком шаге проблема. Ключ -v не работает. И Скажи могу прислать вывод какой надо, что бы ты проверил в чем дело.Если ошибка не явная.
-
-Можем ли мы при создании ip  адресов так же присваивать им  tenant. И если на интерфейсе есть описание, так же это описание присваивать ip адресу , который на этом интерфейсе. Чтобы я мог обновить и прогнать их. 
-
-И Объясни как работает логика добавления primary интерфеса, при создании устройства она добавляется, но если ip адреса еще не синхронизированы и интерфейсы. Как это происходит? Может правильней будет при синхронизации ip  адресов это сделать? Или как?как сейчас это работает? 
-Проблема 6.
-Делаю соседство через both
-  warnings.warn(
-2025-12-19 12:56:57 - WARNING - Интерфейс соседа не найден: SU-316-C2960X-48LPD-L-01:SU-316-C9200L-48P-4X-01
-C:\Users\Rozhkov_E\Desktop\p\venv\Lib\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'ipam.it.unipro.energy'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
-  warnings.warn(
-
-
-Пишет интерфейс соседа не найден. Как делаю cdp , сразу находится, как то матчится не правильно из двух протоколов? Почему так? Надо исправить.
-
-
-Device ID        Local Intrfce     Holdtme    Capability  Platform  Port ID
-SU-C9500-48Y4C-01.corp.ogk4.ru
-                 Ten 1/1/1         176             R S I  C9500-48Y Twe 1/0/17
-SU-C9500-48Y4C-01.corp.ogk4.ru
-                 Ten 1/1/2         141             R S I  C9500-48Y Twe 2/0/17
-SU-316-C2960X-48LPD-L-01.corp.ogk4.ru
-                 Ten 1/1/4         152              S I   WS-C2960X Ten 1/0/2
-SU-316-C2960X-48LPD-L-01.corp.ogk4.ru
-                 Ten 1/1/3         158              S I   WS-C2960X Ten 1/0/1
-
-Total cdp entries displayed : 4
-SU-316-C9200L-48P-4X-01#show lld
-SU-316-C9200L-48P-4X-01#show lldp  ne
-SU-316-C9200L-48P-4X-01#show lldp  neighbors 
-Capability codes:
-    (R) Router, (B) Bridge, (T) Telephone, (C) DOCSIS Cable Device
-    (W) WLAN Access Point, (P) Repeater, (S) Station, (O) Other
-
-Device ID           Local Intf     Hold-time  Capability      Port ID
-su-vcs-cod01.corp.ogGi1/0/41       120        O               00e0.db43.8145
-SU-316-C2960X-48LPD-Te1/1/4        120        B               Te1/0/2
-SU-316-C2960X-48LPD-Te1/1/3        120        B               Te1/0/1
-SU-C9500-48Y4C-01.coTe1/1/2        120        B,R             Twe2/0/17
-SU-C9500-48Y4C-01.coTe1/1/1        120        B,R             Twe1/0/17
-
-Вижу выводы слегка отличаются. В lldp Te в cdp Ten. Надо предусмотреть на разные случаи такое исход.
 
 
 
