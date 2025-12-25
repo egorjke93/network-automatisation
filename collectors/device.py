@@ -328,11 +328,15 @@ class DeviceInventoryCollector(DeviceCollector):
             manufacturer: Производитель по умолчанию
             **kwargs: Дополнительные параметры для DeviceCollector
         """
+        # Сохраняем дефолтные значения для использования в lambda
+        default_role = role
+
         extra_fields = {
             "status": "active",
             "manufacturer": manufacturer,
             "site": site,
-            "role": role,
+            # role из devices_ips.py имеет приоритет над CLI дефолтом
+            "role": lambda data, dev: dev.role if dev.role else default_role,
             "tenant": tenant,
             "u_height": "1",
             # slug для модели (lowercase)

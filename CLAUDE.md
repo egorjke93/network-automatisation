@@ -252,6 +252,108 @@ export NETBOX_TOKEN="your-api-token"
 
 Версия NetBox: 4.4.x (pynetbox >= 7.4.0)
 
+### Флаги синхронизации sync-netbox
+
+| Флаг | Что делает | С `--update-devices` |
+|------|------------|----------------------|
+| `--create-devices` | Создаёт устройства в NetBox | Обновляет serial/model/site/role |
+| `--interfaces` | Синхронизирует интерфейсы | Обновляет type/mode/description |
+| `--ip-addresses` | Создаёт IP-адреса | Обновляет tenant/description |
+| `--vlans` | Создаёт VLAN | Нет эффекта |
+| `--cables` | Создаёт кабели из LLDP/CDP | Нет эффекта |
+| `--inventory` | Синхронизирует модули/SFP | Нет эффекта |
+| `--sync-all` | Все флаги вместе | Включает автоматически |
+
+### Флаг --update-devices
+
+**Работает с `--create-devices`, `--interfaces`, `--ip-addresses`**
+
+**Без флага:**
+```bash
+# Только создаёт НОВЫЕ устройства, существующие пропускает
+sync-netbox --create-devices --site "Office"
+```
+
+**С флагом:**
+```bash
+# Создаёт новые И ОБНОВЛЯЕТ существующие (serial, model, site, role, tenant)
+sync-netbox --create-devices --update-devices --site "Office"
+```
+
+**Что обновляется:**
+- ✅ Serial number
+- ✅ Model (device_type)
+- ✅ Site
+- ✅ Role
+- ✅ Tenant
+- ✅ Platform
+
+### Приоритет role
+
+Role берётся в таком порядке:
+
+1. **devices_ips.py** (для конкретного устройства) — высший приоритет
+2. **CLI параметр** `--role` — дефолт для устройств без роли
+
+```python
+# devices_ips.py
+devices_list = [
+    {"host": "10.0.0.1", "platform": "cisco_ios", "role": "Router"},  # → Router
+    {"host": "10.0.0.2", "platform": "cisco_ios"},                     # → Switch (дефолт CLI)
+]
+```
+
+```bash
+# CLI: role из devices_ips.py имеет приоритет
+sync-netbox --create-devices --role switch
+# 10.0.0.1 → Router (из devices_ips.py)
+# 10.0.0.2 → Switch (из CLI)
+```
+
+### IP-адреса: создание и обновление
+
+```bash
+# Только создать новые IP (существующие пропускаются)
+sync-netbox --ip-addresses
+
+# Создать новые И обновить существующие (tenant, description)
+sync-netbox --ip-addresses --update-devices
+```
+
+**Без `--update-devices`:**
+- ✅ Новые IP создаются
+- ⏭️ Существующие IP пропускаются
+
+**С `--update-devices`:**
+- ✅ Новые IP создаются
+- ✅ Существующие IP обновляются:
+  - tenant (от устройства)
+  - description (от интерфейса)
+  - привязка к интерфейсу
+
+**При создании IP-адреса:**
+- Tenant берётся от устройства
+- Description берётся от интерфейса
+
+### Примеры синхронизации
+
+```bash
+# Первая синхронизация (создать всё)
+sync-netbox --sync-all --site "Office" --dry-run
+
+# Добавить только новые устройства (существующие не трогать)
+sync-netbox --create-devices --site "Office"
+
+# Обновить serial/model на существующих устройствах
+sync-netbox --create-devices --update-devices --site "Office"
+
+# Только добавить новые IP-адреса
+sync-netbox --ip-addresses
+
+# Только интерфейсы (без устройств)
+sync-netbox --interfaces
+```
+
 ## Соглашения по коду
 
 - Типизация: `typing` для всех публичных методов

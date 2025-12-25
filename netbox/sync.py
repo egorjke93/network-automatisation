@@ -983,6 +983,7 @@ class NetBoxSync:
         device_name: str,
         ip_data: List[Dict[str, Any]],
         device_ip: Optional[str] = None,
+        update_existing: bool = False,
     ) -> Dict[str, int]:
         """
         Синхронизирует IP-адреса устройства с NetBox.
@@ -994,6 +995,7 @@ class NetBoxSync:
                 - ip_address: IP-адрес (может быть с маской или без)
                 - mask или prefix_length: Маска сети
             device_ip: IP-адрес подключения (будет установлен как primary_ip4)
+            update_existing: Обновлять существующие IP (tenant, description)
 
         Returns:
             Dict: Статистика {created, updated, skipped, failed}
@@ -1056,7 +1058,16 @@ class NetBoxSync:
 
             # Проверяем существует ли IP
             if ip_only in existing_ips:
-                stats["skipped"] += 1
+                if update_existing:
+                    # Обновляем существующий IP
+                    existing_ip = existing_ips[ip_only]
+                    updated = self._update_ip_address(existing_ip, device, intf)
+                    if updated:
+                        stats["updated"] += 1
+                    else:
+                        stats["skipped"] += 1
+                else:
+                    stats["skipped"] += 1
                 continue
 
             # Создаём IP-адрес
@@ -1128,6 +1139,55 @@ class NetBoxSync:
 
         except Exception as e:
             logger.warning(f"Не удалось установить primary IP {device_ip}: {e}")
+
+    def _update_ip_address(self, ip_obj, device, interface) -> bool:
+        """
+        Обновляет существующий IP-адрес (tenant, description, interface).
+
+        Args:
+            ip_obj: Объект IP-адреса из NetBox
+            device: Устройство NetBox
+            interface: Интерфейс NetBox
+
+        Returns:
+            bool: True если были изменения
+        """
+        updates = {}
+
+        # Обновляем tenant от устройства
+        if hasattr(device, 'tenant') and device.tenant:
+            current_tenant = getattr(ip_obj, 'tenant', None)
+            current_tenant_id = current_tenant.id if current_tenant else None
+            if current_tenant_id != device.tenant.id:
+                updates['tenant'] = device.tenant.id
+
+        # Обновляем description от интерфейса
+        if hasattr(interface, 'description') and interface.description:
+            current_desc = getattr(ip_obj, 'description', '') or ''
+            if current_desc != interface.description:
+                updates['description'] = interface.description
+
+        # Обновляем привязку к интерфейсу
+        if hasattr(interface, 'id'):
+            current_intf = getattr(ip_obj, 'assigned_object_id', None)
+            if current_intf != interface.id:
+                updates['assigned_object_type'] = 'dcim.interface'
+                updates['assigned_object_id'] = interface.id
+
+        if not updates:
+            return False
+
+        if self.dry_run:
+            logger.info(f"[DRY-RUN] Обновление IP {ip_obj.address}: {updates}")
+            return True
+
+        try:
+            ip_obj.update(updates)
+            logger.info(f"Обновлён IP {ip_obj.address}: {list(updates.keys())}")
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка обновления IP {ip_obj.address}: {e}")
+            return False
 
     def _mask_to_prefix(self, mask: str) -> int:
         """

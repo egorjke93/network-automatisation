@@ -61,8 +61,8 @@ class TestInterfaceTypeMapping:
         ({"media_type": "40GBase-SR4"}, "40gbase-x-qsfpp"),
 
         # 100G оптика
-        ({"media_type": "QSFP-100G-SR4"}, "100gbase-x-qsfp28"},
-        ({"media_type": "100GBase-SR4"}, "100gbase-x-qsfp28"},
+        ({"media_type": "QSFP-100G-SR4"}, "100gbase-x-qsfp28"),
+        ({"media_type": "100GBase-SR4"}, "100gbase-x-qsfp28"),
 
         # Copper
         ({"media_type": "RJ45"}, "1000base-t"),
@@ -78,7 +78,7 @@ class TestInterfaceTypeMapping:
         ({"media_type": "", "port_type": "1g-rj45"}, "1000base-t"),
         ({"media_type": "", "port_type": "100m-rj45"}, "100base-tx"),
         ({"media_type": "", "port_type": "lag"}, "lag"),
-        ({"media_type": "", "port_type": "virtual"}, "virtual"},
+        ({"media_type": "", "port_type": "virtual"}, "virtual"),
 
         # === HARDWARE_TYPE - fallback если media и port пустые ===
         (

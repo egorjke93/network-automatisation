@@ -1210,7 +1210,12 @@ def cmd_sync_netbox(args) -> None:
                     if row.get("ip_address")
                 ]
                 if ip_data:
-                    sync.sync_ip_addresses(hostname, ip_data, device_ip=device.host)
+                    sync.sync_ip_addresses(
+                        hostname,
+                        ip_data,
+                        device_ip=device.host,
+                        update_existing=getattr(args, "update_devices", False),
+                    )
 
     # Синхронизация VLAN из SVI интерфейсов
     if getattr(args, "vlans", False):
