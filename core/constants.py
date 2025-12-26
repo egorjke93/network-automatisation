@@ -223,12 +223,15 @@ NETBOX_INTERFACE_TYPE_MAP: Dict[str, str] = {
     "qsfp 40g": "40gbase-x-qsfpp",         # QSFP 40G ...
     # === 25G ===
     "sfp-25gbase-aoc": "25gbase-x-sfp28",  # SFP-25GBase-AOC3M
-    "sfp-25gbase": "25gbase-x-sfp28",      # SFP-25GBase-...
+    "sfp-25gbase-sr": "25gbase-sr",        # SFP-25GBase-SR (must be before generic sfp-25gbase!)
+    "sfp-25gbase-lr": "25gbase-lr",        # SFP-25GBase-LR
+    "sfp-25gbase": "25gbase-x-sfp28",      # SFP-25GBase-... (generic)
     "25gbase-sr": "25gbase-sr",
     "25gbase-lr": "25gbase-lr",
     "sfp28": "25gbase-x-sfp28",
     "sfp-25g": "25gbase-x-sfp28",
     # === 10G Оптика ===
+    "sfp-10gbase-lrm": "10gbase-lrm",      # SFP-10GBase-LRM (must be before LR!)
     "sfp-10gbase-lr": "10gbase-lr",        # SFP-10GBase-LR
     "sfp-10gbase-sr": "10gbase-sr",        # SFP-10GBase-SR
     "sfp-10gbase-er": "10gbase-er",
@@ -286,6 +289,10 @@ NETBOX_INTERFACE_TYPE_MAP: Dict[str, str] = {
 
 # Маппинг hardware_type → NetBox interface type (менее специфичный)
 NETBOX_HARDWARE_TYPE_MAP: Dict[str, str] = {
+    # NX-OS multi-speed ports (check first, more specific)
+    "100/1000/10000": "10gbase-x-sfpp",  # NX-OS 10G SFP+ port
+    "1000/10000": "10gbase-x-sfpp",       # NX-OS 10G SFP+ port
+    "100/1000": "1000base-t",             # NX-OS 1G copper port
     # 100G
     "hundred gig": "100gbase-x-qsfp28",
     "hundredgig": "100gbase-x-qsfp28",

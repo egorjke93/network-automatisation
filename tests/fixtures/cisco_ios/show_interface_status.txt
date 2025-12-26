@@ -1,0 +1,55 @@
+
+Port         Name               Status       Vlan       Duplex  Speed Type
+Gi1/0/1      SU-HP-MFP725-5     connected    47         a-full  a-100 10/100/1000BaseTX
+Gi1/0/2      735 VWALL          connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/3      735 VWALL          connected    52         a-full  a-100 10/100/1000BaseTX
+Gi1/0/4      735 VWALL          connected    52         a-full  a-100 10/100/1000BaseTX
+Gi1/0/5      SU-HP-MFP725-15    connected    47         a-full  a-100 10/100/1000BaseTX
+Gi1/0/6      SU-12001591-733    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/7      SU-I-717-26-01     connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/8      SU-I-713-50-3      connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/9      SU-I-715-42-1      connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/10     Zub-400hp          connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/11     SU-I-743-03-2      connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/12     SU-12002113-743    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/13     SU-12001550-743    notconnect   47           auto   auto 10/100/1000BaseTX
+Gi1/0/14     SU-I-722-26-2      connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/15                        notconnect   47           auto   auto 10/100/1000BaseTX
+Gi1/0/16     SU-12001581-737    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/17     SU-12001796-737    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/18     SU-I-713-50-2      connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/19     SU-I-713-50-1      connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/20     SU-I-714-26-1      connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/21     SU-I-723-99-1      connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/22     SU-12001577-721    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/23     SU-12002104-721    notconnect   47           auto   auto 10/100/1000BaseTX
+Gi1/0/24     SU-12002111-721    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/25     SU-12001157-719    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/26     su-12001151-719    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/27                        notconnect   47           auto   auto 10/100/1000BaseTX
+Gi1/0/28     SU-I-731-26-1      connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/29     SU-I-741-32-3      connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/30     741                connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/31     SU-12001814-741    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/32     SU-12001780-741    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/33     HP LaserJet M1212n connected    47         a-full  a-100 10/100/1000BaseTX
+Gi1/0/34     SU-PRN-M425-743    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/35     SU-12001574-718    notconnect   47           auto   auto 10/100/1000BaseTX
+Gi1/0/36     SU-2802-723-HALL   connected    10         a-full a-1000 10/100/1000BaseTX
+Gi1/0/37     SU-12001422-741    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/38     SU-2802-717-HALL   connected    10         a-full a-1000 10/100/1000BaseTX
+Gi1/0/39     SU-12001806-720    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/40     SU-12001807-720    notconnect   47           auto   auto 10/100/1000BaseTX
+Gi1/0/41     SU-12001808-720    connected    47         a-full a-1000 10/100/1000BaseTX
+Gi1/0/42     743semenov         connected    38         a-full a-1000 10/100/1000BaseTX
+Gi1/0/43     743gaponova        connected    38         a-full a-1000 10/100/1000BaseTX
+Gi1/0/44     SU-2802-741        connected    10         a-full a-1000 10/100/1000BaseTX
+Gi1/0/45     HROM-5000.1        connected    47         a-full  a-100 10/100/1000BaseTX
+Gi1/0/46     HROM-5000.2        connected    47         a-full  a-100 10/100/1000BaseTX
+Gi1/0/47     HROM-5000.2NP      notconnect   47           auto   auto 10/100/1000BaseTX
+Gi1/0/48     SU-2702-735k       connected    10         a-full a-1000 10/100/1000BaseTX
+Te1/1/1      N9K-C93180-01      connected    trunk        full    10G SFP-10GBase-LR
+Te1/1/2      N9K-c93180-02      connected    trunk        full    10G SFP-10GBase-LR
+Te1/1/3                         disabled     1            auto   auto unknown
+Te1/1/4                         disabled     1            auto   auto unknown
+Po1          N9K-C93180         connected    trunk      a-full  a-10G N/A

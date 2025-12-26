@@ -7,8 +7,15 @@ Pytest configuration и общие fixtures для тестов.
 - sample_interface_data: Примеры данных интерфейсов
 """
 
-import pytest
+import sys
 from pathlib import Path
+
+# Добавляем корень проекта в PYTHONPATH для импортов типа network_collector.*
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+import pytest
 from typing import Dict, Any
 from unittest.mock import MagicMock
 

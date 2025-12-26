@@ -74,11 +74,18 @@ class InterfaceCollector(BaseCollector):
         "arista_eos": "show interfaces switchport",
     }
 
+    # Команды для получения media_type (тип трансивера)
+    # NX-OS: show interface возвращает только "10G", а show interface status - "10Gbase-LR"
+    media_type_commands = {
+        "cisco_nxos": "show interface status",
+    }
+
     def __init__(
         self,
         include_errors: bool = False,
         collect_lag_info: bool = True,
         collect_switchport: bool = True,
+        collect_media_type: bool = True,
         **kwargs,
     ):
         """
@@ -88,12 +95,14 @@ class InterfaceCollector(BaseCollector):
             include_errors: Собирать статистику ошибок
             collect_lag_info: Собирать информацию о LAG membership
             collect_switchport: Собирать режим switchport (access/trunk)
+            collect_media_type: Собирать точный media_type (для NX-OS из show interface status)
             **kwargs: Аргументы для BaseCollector
         """
         super().__init__(**kwargs)
         self.include_errors = include_errors
         self.collect_lag_info = collect_lag_info
         self.collect_switchport = collect_switchport
+        self.collect_media_type = collect_media_type
     
     def _parse_output(
         self,
@@ -297,6 +306,21 @@ class InterfaceCollector(BaseCollector):
                         except Exception as e:
                             logger.debug(f"Ошибка получения switchport info: {e}")
 
+                # Собираем media_type если включено (NX-OS: тип трансивера из show interface status)
+                media_types = {}
+                if self.collect_media_type:
+                    mt_cmd = self.media_type_commands.get(device.platform)
+                    if mt_cmd:
+                        try:
+                            mt_response = conn.send_command(mt_cmd)
+                            media_types = self._parse_media_types(
+                                mt_response.result,
+                                get_ntc_platform(device.platform),
+                                mt_cmd,
+                            )
+                        except Exception as e:
+                            logger.debug(f"Ошибка получения media_type info: {e}")
+
                 # Определяем mode для LAG на основе members
                 # Если хотя бы один member в trunk → LAG тоже tagged/tagged-all
                 lag_modes: Dict[str, str] = {}
@@ -316,6 +340,17 @@ class InterfaceCollector(BaseCollector):
 
                     iface = row.get("interface", "")
                     iface_lower = iface.lower()
+
+                    # Обогащаем media_type из show interface status (NX-OS)
+                    # Это важно для правильного определения типа интерфейса в NetBox
+                    if iface in media_types and media_types[iface]:
+                        # Перезаписываем только если есть более точный тип
+                        existing_mt = row.get("media_type", "").lower()
+                        new_mt = media_types[iface].lower()
+                        # show interface status возвращает "10Gbase-LR", а show interface - "10G"
+                        # "10Gbase-LR" более информативно
+                        if "base" in new_mt or "sfp" in new_mt or "qsfp" in new_mt:
+                            row["media_type"] = media_types[iface]
 
                     # Нормализуем port_type (платформонезависимо)
                     # Это поле используется в sync.py для определения типа интерфейса
@@ -636,6 +671,68 @@ class InterfaceCollector(BaseCollector):
             modes[current_interface] = current_data
 
         return modes
+
+    def _parse_media_types(
+        self,
+        output: str,
+        ntc_platform: str,
+        command: str = "show interface status",
+    ) -> Dict[str, str]:
+        """
+        Парсит show interface status для получения media_type (Type колонка).
+
+        На NX-OS `show interface` возвращает media_type как "10G" (только скорость),
+        а `show interface status` возвращает Type как "10Gbase-LR" (полный тип).
+
+        Args:
+            output: Вывод команды show interface status
+            ntc_platform: Платформа для NTC
+            command: Команда для NTC парсера
+
+        Returns:
+            Dict: {interface: media_type} например {"Ethernet1/1": "10Gbase-LR"}
+        """
+        from ntc_templates.parse import parse_output
+
+        media_types = {}
+
+        try:
+            parsed = parse_output(
+                platform=ntc_platform,
+                command=command,
+                data=output
+            )
+
+            for row in parsed:
+                # NTC возвращает: port, name, status, vlan, duplex, speed, type
+                port = row.get("port", "")
+                media_type = row.get("type", "")
+
+                if not port:
+                    continue
+
+                # Пропускаем пустые и "--"
+                if not media_type or media_type == "--":
+                    continue
+
+                # Нормализуем имя порта
+                # NX-OS show interface status: Eth1/1 -> Ethernet1/1
+                if port.startswith("Eth") and not port.startswith("Ethernet"):
+                    full_name = f"Ethernet{port[3:]}"
+                else:
+                    full_name = port
+
+                media_types[full_name] = media_type
+
+                # Добавляем также короткое имя для сопоставления
+                if full_name.startswith("Ethernet"):
+                    short_name = f"Eth{full_name[8:]}"
+                    media_types[short_name] = media_type
+
+        except Exception as e:
+            logger.debug(f"Ошибка парсинга media_type через NTC: {e}")
+
+        return media_types
 
     def _detect_port_type(self, row: Dict[str, Any], iface_lower: str) -> str:
         """

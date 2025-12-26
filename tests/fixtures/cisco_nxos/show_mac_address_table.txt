@@ -1,0 +1,56 @@
+Legend: 
+        * - primary entry, G - Gateway MAC, (R) - Routed MAC, O - Overlay MAC
+        age - seconds since last seen,+ - primary entry using vPC Peer-Link,
+        (T) - True, (F) - False, C - ControlPlane MAC, ~ - vsan
+   VLAN     MAC Address      Type      age     Secure NTFY Ports
+---------+-----------------+--------+---------+------+----+------------------
++   10     0003.ea18.f2e1   dynamic  0         F      F    Po50
+*   10     000a.19cb.d522   dynamic  0         F      F    Po50
+*   10     000a.19cb.efe0   dynamic  0         F      F    Po50
+*   10     000a.19cc.6004   dynamic  0         F      F    Po13
+*   10     000e.384c.9500   dynamic  0         F      F    Po13
+*   10     0014.5ecf.3fbb   dynamic  0         F      F    Po50
++   10     0014.5ecf.c51e   dynamic  0         F      F    Po50
++   10     001b.17eb.c694   dynamic  0         F      F    Po50
+*   10     001b.17ff.db64   dynamic  0         F      F    Po50
+*   10     0020.85e1.5517   dynamic  0         F      F    Po50
++   10     0020.85e3.ec18   dynamic  0         F      F    Po50
+*   10     0020.85e3.ec47   dynamic  0         F      F    Po50
++   10     0020.85e3.ecfc   dynamic  0         F      F    Po50
+*   10     0020.85f5.cad7   dynamic  0         F      F    Po50
++   10     0020.85f5.cae4   dynamic  0         F      F    Po50
+*   10     0020.85f5.cae9   dynamic  0         F      F    Po50
++   10     0020.85f5.caeb   dynamic  0         F      F    Po50
+*   10     0020.85f5.caf4   dynamic  0         F      F    Po50
++   10     0020.85f5.cb03   dynamic  0         F      F    Po50
+*   10     0020.85f5.cb18   dynamic  0         F      F    Po50
++   10     0020.85f5.cb1a   dynamic  0         F      F    Po50
++   10     0020.85f5.cb1c   dynamic  0         F      F    Po50
++   10     0020.85f5.cb20   dynamic  0         F      F    Po50
+*   10     0020.85fb.26e3   dynamic  0         F      F    Po50
++   10     00c0.b722.d79c   dynamic  0         F      F    Po50
+*   10     00d7.8f9a.39ce   dynamic  0         F      F    Po50
++   10     0462.737b.1d6f   dynamic  0         F      F    Po50
++   10     084f.a91f.c09a   dynamic  0         F      F    Po50
++   10     0894.ef47.242b   dynamic  0         F      F    Po50
+*   10     0894.ef49.23fd   dynamic  0         F      F    Po50
+*   10     0896.ad9d.0c34   dynamic  0         F      F    Po50
++   10     0896.ad9d.0c3a   dynamic  0         F      F    Po50
++   10     0896.ad9d.0c40   dynamic  0         F      F    Po13
++   10     08cc.6819.0dc1   dynamic  0         F      F    Po50
+*   10     10b3.d697.54b2   dynamic  0         F      F    Po13
++   10     10b3.d697.5632   dynamic  0         F      F    Po12
+*   10     10b3.d697.5832   dynamic  0         F      F    Po50
++   10     10b3.d697.5a31   dynamic  0         F      F    Po14
++   10     10b3.d697.5ab1   dynamic  0         F      F    Po50
++   10     10b3.d697.5b31   dynamic  0         F      F    Po15
++   10     10b3.d697.5c9a   dynamic  0         F      F    Po50
++   10     10b3.d697.5d1a   dynamic  0         F      F    Po50
+*   10     10f3.11c2.3fa9   dynamic  0         F      F    Po50
+*   10     240b.0a00.c02c   dynamic  0         F      F    Po50
+*   10     240b.0a00.c044   dynamic  0         F      F    Po50
+*   10     2829.8614.7525   dynamic  0         F      F    Po50
+*   10     2829.8626.c2a5   dynamic  0         F      F    Po50
++   10     28ac.9e15.fe3c   dynamic  0         F      F    Po50
+*   10     28ac.9e57.65c8   dynamic  0         F      F    Po50
+*   10     28ac.9e57.65d2   dynamic  0         F      F    Po50

@@ -45,6 +45,27 @@ class InventoryCollector(BaseCollector):
         "arista_eos": "show inventory",
     }
 
+    # Команды для получения трансиверов
+    # NX-OS: show inventory не содержит SFP/QSFP, они в show interface transceiver
+    transceiver_commands = {
+        "cisco_nxos": "show interface transceiver",
+    }
+
+    def __init__(
+        self,
+        collect_transceivers: bool = True,
+        **kwargs,
+    ):
+        """
+        Инициализация коллектора инвентаризации.
+
+        Args:
+            collect_transceivers: Собирать трансиверы (для NX-OS из show interface transceiver)
+            **kwargs: Аргументы для BaseCollector
+        """
+        super().__init__(**kwargs)
+        self.collect_transceivers = collect_transceivers
+
     def _parse_output(
         self,
         output: str,
@@ -191,3 +212,142 @@ class InventoryCollector(BaseCollector):
             return "Juniper"
 
         return ""
+
+    def _collect_from_device(self, device: Device) -> List[Dict[str, Any]]:
+        """
+        Собирает данные инвентаризации с устройства.
+
+        Для NX-OS дополнительно собирает трансиверы из show interface transceiver.
+
+        Args:
+            device: Устройство
+
+        Returns:
+            List[Dict]: Данные инвентаризации
+        """
+        from ..core.connection import get_ntc_platform
+        from ..core.device import DeviceStatus
+
+        command = self._get_command(device)
+        if not command:
+            logger.warning(f"Нет команды для {device.platform}")
+            return []
+
+        try:
+            with self._conn_manager.connect(device, self.credentials) as conn:
+                # Получаем hostname
+                hostname = self._conn_manager.get_hostname(conn)
+                device.metadata["hostname"] = hostname
+                device.status = DeviceStatus.ONLINE
+
+                # Основная команда show inventory
+                response = conn.send_command(command)
+                data = self._parse_output(response.result, device)
+
+                # Собираем трансиверы если включено
+                transceiver_items = []
+                if self.collect_transceivers:
+                    tr_cmd = self.transceiver_commands.get(device.platform)
+                    if tr_cmd:
+                        try:
+                            tr_response = conn.send_command(tr_cmd)
+                            transceiver_items = self._parse_transceivers(
+                                tr_response.result,
+                                get_ntc_platform(device.platform),
+                                tr_cmd,
+                                device,
+                            )
+                        except Exception as e:
+                            logger.debug(f"Ошибка получения transceivers: {e}")
+
+                # Объединяем inventory + transceivers
+                all_items = data + transceiver_items
+
+                # Добавляем hostname ко всем записям
+                for row in all_items:
+                    row["hostname"] = hostname
+                    row["device_ip"] = device.host
+
+                logger.info(f"{hostname}: собрано {len(all_items)} компонентов inventory (из них {len(transceiver_items)} трансиверов)")
+                return all_items
+
+        except Exception as e:
+            device.status = DeviceStatus.ERROR
+            logger.error(f"Ошибка подключения к {device.host}: {e}")
+            return []
+
+    def _parse_transceivers(
+        self,
+        output: str,
+        ntc_platform: str,
+        command: str,
+        device: Device,
+    ) -> List[Dict[str, Any]]:
+        """
+        Парсит show interface transceiver для получения SFP/QSFP.
+
+        Конвертирует данные в формат inventory:
+        - name: "Transceiver Ethernet1/1"
+        - pid: part_number (SFP+ LR)
+        - serial: serial_number
+        - description: type (10Gbase-LR)
+        - manufacturer: name (OEM, CISCO, etc.)
+
+        Args:
+            output: Вывод команды
+            ntc_platform: Платформа для NTC
+            command: Команда для NTC парсера
+            device: Устройство
+
+        Returns:
+            List[Dict]: Трансиверы в формате inventory
+        """
+        from ntc_templates.parse import parse_output
+
+        items = []
+        manufacturer = self._detect_manufacturer(device)
+
+        try:
+            parsed = parse_output(
+                platform=ntc_platform,
+                command=command,
+                data=output
+            )
+
+            for row in parsed:
+                # Пропускаем интерфейсы без трансиверов
+                transceiver_type = row.get("type", "")
+                if not transceiver_type or "not present" in str(transceiver_type).lower():
+                    continue
+
+                interface = row.get("interface", "")
+                part_number = row.get("part_number", "")
+                serial_number = row.get("serial_number", "")
+                name = row.get("name", "")  # OEM, CISCO-FINISAR, etc.
+
+                # Определяем manufacturer по name или PID
+                item_manufacturer = ""
+                if name:
+                    name_upper = name.upper()
+                    if "CISCO" in name_upper:
+                        item_manufacturer = "Cisco"
+                    elif "FINISAR" in name_upper:
+                        item_manufacturer = "Finisar"
+                    elif "OEM" in name_upper:
+                        item_manufacturer = manufacturer  # Используем vendor устройства
+
+                if not item_manufacturer:
+                    item_manufacturer = self._detect_manufacturer_by_pid(part_number) or manufacturer
+
+                items.append({
+                    "name": f"Transceiver {interface}",
+                    "description": transceiver_type,
+                    "pid": part_number,
+                    "serial": serial_number,
+                    "manufacturer": item_manufacturer,
+                })
+
+        except Exception as e:
+            logger.debug(f"Ошибка парсинга transceivers через NTC: {e}")
+
+        return items

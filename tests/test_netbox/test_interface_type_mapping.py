@@ -53,16 +53,16 @@ class TestInterfaceTypeMapping:
         ({"media_type": "1000Base-SX"}, "1000base-sx"),
 
         # 25G оптика
-        ({"media_type": "SFP-25GBase-SR"}, "25gbase-x-sfp28"),
-        ({"media_type": "25GBase-SR"}, "25gbase-x-sfp28"),
+        ({"media_type": "SFP-25GBase-SR"}, "25gbase-sr"),  # Конкретный тип оптики
+        ({"media_type": "25GBase-SR"}, "25gbase-sr"),
 
-        # 40G оптика
-        ({"media_type": "QSFP-40G-SR4"}, "40gbase-x-qsfpp"),
-        ({"media_type": "40GBase-SR4"}, "40gbase-x-qsfpp"),
+        # 40G оптика - SR4 это конкретный тип (IEEE 802.3ba)
+        ({"media_type": "QSFP-40G-SR4"}, "40gbase-sr4"),
+        ({"media_type": "40GBase-SR4"}, "40gbase-sr4"),
 
-        # 100G оптика
-        ({"media_type": "QSFP-100G-SR4"}, "100gbase-x-qsfp28"),
-        ({"media_type": "100GBase-SR4"}, "100gbase-x-qsfp28"),
+        # 100G оптика - SR4 это конкретный тип (IEEE 802.3bm)
+        ({"media_type": "QSFP-100G-SR4"}, "100gbase-sr4"),
+        ({"media_type": "100GBase-SR4"}, "100gbase-sr4"),
 
         # Copper
         ({"media_type": "RJ45"}, "1000base-t"),
@@ -180,10 +180,10 @@ class TestInterfaceTypeMapping:
             {"media_type": "", "port_type": "25g-sfp28"},
             "25gbase-x-sfp28",
         ),
-        # Все поля пустые - дефолт
+        # Все поля пустые - дефолт 1000base-t (самый распространённый тип)
         (
             {"media_type": "", "port_type": "", "hardware_type": "", "speed": ""},
-            "other",  # Дефолт NetBox
+            "1000base-t",  # Дефолт из конфига
         ),
     ])
     def test_get_interface_type(self, netbox_sync, interface_data, expected_netbox_type):
@@ -291,7 +291,7 @@ class TestInterfaceTypeMapping:
         """Тест что пустые данные возвращают дефолтный тип."""
         data = {}
         result = netbox_sync._get_interface_type(data)
-        assert result == "other"  # NetBox дефолт
+        assert result == "1000base-t"  # Дефолт из конфига (самый распространённый тип)
 
     def test_unknown_media_type_fallback_to_port_type(self, netbox_sync):
         """
