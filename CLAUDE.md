@@ -12,17 +12,22 @@ Network Collector собирает информацию с сетевых уст
 CLI (cli.py)
     │
     ├── collectors/      # Сбор данных с устройств
-    │   ├── DeviceCollector, DeviceInventoryCollector
-    │   ├── MACCollector
-    │   ├── LLDPCollector
-    │   ├── InterfaceCollector
-    │   ├── InventoryCollector  # модули, SFP, PSU
+    │   ├── BaseCollector          # model_class, collect_models()
+    │   ├── DeviceCollector
+    │   ├── MACCollector           # → MACEntry
+    │   ├── LLDPCollector          # → LLDPNeighbor
+    │   ├── InterfaceCollector     # → Interface
+    │   ├── InventoryCollector     # → InventoryItem
     │   └── ConfigBackupCollector
     │
-    ├── core/            # Ядро: подключения, устройства, креды
-    │   ├── Device, DeviceStatus
-    │   ├── ConnectionManager (Scrapli)
-    │   └── CredentialsManager
+    ├── core/            # Ядро
+    │   ├── device.py         # Device, DeviceStatus
+    │   ├── connection.py     # ConnectionManager (Scrapli)
+    │   ├── credentials.py    # CredentialsManager
+    │   ├── context.py        # RunContext (run_id, dry_run)
+    │   ├── exceptions.py     # Typed Exceptions (is_retryable)
+    │   ├── logging.py        # Structured Logs (JSON + ротация)
+    │   └── models.py         # Data Models (Interface, MACEntry, ...)
     │
     ├── parsers/         # NTC Templates парсер
     │
@@ -30,7 +35,10 @@ CLI (cli.py)
     │
     ├── configurator/    # MAC matching + push descriptions
     │
-    └── netbox/          # NetBox API клиент + синхронизация
+    └── netbox/          # NetBox API
+        ├── client.py    # NetBoxClient
+        ├── sync.py      # NetBoxSync
+        └── diff.py      # DiffCalculator (preview changes)
 ```
 
 ## Технологии
@@ -354,20 +362,170 @@ sync-netbox --ip-addresses
 sync-netbox --interfaces
 ```
 
+## Data Models (Типизированные модели)
+
+Вместо `Dict[str, Any]` используются dataclass модели с автокомплитом в IDE.
+
+### Доступные модели
+
+| Модель | Описание | Collector |
+|--------|----------|-----------|
+| `Interface` | Интерфейс устройства | InterfaceCollector |
+| `MACEntry` | Запись MAC-таблицы | MACCollector |
+| `LLDPNeighbor` | LLDP/CDP сосед | LLDPCollector |
+| `InventoryItem` | Модуль/SFP/PSU | InventoryCollector |
+| `IPAddressEntry` | IP-адрес | - |
+| `DeviceInfo` | Информация об устройстве | DeviceCollector |
+
+### Использование
+
+```python
+from network_collector.collectors import InterfaceCollector
+from network_collector.core import interfaces_from_dicts
+
+# Способ 1: collect_models() — сразу типизированный вывод
+collector = InterfaceCollector()
+interfaces = collector.collect_models(devices)  # List[Interface]
+for intf in interfaces:
+    print(intf.name, intf.status, intf.ip_address)  # автокомплит в IDE
+
+# Способ 2: collect() + конвертация (обратная совместимость)
+data = collector.collect(devices)  # List[Dict]
+interfaces = interfaces_from_dicts(data)  # List[Interface]
+
+# Способ 3: Создание из словаря
+from network_collector.core import Interface
+intf = Interface.from_dict({"interface": "Gi0/1", "status": "up"})
+```
+
+## Structured Logging (JSON логи)
+
+### Быстрый старт
+
+```python
+from network_collector.core import setup_file_logging, get_logger
+
+# JSON в файл + human в консоль
+setup_file_logging("logs/collector.log")
+
+logger = get_logger(__name__)
+logger.info("Подключение", device="switch-01", ip="10.0.0.1")
+# Файл: {"timestamp": "...", "device": "switch-01", "ip": "10.0.0.1", ...}
+# Консоль: 2025-12-27 10:30:15 - INFO - Подключение (device=switch-01, ip=10.0.0.1)
+```
+
+### Ротация логов
+
+```python
+from network_collector.core import setup_file_logging, RotationType
+
+# По размеру (default): 10MB, 5 файлов
+setup_file_logging("logs/app.log", max_bytes=10*1024*1024, backup_count=5)
+
+# По времени: каждый день в полночь, 30 дней
+setup_file_logging(
+    "logs/app.log",
+    rotation=RotationType.TIME,
+    when="midnight",
+    backup_count=30,
+)
+```
+
+### Конфигурация из dict/YAML
+
+```python
+from network_collector.core import LogConfig, setup_logging_from_config
+
+config = LogConfig.from_dict({
+    "level": "INFO",
+    "json_format": True,
+    "file_path": "logs/collector.log",
+    "rotation": "size",
+    "max_bytes": 10485760,
+    "backup_count": 5,
+})
+setup_logging_from_config(config)
+```
+
+## Diff before Apply (Предпросмотр изменений)
+
+Показывает что будет создано/обновлено в NetBox ДО применения.
+
+```python
+from network_collector.netbox import NetBoxClient, DiffCalculator
+
+client = NetBoxClient(url, token)
+diff_calc = DiffCalculator(client)
+
+# Сравнить интерфейсы
+diff = diff_calc.diff_interfaces("switch-01", collected_interfaces)
+print(diff.summary())  # "interfaces: +5 new, ~2 update, =10 skip"
+
+# Детали
+print(diff.format_detailed())
+# CREATE:
+#   + Gi0/10
+#   + Gi0/11
+# UPDATE:
+#   ~ Gi0/1: description: '' → 'Server'
+```
+
+## Typed Exceptions (Типизированные исключения)
+
+```python
+from network_collector.core import (
+    ConnectionError,
+    AuthenticationError,
+    TimeoutError,
+    is_retryable,
+    format_error_for_log,
+)
+
+try:
+    # ... подключение ...
+except (ConnectionError, AuthenticationError, TimeoutError) as e:
+    if is_retryable(e):
+        # Можно повторить (timeout, connection refused)
+        retry()
+    else:
+        # Нельзя повторить (auth failed)
+        log.error(format_error_for_log(e))
+```
+
+## Roadmap (Что дальше)
+
+| Статус | Компонент | Описание |
+|--------|-----------|----------|
+| ✅ | RunContext | ID запуска, dry_run, timing |
+| ✅ | Typed Exceptions | is_retryable, категории ошибок |
+| ✅ | Data Models | Interface, MACEntry, LLDPNeighbor, etc. |
+| ✅ | Structured Logs | JSON формат + ротация файлов |
+| ✅ | Diff before Apply | Предпросмотр изменений NetBox |
+| ⬜ | Config Validation | Pydantic схемы для YAML конфигов |
+| ⬜ | CLI --json-logs | Флаг для JSON вывода в CLI |
+| ⬜ | Retry Logic | Автоповтор для retryable ошибок |
+
 ## Соглашения по коду
 
 - Типизация: `typing` для всех публичных методов
 - Docstrings: Google style
-- Логирование: `logging` модуль
+- Логирование: `logging` модуль (или `get_logger()`)
 - Паттерны: Strategy (collectors, exporters), Template Method (BaseCollector)
 
 ## Важные файлы
 
-- `cli.py` — точка входа CLI, все команды
-- `core/connection.py` — SSH подключения через Scrapli
-- `collectors/base.py` — базовый класс коллекторов
-- `netbox/sync.py` — синхронизация с NetBox
-- `configurator/description.py` — MAC matching и push descriptions
+| Файл | Описание |
+|------|----------|
+| `cli.py` | Точка входа CLI, все команды |
+| `core/connection.py` | SSH подключения через Scrapli |
+| `core/context.py` | RunContext (run_id, dry_run, timing) |
+| `core/exceptions.py` | Типизированные исключения |
+| `core/logging.py` | Structured Logs (JSON + ротация) |
+| `core/models.py` | Data Models (Interface, MACEntry, ...) |
+| `collectors/base.py` | BaseCollector, collect_models() |
+| `netbox/sync.py` | Синхронизация с NetBox |
+| `netbox/diff.py` | DiffCalculator (preview changes) |
+| `configurator/description.py` | MAC matching + push descriptions |
 
 ## Запуск
 
