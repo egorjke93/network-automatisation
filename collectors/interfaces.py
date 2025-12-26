@@ -21,6 +21,14 @@ from typing import List, Dict, Any, Optional
 
 from .base import BaseCollector
 from ..core.device import Device
+from ..core.models import Interface
+from ..core.exceptions import (
+    CollectorError,
+    ConnectionError,
+    AuthenticationError,
+    TimeoutError,
+    format_error_for_log,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,17 +36,25 @@ logger = logging.getLogger(__name__)
 class InterfaceCollector(BaseCollector):
     """
     Коллектор информации об интерфейсах.
-    
+
     Собирает статус, описание, VLAN, ошибки.
-    
+
     Attributes:
         include_errors: Собирать статистику ошибок
-        
+
     Example:
         collector = InterfaceCollector(include_errors=True)
-        interfaces = collector.collect(devices)
+        interfaces = collector.collect(devices)  # List[Dict]
+
+        # Или типизированные модели
+        interfaces = collector.collect_models(devices)  # List[Interface]
+        for intf in interfaces:
+            print(intf.name, intf.status, intf.ip_address)
     """
-    
+
+    # Типизированная модель для collect_models()
+    model_class = Interface
+
     # Команды для разных платформ
     # Используем "show interfaces" для получения полной информации:
     # статус, MAC, IP-адреса (включая Vlan SVI), description
@@ -384,8 +400,11 @@ class InterfaceCollector(BaseCollector):
                 logger.info(f"{hostname}: собрано {len(data)} интерфейсов")
                 return data
 
+        except (ConnectionError, AuthenticationError, TimeoutError) as e:
+            logger.error(f"Ошибка подключения к {device.host}: {format_error_for_log(e)}")
+            return []
         except Exception as e:
-            logger.error(f"Ошибка подключения к {device.host}: {e}")
+            logger.error(f"Неизвестная ошибка с {device.host}: {e}")
             return []
 
     def _parse_lag_membership(

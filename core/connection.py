@@ -36,6 +36,12 @@ from scrapli.exceptions import (
 
 from .device import Device, DeviceStatus
 from .credentials import Credentials
+from .exceptions import (
+    ConnectionError as CollectorConnectionError,
+    AuthenticationError,
+    TimeoutError as CollectorTimeoutError,
+    CommandError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -228,25 +234,39 @@ class ConnectionManager:
             device.status = DeviceStatus.OFFLINE
             device.last_error = f"Таймаут подключения: {e}"
             logger.error(f"Таймаут при подключении к {device.host}: {e}")
-            raise
+            raise CollectorTimeoutError(
+                f"Таймаут подключения: {e}",
+                device=device.host,
+                timeout_seconds=self.timeout_socket,
+            ) from e
 
         except ScrapliAuthenticationFailed as e:
             device.status = DeviceStatus.ERROR
             device.last_error = f"Ошибка аутентификации: {e}"
             logger.error(f"Ошибка аутентификации на {device.host}: {e}")
-            raise
+            raise AuthenticationError(
+                f"Ошибка аутентификации: {e}",
+                device=device.host,
+            ) from e
 
         except ScrapliConnectionError as e:
             device.status = DeviceStatus.ERROR
             device.last_error = f"Ошибка подключения: {e}"
             logger.error(f"Ошибка подключения к {device.host}: {e}")
-            raise
+            raise CollectorConnectionError(
+                f"Ошибка подключения: {e}",
+                device=device.host,
+                port=device.port or 22,
+            ) from e
 
         except Exception as e:
             device.status = DeviceStatus.ERROR
             device.last_error = str(e)
             logger.error(f"Ошибка при подключении к {device.host}: {e}")
-            raise
+            raise CollectorConnectionError(
+                f"Неизвестная ошибка: {e}",
+                device=device.host,
+            ) from e
 
         finally:
             if connection:

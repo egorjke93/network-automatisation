@@ -587,7 +587,7 @@ def prepare_collection(args):
     return devices, credentials
 
 
-def cmd_devices(args) -> None:
+def cmd_devices(args, ctx=None) -> None:
     """Обработчик команды devices (инвентаризация)."""
     from .collectors import DeviceInventoryCollector
     from .fields_config import apply_fields_config
@@ -621,7 +621,7 @@ def cmd_devices(args) -> None:
         logger.info(f"Отчёт сохранён: {file_path}")
 
 
-def cmd_mac(args) -> None:
+def cmd_mac(args, ctx=None) -> None:
     """Обработчик команды mac."""
     from .collectors import MACCollector
     from .config import config as app_config
@@ -743,7 +743,7 @@ def cmd_mac(args) -> None:
             logger.info(f"Отчёт сохранён: {file_path}")
 
 
-def cmd_lldp(args) -> None:
+def cmd_lldp(args, ctx=None) -> None:
     """Обработчик команды lldp."""
     from .collectors import LLDPCollector
     from .fields_config import apply_fields_config
@@ -776,7 +776,7 @@ def cmd_lldp(args) -> None:
         logger.info(f"Отчёт сохранён: {file_path}")
 
 
-def cmd_interfaces(args) -> None:
+def cmd_interfaces(args, ctx=None) -> None:
     """Обработчик команды interfaces."""
     from .collectors import InterfaceCollector
     from .fields_config import apply_fields_config
@@ -807,7 +807,7 @@ def cmd_interfaces(args) -> None:
         logger.info(f"Отчёт сохранён: {file_path}")
 
 
-def cmd_inventory(args) -> None:
+def cmd_inventory(args, ctx=None) -> None:
     """Обработчик команды inventory."""
     from .collectors import InventoryCollector
     from .fields_config import apply_fields_config
@@ -838,7 +838,7 @@ def cmd_inventory(args) -> None:
         logger.info(f"Отчёт сохранён: {file_path}")
 
 
-def cmd_run(args) -> None:
+def cmd_run(args, ctx=None) -> None:
     """Обработчик команды run (произвольная команда)."""
     from .core.connection import ConnectionManager, get_ntc_platform
     from .parsers.textfsm_parser import NTCParser, NTC_AVAILABLE
@@ -916,7 +916,7 @@ def cmd_run(args) -> None:
         logger.info(f"Отчёт сохранён: {file_path}")
 
 
-def cmd_match_mac(args) -> None:
+def cmd_match_mac(args, ctx=None) -> None:
     """Обработчик команды match-mac (сопоставление MAC с хостами)."""
     from .configurator import DescriptionMatcher
     import pandas as pd
@@ -970,7 +970,7 @@ def cmd_match_mac(args) -> None:
     logger.info(f"Результат сохранён: {output_file}")
 
 
-def cmd_push_descriptions(args) -> None:
+def cmd_push_descriptions(args, ctx=None) -> None:
     """Обработчик команды push-descriptions (применение описаний)."""
     from .configurator import DescriptionPusher
     import pandas as pd
@@ -1062,7 +1062,7 @@ def cmd_push_descriptions(args) -> None:
             logger.error(f"  {r.device}: {r.error}")
 
 
-def cmd_sync_netbox(args) -> None:
+def cmd_sync_netbox(args, ctx=None) -> None:
     """
     Обработчик команды sync-netbox.
 
@@ -1252,7 +1252,7 @@ def cmd_sync_netbox(args) -> None:
                 sync.sync_inventory(hostname, data)
 
 
-def cmd_backup(args) -> None:
+def cmd_backup(args, ctx=None) -> None:
     """Обработчик команды backup (резервное копирование конфигураций)."""
     from .collectors import ConfigBackupCollector
 
@@ -1284,6 +1284,7 @@ def cmd_backup(args) -> None:
 def main() -> None:
     """Главная функция CLI."""
     from .config import load_config
+    from .core.context import RunContext, set_current_context, setup_logging_with_context
 
     parser = setup_parser()
     args = parser.parse_args()
@@ -1291,33 +1292,49 @@ def main() -> None:
     # Загружаем конфигурацию из YAML (если есть)
     load_config(args.config)
 
-    # Настройка уровня логирования
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    # Создаём контекст выполнения
+    dry_run = getattr(args, "dry_run", False)
+    ctx = RunContext.create(
+        dry_run=dry_run,
+        triggered_by="cli",
+        command=args.command or "",
+        base_output_dir=Path(args.output) if hasattr(args, "output") else None,
+    )
+    set_current_context(ctx)
+
+    # Настройка логирования с run_id
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    setup_logging_with_context(level=log_level)
+
+    logger.info(f"Run started (command={args.command}, dry_run={dry_run})")
 
     # Выбор команды
     if args.command == "devices":
-        cmd_devices(args)
+        cmd_devices(args, ctx)
     elif args.command == "mac":
-        cmd_mac(args)
+        cmd_mac(args, ctx)
     elif args.command == "lldp":
-        cmd_lldp(args)
+        cmd_lldp(args, ctx)
     elif args.command == "interfaces":
-        cmd_interfaces(args)
+        cmd_interfaces(args, ctx)
     elif args.command == "inventory":
-        cmd_inventory(args)
+        cmd_inventory(args, ctx)
     elif args.command == "run":
-        cmd_run(args)
+        cmd_run(args, ctx)
     elif args.command == "match-mac":
-        cmd_match_mac(args)
+        cmd_match_mac(args, ctx)
     elif args.command == "push-descriptions":
-        cmd_push_descriptions(args)
+        cmd_push_descriptions(args, ctx)
     elif args.command == "sync-netbox":
-        cmd_sync_netbox(args)
+        cmd_sync_netbox(args, ctx)
     elif args.command == "backup":
-        cmd_backup(args)
+        cmd_backup(args, ctx)
     else:
         parser.print_help()
+        return
+
+    # Логируем завершение
+    logger.info(f"Run completed: {ctx.run_id} (elapsed={ctx.elapsed_human})")
 
 
 if __name__ == "__main__":

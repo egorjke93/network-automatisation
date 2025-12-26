@@ -31,6 +31,14 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from .client import NetBoxClient
+from ..core.context import RunContext, get_current_context
+from ..core.exceptions import (
+    NetBoxError,
+    NetBoxConnectionError,
+    NetBoxAPIError,
+    NetBoxValidationError,
+    format_error_for_log,
+)
 from ..core.constants import (
     INTERFACE_FULL_MAP,
     DEFAULT_PREFIX_LENGTH,
@@ -106,6 +114,7 @@ class NetBoxSync:
         dry_run: bool = False,
         create_only: bool = False,
         update_only: bool = False,
+        context: Optional[RunContext] = None,
     ):
         """
         Инициализация синхронизатора.
@@ -115,8 +124,10 @@ class NetBoxSync:
             dry_run: Режим симуляции (ничего не меняет)
             create_only: Только создавать новые объекты
             update_only: Только обновлять существующие
+            context: Контекст выполнения (если None — использует глобальный)
         """
         self.client = client
+        self.ctx = context or get_current_context()
         self.dry_run = dry_run
         self.create_only = create_only
         self.update_only = update_only
@@ -124,6 +135,12 @@ class NetBoxSync:
         # Кэш для поиска устройств
         self._device_cache: Dict[str, Any] = {}
         self._mac_cache: Dict[str, Any] = {}
+
+    def _log_prefix(self) -> str:
+        """Возвращает префикс для логов с run_id."""
+        if self.ctx:
+            return f"[{self.ctx.run_id}] "
+        return ""
 
     def sync_interfaces(
         self,
@@ -539,7 +556,8 @@ class NetBoxSync:
                     new_mac = self._normalize_mac(data.get("mac", ""))
                     # Проверяем текущий MAC через client
                     current_mac = self.client.get_interface_mac(interface.id) if not self.dry_run else None
-                    if new_mac and new_mac != (current_mac or ""):
+                    # Сравнение case-insensitive (NetBox может хранить в другом регистре)
+                    if new_mac and new_mac.upper() != (current_mac or "").upper():
                         mac_to_assign = new_mac
 
         if sync_cfg.is_field_enabled("mtu"):
@@ -972,8 +990,11 @@ class NetBoxSync:
                 f"{interface_b.device.name}:{interface_b.name}"
             )
             return "created"
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox при создании кабеля: {format_error_for_log(e)}")
+            return "error"
         except Exception as e:
-            logger.error(f"Ошибка создания кабеля: {e}")
+            logger.error(f"Неизвестная ошибка создания кабеля: {e}")
             return "error"
 
     # ==================== IP-АДРЕСА ====================
@@ -1096,8 +1117,14 @@ class NetBoxSync:
                 )
                 logger.info(f"Создан IP: {ip_with_mask} на {device_name}:{interface_name}")
                 stats["created"] += 1
+            except NetBoxValidationError as e:
+                logger.error(f"Ошибка валидации IP {ip_with_mask}: {format_error_for_log(e)}")
+                stats["failed"] += 1
+            except NetBoxError as e:
+                logger.error(f"Ошибка NetBox создания IP {ip_with_mask}: {format_error_for_log(e)}")
+                stats["failed"] += 1
             except Exception as e:
-                logger.error(f"Ошибка создания IP {ip_with_mask}: {e}")
+                logger.error(f"Неизвестная ошибка создания IP {ip_with_mask}: {e}")
                 stats["failed"] += 1
 
         # Устанавливаем primary_ip4 если указан device_ip
@@ -1109,36 +1136,6 @@ class NetBoxSync:
             f"пропущено={stats['skipped']}, ошибок={stats['failed']}"
         )
         return stats
-
-    def _set_primary_ip(self, device, device_ip: str) -> None:
-        """
-        Устанавливает primary_ip4 для устройства.
-
-        Args:
-            device: Объект устройства NetBox
-            device_ip: IP-адрес для установки как primary
-        """
-        try:
-            # Уже установлен?
-            if device.primary_ip4:
-                current_ip = str(device.primary_ip4.address).split("/")[0]
-                if current_ip == device_ip:
-                    logger.debug(f"Primary IP уже установлен: {device_ip}")
-                    return
-
-            # Ищем IP в NetBox
-            ip_obj = self.client.get_ip_by_address(device_ip)
-            if not ip_obj:
-                logger.debug(f"IP {device_ip} не найден в NetBox для primary")
-                return
-
-            # Устанавливаем primary_ip4
-            device.primary_ip4 = ip_obj.id
-            device.save()
-            logger.info(f"Установлен primary_ip4: {device_ip} для {device.name}")
-
-        except Exception as e:
-            logger.warning(f"Не удалось установить primary IP {device_ip}: {e}")
 
     def _update_ip_address(self, ip_obj, device, interface) -> bool:
         """
@@ -1185,8 +1182,11 @@ class NetBoxSync:
             ip_obj.update(updates)
             logger.info(f"Обновлён IP {ip_obj.address}: {list(updates.keys())}")
             return True
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox обновления IP {ip_obj.address}: {format_error_for_log(e)}")
+            return False
         except Exception as e:
-            logger.error(f"Ошибка обновления IP {ip_obj.address}: {e}")
+            logger.error(f"Неизвестная ошибка обновления IP {ip_obj.address}: {e}")
             return False
 
     def _mask_to_prefix(self, mask: str) -> int:
@@ -1335,8 +1335,14 @@ class NetBoxSync:
             # Он будет установлен позже при синхронизации IP адресов (sync_ip_addresses)
             return device
 
+        except NetBoxValidationError as e:
+            logger.error(f"Ошибка валидации устройства {name}: {format_error_for_log(e)}")
+            return None
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox создания устройства {name}: {format_error_for_log(e)}")
+            return None
         except Exception as e:
-            logger.error(f"Ошибка создания устройства {name}: {e}")
+            logger.error(f"Неизвестная ошибка создания устройства {name}: {e}")
             return None
 
     def sync_devices_from_inventory(
@@ -1589,8 +1595,11 @@ class NetBoxSync:
                 self._set_primary_ip(device, primary_ip)
 
             return True
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox обновления устройства {device.name}: {format_error_for_log(e)}")
+            return False
         except Exception as e:
-            logger.error(f"Ошибка обновления устройства {device.name}: {e}")
+            logger.error(f"Неизвестная ошибка обновления устройства {device.name}: {e}")
             return False
 
     def _cleanup_devices(
@@ -1627,8 +1636,14 @@ class NetBoxSync:
                 f"Найдено {len(netbox_devices)} устройств для проверки "
                 f"(site={site_slug}, tenant={tenant_slug})"
             )
+        except NetBoxConnectionError as e:
+            logger.error(f"Ошибка подключения к NetBox: {format_error_for_log(e)}")
+            return 0
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox получения устройств: {format_error_for_log(e)}")
+            return 0
         except Exception as e:
-            logger.error(f"Ошибка получения устройств из NetBox: {e}")
+            logger.error(f"Неизвестная ошибка получения устройств: {e}")
             return 0
 
         for device in netbox_devices:
@@ -1649,8 +1664,10 @@ class NetBoxSync:
                         device.delete()
                         logger.info(f"Удалено устройство: {device.name}")
                         deleted += 1
+                    except NetBoxError as e:
+                        logger.error(f"Ошибка NetBox удаления устройства {device.name}: {format_error_for_log(e)}")
                     except Exception as e:
-                        logger.error(f"Ошибка удаления устройства {device.name}: {e}")
+                        logger.error(f"Неизвестная ошибка удаления устройства {device.name}: {e}")
 
         return deleted
 
@@ -1702,8 +1719,11 @@ class NetBoxSync:
             return self.client.api.dcim.manufacturers.create(
                 {"name": name, "slug": slug}
             )
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox работы с производителем {name}: {format_error_for_log(e)}")
+            return None
         except Exception as e:
-            logger.error(f"Ошибка работы с производителем {name}: {e}")
+            logger.error(f"Неизвестная ошибка работы с производителем {name}: {e}")
             return None
 
     def _get_or_create_device_type(
@@ -1731,8 +1751,11 @@ class NetBoxSync:
                 "slug": slug,
                 "manufacturer": manufacturer_id,
             })
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox с типом устройства {model} → {normalize_device_model(model)}: {format_error_for_log(e)}")
+            return None
         except Exception as e:
-            logger.error(f"Ошибка работы с типом устройства {model} → {normalize_device_model(model)}: {e}")
+            logger.error(f"Неизвестная ошибка с типом устройства {model}: {e}")
             return None
 
     def _get_or_create_site(self, name: str) -> Optional[Any]:
@@ -1747,8 +1770,11 @@ class NetBoxSync:
             return self.client.api.dcim.sites.create(
                 {"name": name, "slug": slug, "status": "active"}
             )
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox работы с сайтом {name}: {format_error_for_log(e)}")
+            return None
         except Exception as e:
-            logger.error(f"Ошибка работы с сайтом {name}: {e}")
+            logger.error(f"Неизвестная ошибка работы с сайтом {name}: {e}")
             return None
 
     def _get_or_create_role(self, name: str) -> Optional[Any]:
@@ -1763,8 +1789,11 @@ class NetBoxSync:
             return self.client.api.dcim.device_roles.create(
                 {"name": name, "slug": slug, "color": "9e9e9e"}
             )
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox работы с ролью {name}: {format_error_for_log(e)}")
+            return None
         except Exception as e:
-            logger.error(f"Ошибка работы с ролью {name}: {e}")
+            logger.error(f"Неизвестная ошибка работы с ролью {name}: {e}")
             return None
 
     def _get_or_create_platform(self, name: str) -> Optional[Any]:
@@ -1779,8 +1808,11 @@ class NetBoxSync:
             return self.client.api.dcim.platforms.create(
                 {"name": name, "slug": slug}
             )
+        except NetBoxError as e:
+            logger.debug(f"Ошибка NetBox работы с платформой {name}: {format_error_for_log(e)}")
+            return None
         except Exception as e:
-            logger.debug(f"Ошибка работы с платформой {name}: {e}")
+            logger.debug(f"Неизвестная ошибка работы с платформой {name}: {e}")
             return None
 
     def _get_or_create_tenant(self, name: str) -> Optional[Any]:
@@ -1795,8 +1827,11 @@ class NetBoxSync:
             return self.client.api.tenancy.tenants.create(
                 {"name": name, "slug": slug}
             )
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox работы с tenant {name}: {format_error_for_log(e)}")
+            return None
         except Exception as e:
-            logger.error(f"Ошибка работы с tenant {name}: {e}")
+            logger.error(f"Неизвестная ошибка работы с tenant {name}: {e}")
             return None
 
     def _set_primary_ip(self, device, ip_address: str) -> None:
@@ -1811,6 +1846,13 @@ class NetBoxSync:
 
         # Нормализуем IP - убираем маску если есть
         ip_only = ip_address.split("/")[0]
+
+        # Проверяем: уже установлен?
+        if device.primary_ip4:
+            current_ip = str(device.primary_ip4.address).split("/")[0]
+            if current_ip == ip_only:
+                logger.debug(f"Primary IP уже установлен: {ip_only}")
+                return
 
         # Добавляем маску если её нет (по умолчанию /32 для management IP)
         if "/" in ip_address:
@@ -1851,8 +1893,10 @@ class NetBoxSync:
             elif self.dry_run:
                 logger.info(f"[DRY-RUN] Установка primary IP {ip_only} для {device.name}")
 
+        except NetBoxError as e:
+            logger.warning(f"Ошибка NetBox установки primary IP {ip_address} для {device.name}: {format_error_for_log(e)}")
         except Exception as e:
-            logger.warning(f"Не удалось установить primary IP {ip_address} для {device.name}: {e}")
+            logger.warning(f"Неизвестная ошибка установки primary IP {ip_address} для {device.name}: {e}")
 
     def _find_management_interface(self, device_id: int, target_ip: str = "") -> Optional[Any]:
         """
@@ -1975,8 +2019,14 @@ class NetBoxSync:
                     status="active",
                 )
                 stats["created"] += 1
+            except NetBoxValidationError as e:
+                logger.error(f"Ошибка валидации VLAN {vid}: {format_error_for_log(e)}")
+                stats["failed"] += 1
+            except NetBoxError as e:
+                logger.error(f"Ошибка NetBox создания VLAN {vid}: {format_error_for_log(e)}")
+                stats["failed"] += 1
             except Exception as e:
-                logger.error(f"Ошибка создания VLAN {vid}: {e}")
+                logger.error(f"Неизвестная ошибка создания VLAN {vid}: {e}")
                 stats["failed"] += 1
 
         logger.info(
@@ -2073,8 +2123,11 @@ class NetBoxSync:
                         try:
                             self.client.update_inventory_item(existing.id, **updates)
                             stats["updated"] += 1
+                        except NetBoxError as e:
+                            logger.error(f"Ошибка NetBox обновления {name}: {format_error_for_log(e)}")
+                            stats["failed"] += 1
                         except Exception as e:
-                            logger.error(f"Ошибка обновления {name}: {e}")
+                            logger.error(f"Неизвестная ошибка обновления {name}: {e}")
                             stats["failed"] += 1
                 else:
                     stats["skipped"] += 1
@@ -2104,8 +2157,14 @@ class NetBoxSync:
                     **kwargs,
                 )
                 stats["created"] += 1
+            except NetBoxValidationError as e:
+                logger.error(f"Ошибка валидации inventory {name}: {format_error_for_log(e)}")
+                stats["failed"] += 1
+            except NetBoxError as e:
+                logger.error(f"Ошибка NetBox создания inventory {name}: {format_error_for_log(e)}")
+                stats["failed"] += 1
             except Exception as e:
-                logger.error(f"Ошибка создания inventory {name}: {e}")
+                logger.error(f"Неизвестная ошибка создания inventory {name}: {e}")
                 stats["failed"] += 1
 
         logger.info(

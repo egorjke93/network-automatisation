@@ -272,6 +272,16 @@ NETBOX_INTERFACE_TYPE_MAP: Dict[str, str] = {
     "1000basecx": "1000base-cx",
     "1000base-cx": "1000base-cx",
     "1000base sfp": "1000base-x-sfp",      # Generic SFP
+    # === 100M SFP (FastEthernet оптика) ===
+    "100basefx": "100base-fx",             # 100BaseFX (multi-mode)
+    "100base-fx": "100base-fx",
+    "100basefx-fe sfp": "100base-fx",      # Cisco format
+    "100basefx-fe": "100base-fx",
+    "100baselx": "100base-lx10",           # 100BaseLX (single-mode, 10km)
+    "100base-lx": "100base-lx10",
+    "100baselx-fe sfp": "100base-lx10",    # Cisco format
+    "100baselx-fe": "100base-lx10",
+    "100base-lx10": "100base-lx10",
     # === Медные (RJ45) ===
     "basetx": "1000base-t",
     "base-tx": "1000base-t",

@@ -21,7 +21,15 @@ from typing import List, Dict, Any
 
 from .base import BaseCollector
 from ..core.device import Device
+from ..core.models import InventoryItem
 from ..core.constants import get_vendor_by_platform
+from ..core.exceptions import (
+    CollectorError,
+    ConnectionError,
+    AuthenticationError,
+    TimeoutError,
+    format_error_for_log,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +42,14 @@ class InventoryCollector(BaseCollector):
 
     Example:
         collector = InventoryCollector()
-        inventory = collector.collect(devices)
+        inventory = collector.collect(devices)  # List[Dict]
+
+        # Или типизированные модели
+        items = collector.collect_models(devices)  # List[InventoryItem]
     """
+
+    # Типизированная модель
+    model_class = InventoryItem
 
     # Команды для разных платформ
     platform_commands = {
@@ -271,9 +285,13 @@ class InventoryCollector(BaseCollector):
                 logger.info(f"{hostname}: собрано {len(all_items)} компонентов inventory (из них {len(transceiver_items)} трансиверов)")
                 return all_items
 
+        except (ConnectionError, AuthenticationError, TimeoutError) as e:
+            device.status = DeviceStatus.ERROR
+            logger.error(f"Ошибка подключения к {device.host}: {format_error_for_log(e)}")
+            return []
         except Exception as e:
             device.status = DeviceStatus.ERROR
-            logger.error(f"Ошибка подключения к {device.host}: {e}")
+            logger.error(f"Неизвестная ошибка с {device.host}: {e}")
             return []
 
     def _parse_transceivers(
@@ -322,7 +340,8 @@ class InventoryCollector(BaseCollector):
 
                 interface = row.get("interface", "")
                 part_number = row.get("part_number", "")
-                serial_number = row.get("serial_number", "")
+                # NTC шаблон возвращает "serial", не "serial_number"
+                serial_number = row.get("serial", row.get("serial_number", ""))
                 name = row.get("name", "")  # OEM, CISCO-FINISAR, etc.
 
                 # Определяем manufacturer по name или PID

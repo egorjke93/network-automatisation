@@ -29,6 +29,13 @@ from ..core.device import Device, DeviceStatus
 from ..core.connection import ConnectionManager, get_ntc_platform, get_scrapli_platform
 from ..core.credentials import Credentials
 from ..core.constants import normalize_device_model
+from ..core.exceptions import (
+    CollectorError,
+    ConnectionError,
+    AuthenticationError,
+    TimeoutError,
+    format_error_for_log,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,8 +166,10 @@ class DeviceCollector:
                     data = future.result()
                     if data:
                         all_data.append(data)
+                except CollectorError as e:
+                    logger.error(f"Ошибка сбора с {device.host}: {format_error_for_log(e)}")
                 except Exception as e:
-                    logger.error(f"Ошибка сбора с {device.host}: {e}")
+                    logger.error(f"Неизвестная ошибка с {device.host}: {e}")
 
         return all_data
 
@@ -227,9 +236,16 @@ class DeviceCollector:
 
                 logger.info(f"[SUCCESS] {device.host}: Данные получены")
 
-        except Exception as e:
-            logger.error(f"[ERROR] {device.host}: {str(e)}")
+        except (ConnectionError, AuthenticationError, TimeoutError) as e:
+            logger.error(f"[ERROR] {device.host}: {format_error_for_log(e)}")
             # Заполняем поля ошибками
+            for _, csv_key in self.device_fields.items():
+                data[csv_key] = "ERROR"
+            data["_error"] = format_error_for_log(e)
+            data["name"] = device.host
+            data["hostname"] = device.host
+        except Exception as e:
+            logger.error(f"[ERROR] {device.host}: неизвестная ошибка: {e}")
             for _, csv_key in self.device_fields.items():
                 data[csv_key] = "ERROR"
             data["_error"] = str(e)

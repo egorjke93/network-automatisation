@@ -13,16 +13,41 @@
         def _parse_output(self, output, device):
             # Парсинг вывода
             return parsed_data
+
+Поддержка типизированных моделей:
+    # Collectors возвращают List[Dict] для обратной совместимости
+    data = collector.collect(devices)
+
+    # Или типизированные модели
+    interfaces = collector.collect_models(devices)  # List[Interface]
+
+    # Конвертация существующих данных
+    from network_collector.core import interfaces_from_dicts
+    interfaces = interfaces_from_dicts(data)
 """
 
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Type, TypeVar, Generic
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# TypeVar для типизированных моделей
+T = TypeVar("T")
 
 from ..core.device import Device, DeviceStatus
 from ..core.connection import ConnectionManager, get_ntc_platform
 from ..core.credentials import Credentials
+from ..core.context import RunContext, get_current_context
+from ..core.exceptions import (
+    CollectorError,
+    ConnectionError,
+    AuthenticationError,
+    CommandError,
+    ParseError,
+    TimeoutError,
+    format_error_for_log,
+    is_retryable,
+)
 from ..parsers.textfsm_parser import NTCParser, NTC_AVAILABLE
 
 logger = logging.getLogger(__name__)
@@ -39,13 +64,19 @@ class BaseCollector(ABC):
         credentials: Учётные данные для подключения
         use_ntc: Использовать NTC Templates для парсинга
         max_workers: Максимум параллельных подключений
+        model_class: Класс модели для типизированного вывода
 
     Example:
         class MyCollector(BaseCollector):
             command = "show my data"
+            model_class = MyModel  # опционально
 
             def _parse_output(self, output, device):
                 return [{"field": "value"}]
+
+    Типизированный сбор:
+        collector = InterfaceCollector()
+        interfaces = collector.collect_models(devices)  # List[Interface]
     """
 
     # Команда для выполнения (переопределяется в наследниках)
@@ -54,6 +85,10 @@ class BaseCollector(ABC):
     # Платформо-зависимые команды
     # {device_type: command}
     platform_commands: Dict[str, str] = {}
+
+    # Класс модели для типизированного вывода (переопределяется в наследниках)
+    # Должен иметь метод from_dict(data: Dict) -> Model
+    model_class: Optional[Type[T]] = None
 
     def __init__(
         self,
@@ -64,6 +99,7 @@ class BaseCollector(ABC):
         timeout_socket: int = 15,
         timeout_transport: int = 30,
         transport: str = "ssh2",
+        context: Optional[RunContext] = None,
     ):
         """
         Инициализация коллектора.
@@ -76,8 +112,11 @@ class BaseCollector(ABC):
             timeout_socket: Таймаут сокета
             timeout_transport: Таймаут транспорта
             transport: Тип транспорта
+            context: Контекст выполнения (если None — использует глобальный)
         """
         self.credentials = credentials
+        # Контекст: явный или глобальный
+        self.ctx = context or get_current_context()
         self.use_ntc = use_ntc and NTC_AVAILABLE
         self.ntc_fields = ntc_fields
         self.max_workers = max_workers
@@ -98,6 +137,12 @@ class BaseCollector(ABC):
                 self.use_ntc = False
         else:
             self._parser = None
+
+    def _log_prefix(self) -> str:
+        """Возвращает префикс для логов с run_id."""
+        if self.ctx:
+            return f"[{self.ctx.run_id}] "
+        return ""
 
     def collect(
         self,
@@ -123,8 +168,62 @@ class BaseCollector(ABC):
                 data = self._collect_from_device(device)
                 all_data.extend(data)
 
-        logger.info(f"Собрано записей: {len(all_data)} с {len(devices)} устройств")
+        logger.info(f"{self._log_prefix()}Собрано записей: {len(all_data)} с {len(devices)} устройств")
         return all_data
+
+    def collect_models(
+        self,
+        devices: List[Device],
+        parallel: bool = True,
+    ) -> List[T]:
+        """
+        Собирает данные и возвращает типизированные модели.
+
+        Args:
+            devices: Список устройств
+            parallel: Параллельный сбор
+
+        Returns:
+            List[Model]: Типизированные объекты (Interface, MACEntry, etc.)
+
+        Raises:
+            ValueError: Если model_class не определён для коллектора
+
+        Example:
+            collector = InterfaceCollector()
+            interfaces = collector.collect_models(devices)
+            for intf in interfaces:
+                print(intf.name, intf.status)  # автокомплит в IDE
+        """
+        if self.model_class is None:
+            raise ValueError(
+                f"{self.__class__.__name__} не имеет model_class. "
+                f"Используйте collect() и конвертируйте вручную."
+            )
+
+        data = self.collect(devices, parallel=parallel)
+        return [self.model_class.from_dict(row) for row in data]
+
+    def to_models(self, data: List[Dict[str, Any]]) -> List[T]:
+        """
+        Конвертирует словари в типизированные модели.
+
+        Args:
+            data: Список словарей (результат collect())
+
+        Returns:
+            List[Model]: Типизированные объекты
+
+        Example:
+            data = collector.collect(devices)
+            # ... обработка data ...
+            models = collector.to_models(data)
+        """
+        if self.model_class is None:
+            raise ValueError(
+                f"{self.__class__.__name__} не имеет model_class."
+            )
+        return [self.model_class.from_dict(row) for row in data]
 
     def _collect_parallel(self, devices: List[Device]) -> List[Dict[str, Any]]:
         """
@@ -149,8 +248,12 @@ class BaseCollector(ABC):
                 try:
                     data = future.result()
                     all_data.extend(data)
+                except CollectorError as e:
+                    # Наши типизированные ошибки — логируем с деталями
+                    logger.error(f"{self._log_prefix()}Ошибка сбора с {device.host}: {format_error_for_log(e)}")
                 except Exception as e:
-                    logger.error(f"Ошибка сбора с {device.host}: {e}")
+                    # Неизвестные ошибки — оборачиваем
+                    logger.error(f"{self._log_prefix()}Неизвестная ошибка сбора с {device.host}: {e}")
 
         return all_data
 
@@ -193,9 +296,15 @@ class BaseCollector(ABC):
                 logger.info(f"{hostname}: собрано {len(data)} записей")
                 return data
 
-        except Exception as e:
+        except (ConnectionError, AuthenticationError, TimeoutError) as e:
+            # Типизированные ошибки подключения
             device.status = DeviceStatus.ERROR
-            logger.error(f"Ошибка подключения к {device.host}: {e}")
+            logger.error(f"Ошибка подключения к {device.host}: {format_error_for_log(e)}")
+            return []
+        except Exception as e:
+            # Неизвестные ошибки — логируем и продолжаем
+            device.status = DeviceStatus.ERROR
+            logger.error(f"Неизвестная ошибка с {device.host}: {e}")
             return []
 
     def _get_command(self, device: Device) -> str:
@@ -266,7 +375,9 @@ class BaseCollector(ABC):
                 fields=self.ntc_fields,
             )
         except Exception as e:
+            # Логируем как warning — fallback парсинг может сработать
             logger.warning(f"NTC парсинг не удался для {device.platform}/{cmd}: {e}")
+            # Не бросаем ParseError — даём возможность fallback парсингу
             return []
 
     # Алиас для обратной совместимости

@@ -29,6 +29,14 @@ from typing import List, Dict, Any, Optional
 
 from .base import BaseCollector
 from ..core.device import Device
+from ..core.models import LLDPNeighbor
+from ..core.exceptions import (
+    CollectorError,
+    ConnectionError,
+    AuthenticationError,
+    TimeoutError,
+    format_error_for_log,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +52,14 @@ class LLDPCollector(BaseCollector):
 
     Example:
         collector = LLDPCollector(protocol="both")
-        neighbors = collector.collect(devices)
+        neighbors = collector.collect(devices)  # List[Dict]
+
+        # Или типизированные модели
+        neighbors = collector.collect_models(devices)  # List[LLDPNeighbor]
     """
+
+    # Типизированная модель
+    model_class = LLDPNeighbor
 
     # Команды для LLDP
     lldp_commands = {
@@ -127,8 +141,11 @@ class LLDPCollector(BaseCollector):
                 logger.info(f"{hostname}: собрано {len(data)} записей")
                 return data
 
+        except (ConnectionError, AuthenticationError, TimeoutError) as e:
+            logger.error(f"Ошибка подключения к {device.host}: {format_error_for_log(e)}")
+            return []
         except Exception as e:
-            logger.error(f"Ошибка подключения к {device.host}: {e}")
+            logger.error(f"Неизвестная ошибка с {device.host}: {e}")
             return []
 
     def _collect_both_protocols(self, conn, device: Device) -> List[Dict[str, Any]]:

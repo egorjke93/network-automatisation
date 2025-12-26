@@ -25,12 +25,21 @@ from ntc_templates.parse import parse_output
 
 from .base import BaseCollector
 from ..core.device import Device
+from ..core.models import MACEntry
 from ..core.connection import ConnectionManager, get_ntc_platform
 from ..core.constants import (
     INTERFACE_SHORT_MAP,
     ONLINE_PORT_STATUSES,
     normalize_interface_short,
     CUSTOM_TEXTFSM_TEMPLATES,
+)
+from ..core.exceptions import (
+    CollectorError,
+    ConnectionError,
+    AuthenticationError,
+    TimeoutError,
+    ParseError,
+    format_error_for_log,
 )
 from ..parsers.textfsm_parser import TextFSMParser
 from ..config import config as app_config
@@ -54,8 +63,14 @@ class MACCollector(BaseCollector):
 
     Example:
         collector = MACCollector(mac_format="ieee")
-        data = collector.collect(devices)
+        data = collector.collect(devices)  # List[Dict]
+
+        # Или типизированные модели
+        macs = collector.collect_models(devices)  # List[MACEntry]
     """
+
+    # Типизированная модель
+    model_class = MACEntry
 
     # Команды для разных платформ
     platform_commands = {
@@ -211,8 +226,13 @@ class MACCollector(BaseCollector):
                 logger.info(f"{hostname}: собрано {len(data)} MAC-адресов")
                 return data
 
+        except (ConnectionError, AuthenticationError, TimeoutError) as e:
+            # Типизированные ошибки подключения
+            logger.error(f"Ошибка подключения к {device.host}: {format_error_for_log(e)}")
+            return []
         except Exception as e:
-            logger.error(f"Ошибка подключения к {device.host}: {e}")
+            # Неизвестные ошибки
+            logger.error(f"Неизвестная ошибка с {device.host}: {e}")
             return []
 
     def _parse_output(

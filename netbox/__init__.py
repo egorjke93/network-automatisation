@@ -21,6 +21,23 @@
 
 from .client import NetBoxClient
 from .sync import NetBoxSync
+from .diff import (
+    DiffCalculator,
+    DiffResult,
+    ObjectChange,
+    FieldChange,
+    ChangeType,
+    format_diff_table,
+)
 
-__all__ = ["NetBoxClient", "NetBoxSync"]
+__all__ = [
+    "NetBoxClient",
+    "NetBoxSync",
+    "DiffCalculator",
+    "DiffResult",
+    "ObjectChange",
+    "FieldChange",
+    "ChangeType",
+    "format_diff_table",
+]
 

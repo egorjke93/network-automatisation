@@ -24,6 +24,13 @@ from dataclasses import dataclass
 from ..core.device import Device
 from ..core.connection import ConnectionManager
 from ..core.credentials import Credentials
+from ..core.exceptions import (
+    CollectorError,
+    ConnectionError,
+    AuthenticationError,
+    TimeoutError,
+    format_error_for_log,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -185,8 +192,11 @@ class ConfigBackupCollector:
 
                 logger.info(f"[OK] {hostname}: сохранено в {file_path.name}")
 
+        except (ConnectionError, AuthenticationError, TimeoutError) as e:
+            result.error = format_error_for_log(e)
+            logger.error(f"[ERROR] {device.host}: {format_error_for_log(e)}")
         except Exception as e:
             result.error = str(e)
-            logger.error(f"[ERROR] {device.host}: {e}")
+            logger.error(f"[ERROR] {device.host}: неизвестная ошибка: {e}")
 
         return result
