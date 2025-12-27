@@ -24,21 +24,21 @@
 """
 
 import re
-import logging
 from typing import List, Dict, Any, Optional
 
 from .base import BaseCollector
 from ..core.device import Device
 from ..core.models import LLDPNeighbor
+from ..core.logging import get_logger
 from ..core.exceptions import (
-    CollectorError,
     ConnectionError,
     AuthenticationError,
     TimeoutError,
     format_error_for_log,
 )
+from ..core.constants import normalize_interface_short
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LLDPCollector(BaseCollector):
@@ -215,14 +215,18 @@ class LLDPCollector(BaseCollector):
         # Создаём индекс CDP по local_interface
         cdp_by_interface = {}
         for cdp_row in cdp_data:
-            local_intf = self._normalize_interface(cdp_row.get("local_interface", ""))
+            local_intf = normalize_interface_short(
+                cdp_row.get("local_interface", ""), lowercase=True
+            )
             if local_intf:
                 cdp_by_interface[local_intf] = cdp_row
 
         # Дополняем LLDP данными из CDP
         merged = []
         for lldp_row in lldp_data:
-            local_intf = self._normalize_interface(lldp_row.get("local_interface", ""))
+            local_intf = normalize_interface_short(
+                lldp_row.get("local_interface", ""), lowercase=True
+            )
             cdp_row = cdp_by_interface.get(local_intf)
 
             if cdp_row:
@@ -272,39 +276,6 @@ class LLDPCollector(BaseCollector):
             merged.append(cdp_row)
 
         return merged
-
-    def _normalize_interface(self, interface: str) -> str:
-        """
-        Нормализует имя интерфейса для сравнения.
-
-        Примеры:
-            Ten 1/1/4 -> te1/1/4
-            Te1/1/4 -> te1/1/4
-            TenGigabitEthernet1/1/4 -> te1/1/4
-            GigabitEthernet0/1 -> gi0/1
-            Twe1/0/17 -> twe1/0/17
-        """
-        if not interface:
-            return ""
-        # Убираем пробелы везде и приводим к нижнему регистру
-        intf = interface.replace(" ", "").strip().lower()
-
-        # Убираем префиксы типа Ethernet -> Et, GigabitEthernet -> Gi
-        # Важно: порядок имеет значение - сначала длинные префиксы
-        for full, short in [
-            ("twentyfivegigabitethernet", "twe"),  # TwentyFiveGigE
-            ("tengigabitethernet", "te"),
-            ("gigabitethernet", "gi"),
-            ("fastethernet", "fa"),
-            ("ethernet", "eth"),
-            # Короткие формы CDP/LLDP
-            ("ten", "te"),   # Ten 1/1/4 (CDP) -> te1/1/4
-            ("twe", "twe"),  # Twe1/0/17 (CDP)
-        ]:
-            if intf.startswith(full):
-                intf = short + intf[len(full):]
-                break
-        return intf
 
     def _parse_output(
         self,

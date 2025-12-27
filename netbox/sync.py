@@ -28,10 +28,11 @@
 
 import re
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 
 from .client import NetBoxClient
 from ..core.context import RunContext, get_current_context
+from ..core.models import Interface
 from ..core.exceptions import (
     NetBoxError,
     NetBoxConnectionError,
@@ -42,47 +43,17 @@ from ..core.exceptions import (
 from ..core.constants import (
     INTERFACE_FULL_MAP,
     DEFAULT_PREFIX_LENGTH,
-    NETBOX_INTERFACE_TYPE_MAP,
-    NETBOX_HARDWARE_TYPE_MAP,
-    VIRTUAL_INTERFACE_PREFIXES,
-    MGMT_INTERFACE_PATTERNS,
     normalize_interface_full,
     normalize_device_model,
+    normalize_mac_netbox,
+    get_netbox_interface_type,
+    slugify,
+    mask_to_prefix,
+    transliterate_to_slug,
 )
 from ..fields_config import get_sync_config
 
 logger = logging.getLogger(__name__)
-
-# Таблица транслитерации кириллицы в латиницу
-_TRANSLIT_TABLE = {
-    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
-    'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
-    'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
-    'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
-    'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
-}
-
-
-def transliterate_to_slug(name: str) -> str:
-    """
-    Транслитерирует кириллицу в латиницу и создаёт валидный slug.
-
-    Args:
-        name: Имя (может содержать кириллицу)
-
-    Returns:
-        str: Валидный slug (только латиница, цифры, дефисы, подчёркивания)
-    """
-    result = []
-    for char in name.lower():
-        if char in _TRANSLIT_TABLE:
-            result.append(_TRANSLIT_TABLE[char])
-        elif char.isalnum() or char in '-_':
-            result.append(char)
-        elif char == ' ':
-            result.append('-')
-        # Другие символы пропускаем
-    return ''.join(result)
 
 
 class NetBoxSync:
@@ -145,7 +116,7 @@ class NetBoxSync:
     def sync_interfaces(
         self,
         device_name: str,
-        interfaces: List[Dict[str, Any]],
+        interfaces: Union[List[Dict[str, Any]], List[Interface]],
         create_missing: Optional[bool] = None,
         update_existing: Optional[bool] = None,
     ) -> Dict[str, int]:
@@ -154,7 +125,7 @@ class NetBoxSync:
 
         Args:
             device_name: Имя устройства в NetBox
-            interfaces: Список интерфейсов для синхронизации
+            interfaces: Список интерфейсов (Dict или Interface модели)
             create_missing: Создавать отсутствующие (None = из config)
             update_existing: Обновлять существующие (None = из config)
 
@@ -184,36 +155,39 @@ class NetBoxSync:
         # Фильтры исключения интерфейсов
         exclude_patterns = sync_cfg.get_option("exclude_interfaces", [])
 
+        # Конвертируем в Interface модели если нужно
+        interface_models: List[Interface] = []
+        for item in interfaces:
+            if isinstance(item, Interface):
+                interface_models.append(item)
+            else:
+                interface_models.append(Interface.from_dict(item))
+
         # Сортируем: сначала LAG интерфейсы (Po*), потом остальные
-        # Это нужно чтобы LAG был создан до привязки member интерфейсов
-        def is_lag_interface(intf: Dict[str, Any]) -> int:
-            name = intf.get("interface", intf.get("name", "")).lower()
-            if name.startswith(("port-channel", "po")):
-                return 0  # LAG первые
-            return 1  # остальные после
+        def is_lag(intf: Interface) -> int:
+            return 0 if intf.name.lower().startswith(("port-channel", "po")) else 1
 
-        sorted_interfaces = sorted(interfaces, key=is_lag_interface)
+        sorted_interfaces = sorted(interface_models, key=is_lag)
 
-        for intf_data in sorted_interfaces:
-            intf_name = intf_data.get("interface", intf_data.get("name"))
-            if not intf_name:
+        for intf in sorted_interfaces:
+            if not intf.name:
                 continue
 
             # Проверяем фильтры исключения
             excluded = False
             for pattern in exclude_patterns:
-                if re.match(pattern, intf_name, re.IGNORECASE):
-                    logger.debug(f"Пропуск интерфейса {intf_name} (паттерн: {pattern})")
+                if re.match(pattern, intf.name, re.IGNORECASE):
+                    logger.debug(f"Пропуск интерфейса {intf.name} (паттерн: {pattern})")
                     excluded = True
                     break
             if excluded:
                 stats["skipped"] += 1
                 continue
 
-            if intf_name in existing:
+            if intf.name in existing:
                 # Обновляем существующий
                 if update_existing:
-                    updated = self._update_interface(existing[intf_name], intf_data)
+                    updated = self._update_interface(existing[intf.name], intf)
                     if updated:
                         stats["updated"] += 1
                     else:
@@ -223,7 +197,7 @@ class NetBoxSync:
             else:
                 # Создаём новый
                 if create_missing:
-                    self._create_interface(device.id, intf_name, intf_data)
+                    self._create_interface(device.id, intf)
                     stats["created"] += 1
                 else:
                     stats["skipped"] += 1
@@ -238,78 +212,59 @@ class NetBoxSync:
     def _create_interface(
         self,
         device_id: int,
-        name: str,
-        data: Dict[str, Any],
+        intf: Interface,
     ) -> None:
         """Создаёт интерфейс в NetBox."""
         sync_cfg = get_sync_config("interfaces")
 
         if self.dry_run:
-            logger.info(f"[DRY-RUN] Создание интерфейса: {name}")
+            logger.info(f"[DRY-RUN] Создание интерфейса: {intf.name}")
             return
 
         # Формируем данные согласно настройкам
         kwargs = {}
         if sync_cfg.is_field_enabled("description"):
-            kwargs["description"] = data.get("description", "")
+            kwargs["description"] = intf.description
         if sync_cfg.is_field_enabled("enabled"):
-            kwargs["enabled"] = data.get("status", "up") == "up"
+            kwargs["enabled"] = intf.status == "up"
+
         # MAC будет добавлен отдельно через assign_mac_to_interface (NetBox 4.x)
-        # Опция sync_mac_only_with_ip: MAC только на интерфейсы с IP
         mac_to_assign = None
-        if sync_cfg.is_field_enabled("mac_address") and data.get("mac"):
+        if sync_cfg.is_field_enabled("mac_address") and intf.mac:
             sync_mac_only_with_ip = sync_cfg.get_option("sync_mac_only_with_ip", False)
-            if sync_mac_only_with_ip and not data.get("ip_address"):
-                # Пропускаем MAC для интерфейсов без IP
-                pass
-            else:
-                mac_to_assign = self._normalize_mac(data.get("mac", ""))
-        if sync_cfg.is_field_enabled("mtu") and data.get("mtu"):
-            try:
-                kwargs["mtu"] = int(data.get("mtu"))
-            except (ValueError, TypeError):
-                pass
-        if sync_cfg.is_field_enabled("speed") and data.get("speed"):
-            # speed в NetBox в kbps
-            kwargs["speed"] = self._parse_speed(data.get("speed", ""))
-        if sync_cfg.is_field_enabled("duplex") and data.get("duplex"):
-            kwargs["duplex"] = self._parse_duplex(data.get("duplex", ""))
+            if not (sync_mac_only_with_ip and not intf.ip_address):
+                mac_to_assign = normalize_mac_netbox(intf.mac)
+
+        if sync_cfg.is_field_enabled("mtu") and intf.mtu:
+            kwargs["mtu"] = intf.mtu
+        if sync_cfg.is_field_enabled("speed") and intf.speed:
+            kwargs["speed"] = self._parse_speed(intf.speed)
+        if sync_cfg.is_field_enabled("duplex") and intf.duplex:
+            kwargs["duplex"] = self._parse_duplex(intf.duplex)
 
         # 802.1Q mode (access, tagged, tagged-all)
-        if sync_cfg.is_field_enabled("mode") and data.get("mode"):
-            kwargs["mode"] = data.get("mode")
+        if sync_cfg.is_field_enabled("mode") and intf.mode:
+            kwargs["mode"] = intf.mode
 
         # Получаем LAG интерфейс если указан
-        lag_name = data.get("lag")
-        if lag_name:
-            lag_interface = self.client.get_interface_by_name(device_id, lag_name)
+        if intf.lag:
+            lag_interface = self.client.get_interface_by_name(device_id, intf.lag)
             if lag_interface:
                 kwargs["lag"] = lag_interface.id
-                logger.debug(f"Привязка {name} к LAG {lag_name} (id={lag_interface.id})")
+                logger.debug(f"Привязка {intf.name} к LAG {intf.lag} (id={lag_interface.id})")
             else:
-                logger.warning(f"LAG интерфейс {lag_name} не найден в NetBox для {name}")
+                logger.warning(f"LAG интерфейс {intf.lag} не найден для {intf.name}")
 
         interface = self.client.create_interface(
             device_id=device_id,
-            name=name,
-            interface_type=self._get_interface_type(data),
+            name=intf.name,
+            interface_type=get_netbox_interface_type(interface=intf),
             **kwargs,
         )
 
         # Привязываем MAC-адрес (NetBox 4.x - отдельная модель)
         if mac_to_assign and interface:
             self.client.assign_mac_to_interface(interface.id, mac_to_assign)
-
-    def _normalize_mac(self, mac: str) -> str:
-        """Нормализует MAC в формат NetBox (AA:BB:CC:DD:EE:FF)."""
-        if not mac:
-            return ""
-        # Убираем все разделители
-        mac_clean = mac.replace(":", "").replace("-", "").replace(".", "").upper()
-        if len(mac_clean) != 12:
-            return ""
-        # Форматируем с двоеточиями
-        return ":".join(mac_clean[i:i+2] for i in range(0, 12, 2))
 
     def _parse_speed(self, speed_str: str) -> Optional[int]:
         """Парсит скорость в kbps для NetBox."""
@@ -344,180 +299,17 @@ class NetBoxSync:
             return "auto"
         return None
 
-    def _get_interface_type(self, data: Dict[str, Any]) -> str:
-        """
-        Определяет тип интерфейса для NetBox.
-
-        Приоритет определения:
-        1. media_type (наиболее точный: "SFP-10GBase-LR", "SFP-10GBase-SR") - ВЫСШИЙ ПРИОРИТЕТ
-        2. port_type (нормализованный в коллекторе)
-        3. hardware_type ("Gigabit Ethernet", "Ten Gigabit Ethernet SFP+")
-        4. speed + имя интерфейса (fallback)
-
-        Args:
-            data: Данные интерфейса
-
-        Returns:
-            str: Тип интерфейса для NetBox API
-        """
-        sync_cfg = get_sync_config("interfaces")
-
-        # Проверяем включено ли автоопределение
-        if not sync_cfg.get_option("auto_detect_type", True):
-            return sync_cfg.get_default("type", "1000base-t")
-
-        hardware_type = data.get("hardware_type", "").lower()
-        media_type = data.get("media_type", "").lower()
-        interface_name = data.get("interface", data.get("name", "")).lower()
-        speed_str = data.get("speed", "")
-        port_type = data.get("port_type", "")
-
-        # LAG интерфейсы (Port-channel, Po)
-        if interface_name.startswith(("port-channel", "po")) or port_type == "lag":
-            return "lag"
-
-        # Виртуальные интерфейсы (Vlan, Loopback, и т.д.)
-        if interface_name.startswith(VIRTUAL_INTERFACE_PREFIXES) or port_type == "virtual":
-            return "virtual"
-
-        # Management интерфейсы - всегда медь
-        if any(x in interface_name for x in MGMT_INTERFACE_PATTERNS):
-            return "1000base-t"
-
-        # 1. MEDIA_TYPE - ВЫСШИЙ ПРИОРИТЕТ (самая точная информация о трансивере)
-        # Проверяем ПЕРВЫМ, даже если есть port_type
-        if media_type and media_type not in ("unknown", "not present", "no transceiver", ""):
-            for pattern, netbox_type in NETBOX_INTERFACE_TYPE_MAP.items():
-                if pattern in media_type:
-                    logger.debug(f"Тип определён по media_type: {media_type} → {netbox_type}")
-                    return netbox_type
-
-            # Универсальный SFP для 1G если не определился конкретный
-            if "sfp" in media_type and ("1000base" in media_type or "1g" in media_type):
-                if "baset" in media_type:
-                    return "1000base-t"  # SFP-T (медный SFP)
-                return "1000base-x-sfp"
-
-        # 2. PORT_TYPE - нормализованный тип из коллектора (платформонезависимо)
-        # Используется только если media_type не определён или пустой
-        if port_type:
-            port_type_map = {
-                "100g-qsfp28": "100gbase-x-qsfp28",
-                "40g-qsfp": "40gbase-x-qsfpp",
-                "25g-sfp28": "25gbase-x-sfp28",
-                "10g-sfp+": "10gbase-x-sfpp",
-                "1g-sfp": "1000base-x-sfp",
-                "1g-rj45": "1000base-t",
-                "100m-rj45": "100base-tx",
-            }
-            if port_type in port_type_map:
-                logger.debug(f"Тип определён по port_type: {port_type} → {port_type_map[port_type]}")
-                return port_type_map[port_type]
-
-        # 2. Определяем по hardware_type (маппинг из constants.py)
-        if hardware_type and hardware_type not in ("amdp2", "ethersvi", ""):
-            for pattern, netbox_type in NETBOX_HARDWARE_TYPE_MAP.items():
-                if pattern in hardware_type:
-                    # Для 10G проверяем SFP в названии
-                    if "10g" in pattern and "sfp" in hardware_type:
-                        return "10gbase-x-sfpp"
-                    # Для 1G проверяем SFP
-                    if pattern in ("gigabit", "gige", "igbe", "1g") and "sfp" in hardware_type:
-                        return "1000base-x-sfp"
-                    return netbox_type
-
-        # 3. Fallback: по скорости и имени интерфейса
-        speed_kbps = self._parse_speed(speed_str)
-        speed_mbps = speed_kbps // 1000 if speed_kbps else None
-
-        # Определяем тип по имени интерфейса
-        # Важно: проверяем по префиксу, чтобы избежать ложных совпадений
-        # Например, "te" не должен ловить "GigabitEthernet"
-
-        # HundredGigE (100G) - Hu1/0/49, HundredGigE1/0/49
-        if interface_name.startswith(("hu", "hundredgig")):
-            return "100gbase-x-qsfp28"
-
-        # FortyGigE (40G) - Fo1/0/1, FortyGigabitEthernet1/0/1
-        if interface_name.startswith(("fo", "fortygig")):
-            return "40gbase-x-qsfpp"
-
-        # TwentyFiveGigE (25G) - Twe1/0/1, TwentyFiveGigE1/0/1
-        if interface_name.startswith(("twe", "twentyfive")):
-            return "25gbase-x-sfp28"
-
-        # TenGigabitEthernet (10G) - Te1/1, TenGigabitEthernet1/1
-        # Важно: проверяем "te" только в начале с цифрой после (te1/, te2/)
-        # или полное имя "tengig"
-        if interface_name.startswith("tengig"):
-            return "10gbase-x-sfpp"
-        # Te1/1, Te2/0/1 - короткий формат
-        if len(interface_name) >= 3 and interface_name[:2] == "te" and interface_name[2].isdigit():
-            return "10gbase-x-sfpp"
-
-        # GigabitEthernet (1G) - Gi0/1, GigabitEthernet0/1
-        # Определяем SFP или RJ45 по media_type или hardware
-        is_sfp_port = "sfp" in media_type or "sfp" in hardware_type or "no transceiver" in media_type
-        if interface_name.startswith(("gi", "gigabit")):
-            return "1000base-x-sfp" if is_sfp_port else "1000base-t"
-
-        # FastEthernet (100M) - Fa0/1, FastEthernet0/1
-        if interface_name.startswith(("fa", "fastethernet")):
-            return "100base-tx"
-
-        # Ethernet (может быть разной скорости) - Eth1/1 (NX-OS)
-        # ВАЖНО: Для NX-OS hardware_type показывает максимальную скорость порта:
-        # "100/1000/10000 Ethernet" = SFP+ порт (10G capable)
-        # "100/1000 Ethernet" = RJ45 порт (1G max)
-        if interface_name.startswith(("eth", "ethernet")) and not interface_name.startswith("ethersvi"):
-            # Сначала проверяем hardware_type на максимальную скорость порта
-            if "10000" in hardware_type or "10g" in hardware_type:
-                return "10gbase-x-sfpp"  # Порт поддерживает 10G = SFP+
-            elif "25000" in hardware_type or "25g" in hardware_type:
-                return "25gbase-x-sfp28"
-            elif "40000" in hardware_type or "40g" in hardware_type:
-                return "40gbase-x-qsfpp"
-            elif "100000" in hardware_type or "100g" in hardware_type:
-                return "100gbase-x-qsfp28"
-            # Fallback на текущую скорость если hardware_type не определён
-            elif speed_mbps:
-                if speed_mbps <= 1000:
-                    return "1000base-t"
-                elif speed_mbps <= 10000:
-                    return "10gbase-x-sfpp"
-                elif speed_mbps <= 25000:
-                    return "25gbase-x-sfp28"
-
-        # По скорости (если имя не помогло)
-        if speed_mbps:
-            is_sfp = "sfp" in media_type or "sfp" in hardware_type
-            if speed_mbps <= 100:
-                return "100base-tx"
-            elif speed_mbps <= 1000:
-                return "1000base-x-sfp" if is_sfp else "1000base-t"
-            elif speed_mbps <= 2500:
-                return "2.5gbase-t"
-            elif speed_mbps <= 5000:
-                return "5gbase-t"
-            elif speed_mbps <= 10000:
-                return "10gbase-x-sfpp" if is_sfp else "10gbase-t"
-            elif speed_mbps <= 25000:
-                return "25gbase-x-sfp28"
-            elif speed_mbps <= 40000:
-                return "40gbase-x-qsfpp"
-            elif speed_mbps <= 100000:
-                return "100gbase-x-qsfp28"
-
-        # Fallback: по умолчанию из конфига
-        return sync_cfg.get_default("type", "1000base-t")
-
     def _update_interface(
         self,
-        interface,
-        data: Dict[str, Any],
+        nb_interface,  # NetBox interface object
+        intf: Interface,  # Our Interface model
     ) -> bool:
         """
         Обновляет интерфейс в NetBox.
+
+        Args:
+            nb_interface: Объект интерфейса из NetBox API
+            intf: Наша модель Interface с новыми данными
 
         Returns:
             bool: True если были реальные изменения, False если нет
@@ -527,100 +319,81 @@ class NetBoxSync:
 
         # Обновляем тип интерфейса если auto_detect_type включен
         if sync_cfg.get_option("auto_detect_type", True):
-            new_type = self._get_interface_type(data)
-            current_type = getattr(interface.type, 'value', None) if interface.type else None
+            new_type = get_netbox_interface_type(interface=intf)
+            current_type = getattr(nb_interface.type, 'value', None) if nb_interface.type else None
             if new_type and new_type != current_type:
                 updates["type"] = new_type
 
         # Проверяем что нужно обновить (согласно настройкам)
         if sync_cfg.is_field_enabled("description"):
-            if "description" in data and data["description"] != interface.description:
-                updates["description"] = data["description"]
+            if intf.description != nb_interface.description:
+                updates["description"] = intf.description
 
         if sync_cfg.is_field_enabled("enabled"):
-            if "status" in data:
-                enabled = data["status"] == "up"
-                if enabled != interface.enabled:
-                    updates["enabled"] = enabled
+            enabled = intf.status == "up"
+            if enabled != nb_interface.enabled:
+                updates["enabled"] = enabled
 
         # MAC обрабатывается отдельно через assign_mac_to_interface (NetBox 4.x)
-        # Опция sync_mac_only_with_ip: MAC только на интерфейсы с IP
         mac_to_assign = None
-        if sync_cfg.is_field_enabled("mac_address"):
-            if data.get("mac"):
-                sync_mac_only_with_ip = sync_cfg.get_option("sync_mac_only_with_ip", False)
-                if sync_mac_only_with_ip and not data.get("ip_address"):
-                    # Пропускаем MAC для интерфейсов без IP
-                    pass
-                else:
-                    new_mac = self._normalize_mac(data.get("mac", ""))
-                    # Проверяем текущий MAC через client
-                    current_mac = self.client.get_interface_mac(interface.id) if not self.dry_run else None
-                    # Сравнение case-insensitive (NetBox может хранить в другом регистре)
-                    if new_mac and new_mac.upper() != (current_mac or "").upper():
-                        mac_to_assign = new_mac
+        if sync_cfg.is_field_enabled("mac_address") and intf.mac:
+            sync_mac_only_with_ip = sync_cfg.get_option("sync_mac_only_with_ip", False)
+            if not (sync_mac_only_with_ip and not intf.ip_address):
+                new_mac = normalize_mac_netbox(intf.mac)
+                current_mac = self.client.get_interface_mac(nb_interface.id) if not self.dry_run else None
+                if new_mac and new_mac.upper() != (current_mac or "").upper():
+                    mac_to_assign = new_mac
 
-        if sync_cfg.is_field_enabled("mtu"):
-            if data.get("mtu"):
-                try:
-                    new_mtu = int(data.get("mtu"))
-                    if new_mtu != (interface.mtu or 0):
-                        updates["mtu"] = new_mtu
-                except (ValueError, TypeError):
-                    pass
+        if sync_cfg.is_field_enabled("mtu") and intf.mtu:
+            if intf.mtu != (nb_interface.mtu or 0):
+                updates["mtu"] = intf.mtu
 
-        if sync_cfg.is_field_enabled("speed"):
-            if data.get("speed"):
-                new_speed = self._parse_speed(data.get("speed", ""))
-                if new_speed and new_speed != (interface.speed or 0):
-                    updates["speed"] = new_speed
+        if sync_cfg.is_field_enabled("speed") and intf.speed:
+            new_speed = self._parse_speed(intf.speed)
+            if new_speed and new_speed != (nb_interface.speed or 0):
+                updates["speed"] = new_speed
 
-        if sync_cfg.is_field_enabled("duplex"):
-            if data.get("duplex"):
-                new_duplex = self._parse_duplex(data.get("duplex", ""))
-                current_duplex = getattr(interface.duplex, 'value', None) if interface.duplex else None
-                if new_duplex and new_duplex != current_duplex:
-                    updates["duplex"] = new_duplex
+        if sync_cfg.is_field_enabled("duplex") and intf.duplex:
+            new_duplex = self._parse_duplex(intf.duplex)
+            current_duplex = getattr(nb_interface.duplex, 'value', None) if nb_interface.duplex else None
+            if new_duplex and new_duplex != current_duplex:
+                updates["duplex"] = new_duplex
 
         # 802.1Q mode
-        if sync_cfg.is_field_enabled("mode"):
-            if data.get("mode"):
-                new_mode = data.get("mode")
-                current_mode = getattr(interface.mode, 'value', None) if interface.mode else None
-                if new_mode and new_mode != current_mode:
-                    updates["mode"] = new_mode
+        if sync_cfg.is_field_enabled("mode") and intf.mode:
+            current_mode = getattr(nb_interface.mode, 'value', None) if nb_interface.mode else None
+            if intf.mode != current_mode:
+                updates["mode"] = intf.mode
 
         # Обновляем LAG привязку
-        lag_name = data.get("lag")
-        if lag_name:
-            # Получаем device_id из интерфейса
-            device_id = getattr(interface.device, 'id', None) if interface.device else None
+        if intf.lag:
+            device_id = getattr(nb_interface.device, 'id', None) if nb_interface.device else None
             if device_id:
-                lag_interface = self.client.get_interface_by_name(device_id, lag_name)
+                lag_interface = self.client.get_interface_by_name(device_id, intf.lag)
                 if lag_interface:
-                    current_lag_id = getattr(interface.lag, 'id', None) if interface.lag else None
+                    current_lag_id = getattr(nb_interface.lag, 'id', None) if nb_interface.lag else None
                     if lag_interface.id != current_lag_id:
                         updates["lag"] = lag_interface.id
                 else:
-                    logger.debug(f"LAG интерфейс {lag_name} не найден в NetBox")
+                    logger.debug(f"LAG интерфейс {intf.lag} не найден в NetBox")
 
         if not updates and not mac_to_assign:
-            logger.debug(f"  → нет изменений для интерфейса {interface.name}")
+            logger.debug(f"  → нет изменений для интерфейса {nb_interface.name}")
             return False
 
         if self.dry_run:
             if updates:
-                logger.info(f"[DRY-RUN] Обновление интерфейса {interface.name}: {updates}")
+                logger.info(f"[DRY-RUN] Обновление интерфейса {nb_interface.name}: {updates}")
             if mac_to_assign:
-                logger.info(f"[DRY-RUN] Назначение MAC {mac_to_assign} на {interface.name}")
+                logger.info(f"[DRY-RUN] Назначение MAC {mac_to_assign} на {nb_interface.name}")
             return True
 
         if updates:
-            self.client.update_interface(interface.id, **updates)
+            self.client.update_interface(nb_interface.id, **updates)
 
         # Привязываем MAC-адрес (NetBox 4.x - отдельная модель)
         if mac_to_assign:
-            self.client.assign_mac_to_interface(interface.id, mac_to_assign)
+            self.client.assign_mac_to_interface(nb_interface.id, mac_to_assign)
 
         return True
 
@@ -1059,7 +832,7 @@ class NetBoxSync:
                 mask = entry.get("mask", entry.get("prefix_length", "24"))
                 # Если маска в формате 255.255.255.0, конвертируем
                 if "." in str(mask):
-                    mask = self._mask_to_prefix(mask)
+                    mask = mask_to_prefix(str(mask))
                 ip_with_mask = f"{ip_only}/{mask}"
 
             # Ищем интерфейс
@@ -1188,23 +961,6 @@ class NetBoxSync:
         except Exception as e:
             logger.error(f"Неизвестная ошибка обновления IP {ip_obj.address}: {e}")
             return False
-
-    def _mask_to_prefix(self, mask: str) -> int:
-        """
-        Конвертирует маску сети в длину префикса.
-
-        Args:
-            mask: Маска в формате 255.255.255.0
-
-        Returns:
-            int: Длина префикса (например, 24)
-        """
-        try:
-            octets = [int(x) for x in mask.split(".")]
-            binary = "".join(format(x, "08b") for x in octets)
-            return binary.count("1")
-        except Exception:
-            return DEFAULT_PREFIX_LENGTH
 
     # ==================== СОЗДАНИЕ УСТРОЙСТВ ====================
 
@@ -1671,168 +1427,103 @@ class NetBoxSync:
 
         return deleted
 
-    def create_devices_from_inventory(
-        self,
-        inventory_data: List[Dict[str, Any]],
-        site: str = "Main",
-        role: str = "switch",
-    ) -> Dict[str, int]:
-        """
-        Создаёт устройства в NetBox из инвентаризационных данных.
+    # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
 
-        DEPRECATED: Используйте sync_devices_from_inventory для полной синхронизации.
+    def _get_or_create(
+        self,
+        endpoint,
+        name: str,
+        extra_data: Optional[Dict[str, Any]] = None,
+        get_field: str = "name",
+        use_transliterate: bool = False,
+        log_level: str = "error",
+    ) -> Optional[Any]:
+        """
+        Generic get-or-create для NetBox объектов.
 
         Args:
-            inventory_data: Данные от DeviceInventoryCollector
-            site: Сайт по умолчанию
-            role: Роль по умолчанию
+            endpoint: NetBox API endpoint (e.g., self.client.api.dcim.sites)
+            name: Значение для поиска/создания
+            extra_data: Дополнительные поля для создания (status, color, etc.)
+            get_field: Поле для поиска (по умолчанию "name")
+            use_transliterate: Использовать транслитерацию для slug (для кириллицы)
+            log_level: Уровень логирования ошибок ("error" или "debug")
 
         Returns:
-            Dict: Статистика {created, skipped, failed}
+            Найденный или созданный объект, либо None при ошибке
         """
-        # Вызываем новый метод без обновления и cleanup
-        result = self.sync_devices_from_inventory(
-            inventory_data,
-            site=site,
-            role=role,
-            update_existing=False,
-            cleanup=False,
-        )
-        # Возвращаем в старом формате для совместимости
-        return {
-            "created": result["created"],
-            "skipped": result["skipped"] + result["updated"],
-            "failed": result["failed"],
-        }
+        try:
+            # Ищем существующий
+            obj = endpoint.get(**{get_field: name})
+            if obj:
+                return obj
 
-    # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
+            # Создаём новый
+            slug = transliterate_to_slug(name) if use_transliterate else slugify(name)
+            create_data = {get_field: name, "slug": slug}
+            if extra_data:
+                create_data.update(extra_data)
+
+            return endpoint.create(create_data)
+
+        except NetBoxError as e:
+            log_fn = logger.debug if log_level == "debug" else logger.error
+            log_fn(f"Ошибка NetBox ({get_field}={name}): {format_error_for_log(e)}")
+            return None
+        except Exception as e:
+            log_fn = logger.debug if log_level == "debug" else logger.error
+            log_fn(f"Неизвестная ошибка ({get_field}={name}): {e}")
+            return None
 
     def _get_or_create_manufacturer(self, name: str) -> Optional[Any]:
         """Получает или создаёт производителя."""
-        try:
-            mfr = self.client.api.dcim.manufacturers.get(name=name)
-            if mfr:
-                return mfr
-
-            # Создаём
-            slug = name.lower().replace(" ", "-")
-            return self.client.api.dcim.manufacturers.create(
-                {"name": name, "slug": slug}
-            )
-        except NetBoxError as e:
-            logger.error(f"Ошибка NetBox работы с производителем {name}: {format_error_for_log(e)}")
-            return None
-        except Exception as e:
-            logger.error(f"Неизвестная ошибка работы с производителем {name}: {e}")
-            return None
+        return self._get_or_create(self.client.api.dcim.manufacturers, name)
 
     def _get_or_create_device_type(
         self,
         model: str,
         manufacturer_id: int,
     ) -> Optional[Any]:
-        """Получает или создаёт тип устройства.
-
-        Нормализует модель перед поиском/созданием:
-        - WS-C2960C-8TC-L → C2960C-8TC
-        """
-        try:
-            # Нормализуем модель (убираем WS- и лицензии)
-            normalized_model = normalize_device_model(model)
-
-            dtype = self.client.api.dcim.device_types.get(model=normalized_model)
-            if dtype:
-                return dtype
-
-            # Создаём
-            slug = normalized_model.lower().replace(" ", "-").replace("/", "-")
-            return self.client.api.dcim.device_types.create({
-                "model": normalized_model,
-                "slug": slug,
-                "manufacturer": manufacturer_id,
-            })
-        except NetBoxError as e:
-            logger.error(f"Ошибка NetBox с типом устройства {model} → {normalize_device_model(model)}: {format_error_for_log(e)}")
-            return None
-        except Exception as e:
-            logger.error(f"Неизвестная ошибка с типом устройства {model}: {e}")
-            return None
+        """Получает или создаёт тип устройства."""
+        normalized = normalize_device_model(model)
+        return self._get_or_create(
+            self.client.api.dcim.device_types,
+            normalized,
+            extra_data={"manufacturer": manufacturer_id},
+            get_field="model",
+        )
 
     def _get_or_create_site(self, name: str) -> Optional[Any]:
         """Получает или создаёт сайт."""
-        try:
-            site = self.client.api.dcim.sites.get(name=name)
-            if site:
-                return site
-
-            # Создаём
-            slug = name.lower().replace(" ", "-")
-            return self.client.api.dcim.sites.create(
-                {"name": name, "slug": slug, "status": "active"}
-            )
-        except NetBoxError as e:
-            logger.error(f"Ошибка NetBox работы с сайтом {name}: {format_error_for_log(e)}")
-            return None
-        except Exception as e:
-            logger.error(f"Неизвестная ошибка работы с сайтом {name}: {e}")
-            return None
+        return self._get_or_create(
+            self.client.api.dcim.sites,
+            name,
+            extra_data={"status": "active"},
+        )
 
     def _get_or_create_role(self, name: str) -> Optional[Any]:
         """Получает или создаёт роль устройства."""
-        try:
-            role = self.client.api.dcim.device_roles.get(name=name)
-            if role:
-                return role
-
-            # Создаём
-            slug = name.lower().replace(" ", "-")
-            return self.client.api.dcim.device_roles.create(
-                {"name": name, "slug": slug, "color": "9e9e9e"}
-            )
-        except NetBoxError as e:
-            logger.error(f"Ошибка NetBox работы с ролью {name}: {format_error_for_log(e)}")
-            return None
-        except Exception as e:
-            logger.error(f"Неизвестная ошибка работы с ролью {name}: {e}")
-            return None
+        return self._get_or_create(
+            self.client.api.dcim.device_roles,
+            name,
+            extra_data={"color": "9e9e9e"},
+        )
 
     def _get_or_create_platform(self, name: str) -> Optional[Any]:
         """Получает или создаёт платформу."""
-        try:
-            platform = self.client.api.dcim.platforms.get(name=name)
-            if platform:
-                return platform
-
-            # Создаём
-            slug = name.lower().replace(" ", "-").replace("_", "-")
-            return self.client.api.dcim.platforms.create(
-                {"name": name, "slug": slug}
-            )
-        except NetBoxError as e:
-            logger.debug(f"Ошибка NetBox работы с платформой {name}: {format_error_for_log(e)}")
-            return None
-        except Exception as e:
-            logger.debug(f"Неизвестная ошибка работы с платформой {name}: {e}")
-            return None
+        return self._get_or_create(
+            self.client.api.dcim.platforms,
+            name,
+            log_level="debug",
+        )
 
     def _get_or_create_tenant(self, name: str) -> Optional[Any]:
         """Получает или создаёт арендатора (tenant)."""
-        try:
-            tenant = self.client.api.tenancy.tenants.get(name=name)
-            if tenant:
-                return tenant
-
-            # Создаём (транслитерируем кириллицу для slug)
-            slug = transliterate_to_slug(name)
-            return self.client.api.tenancy.tenants.create(
-                {"name": name, "slug": slug}
-            )
-        except NetBoxError as e:
-            logger.error(f"Ошибка NetBox работы с tenant {name}: {format_error_for_log(e)}")
-            return None
-        except Exception as e:
-            logger.error(f"Неизвестная ошибка работы с tenant {name}: {e}")
-            return None
+        return self._get_or_create(
+            self.client.api.tenancy.tenants,
+            name,
+            use_transliterate=True,
+        )
 
     def _set_primary_ip(self, device, ip_address: str) -> None:
         """

@@ -29,12 +29,7 @@ import logging
 from pathlib import Path
 from typing import List
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+# Логгер будет настроен в main() после загрузки конфига
 logger = logging.getLogger(__name__)
 
 
@@ -1283,8 +1278,9 @@ def cmd_backup(args, ctx=None) -> None:
 
 def main() -> None:
     """Главная функция CLI."""
-    from .config import load_config
-    from .core.context import RunContext, set_current_context, setup_logging_with_context
+    from .config import load_config, config
+    from .core.context import RunContext, set_current_context
+    from .core.logging import LogConfig, RotationType, setup_logging_from_config
 
     parser = setup_parser()
     args = parser.parse_args()
@@ -1302,9 +1298,30 @@ def main() -> None:
     )
     set_current_context(ctx)
 
-    # Настройка логирования с run_id
+    # Настройка логирования из config.yaml
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    setup_logging_with_context(level=log_level)
+    log_cfg = config.logging
+
+    # Создаём LogConfig из config.yaml
+    rotation_str = getattr(log_cfg, "rotation", "size") if log_cfg else "size"
+    try:
+        rotation = RotationType(rotation_str) if rotation_str else RotationType.SIZE
+    except ValueError:
+        rotation = RotationType.SIZE
+
+    log_config = LogConfig(
+        level=log_level,
+        json_format=getattr(log_cfg, "json_format", False) if log_cfg else False,
+        console=getattr(log_cfg, "console", True) if log_cfg else True,
+        file_path=getattr(log_cfg, "file_path", None) if log_cfg else None,
+        rotation=rotation,
+        max_bytes=getattr(log_cfg, "max_bytes", 10 * 1024 * 1024) if log_cfg else 10 * 1024 * 1024,
+        backup_count=getattr(log_cfg, "backup_count", 5) if log_cfg else 5,
+        when=getattr(log_cfg, "when", "midnight") if log_cfg else "midnight",
+        interval=getattr(log_cfg, "interval", 1) if log_cfg else 1,
+    )
+
+    setup_logging_from_config(log_config)
 
     logger.info(f"Run started (command={args.command}, dry_run={dry_run})")
 

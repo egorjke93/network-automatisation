@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from .base import ConfigPusher, ConfigResult
 from ..core.device import Device
 from ..core.credentials import Credentials
+from ..core.constants import normalize_mac_raw
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,8 @@ def normalize_mac(mac: str) -> str:
     """
     Нормализует MAC-адрес для сравнения.
 
+    Обёртка над normalize_mac_raw с поддержкой pandas NaN.
+
     Args:
         mac: MAC-адрес в любом формате
 
@@ -55,12 +58,7 @@ def normalize_mac(mac: str) -> str:
         return ""
     if PANDAS_AVAILABLE and pd.isna(mac):
         return ""
-
-    mac_str = str(mac).strip().lower()
-    for char in [" ", ":", "-", "."]:
-        mac_str = mac_str.replace(char, "")
-
-    return mac_str
+    return normalize_mac_raw(str(mac))
 
 
 @dataclass

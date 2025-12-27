@@ -76,6 +76,24 @@ from .models import (
     inventory_from_dicts,
     inventory_to_dicts,
 )
+from .constants import (
+    normalize_interface_short,
+    normalize_interface_full,
+    normalize_mac,
+    normalize_mac_raw,
+    normalize_mac_ieee,
+    normalize_mac_netbox,
+    normalize_mac_cisco,
+    slugify,
+    get_vendor_by_platform,
+    get_netbox_interface_type,
+)
+from .domain import (
+    InterfaceNormalizer,
+    MACNormalizer,
+    LLDPNormalizer,
+    InventoryNormalizer,
+)
 
 __all__ = [
     # Device & Connection
@@ -143,5 +161,21 @@ __all__ = [
     "neighbors_to_dicts",
     "inventory_from_dicts",
     "inventory_to_dicts",
+    # Constants & Normalization
+    "normalize_interface_short",
+    "normalize_interface_full",
+    "normalize_mac",
+    "normalize_mac_raw",
+    "normalize_mac_ieee",
+    "normalize_mac_netbox",
+    "normalize_mac_cisco",
+    "slugify",
+    "get_vendor_by_platform",
+    "get_netbox_interface_type",
+    # Domain Layer
+    "InterfaceNormalizer",
+    "MACNormalizer",
+    "LLDPNormalizer",
+    "InventoryNormalizer",
 ]
 

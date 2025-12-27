@@ -1,5 +1,5 @@
 """
-Тесты для _get_interface_type() - маппинг в NetBox interface types.
+Тесты для get_netbox_interface_type() - маппинг в NetBox interface types.
 
 Проверяет конвертацию наших нормализованных данных в типы NetBox API.
 
@@ -9,14 +9,35 @@
 """
 
 import pytest
-from unittest.mock import MagicMock
-from network_collector.netbox.sync import NetBoxSync
+
+from network_collector.core.constants import get_netbox_interface_type
 
 
-@pytest.fixture
-def netbox_sync(mock_netbox_client):
-    """Создаём NetBoxSync с mock клиентом."""
-    return NetBoxSync(client=mock_netbox_client, dry_run=True)
+def _parse_speed(speed_str: str) -> int:
+    """Конвертирует строку скорости в Mbps для тестов.
+
+    Примеры:
+        "1000000 Kbit" → 1000
+        "10000000 Kbit" → 10000
+    """
+    if not speed_str:
+        return 0
+    speed_str = speed_str.lower().strip()
+    if "kbit" in speed_str:
+        kbit = int(speed_str.replace("kbit", "").strip())
+        return kbit // 1000  # Kbit → Mbps
+    return 0
+
+
+def _call_interface_type(data: dict) -> str:
+    """Обёртка для вызова get_netbox_interface_type из dict."""
+    return get_netbox_interface_type(
+        interface_name=data.get("interface", ""),
+        media_type=data.get("media_type", ""),
+        hardware_type=data.get("hardware_type", ""),
+        port_type=data.get("port_type", ""),
+        speed_mbps=_parse_speed(data.get("speed", "")),
+    )
 
 
 @pytest.mark.netbox
@@ -24,7 +45,7 @@ def netbox_sync(mock_netbox_client):
 class TestInterfaceTypeMapping:
     """Тесты маппинга типов интерфейсов для NetBox."""
 
-    @pytest.mark.parametrize("interface_data,expected_netbox_type", [
+    @pytest.mark.parametrize("interface_data, expected_netbox_type", [
         # === ПРОБЛЕМА 1 ИЗ ПРОДА ===
         # media_type должен иметь ВЫСШИЙ приоритет
         (
@@ -186,7 +207,7 @@ class TestInterfaceTypeMapping:
             "1000base-t",  # Дефолт из конфига
         ),
     ])
-    def test_get_interface_type(self, netbox_sync, interface_data, expected_netbox_type):
+    def test_get_interface_type(self, interface_data, expected_netbox_type):
         """
         Тест маппинга типа интерфейса в NetBox тип.
 
@@ -196,7 +217,7 @@ class TestInterfaceTypeMapping:
         3. hardware_type (максимальная скорость порта)
         4. speed + interface name (fallback)
         """
-        result = netbox_sync._get_interface_type(interface_data)
+        result = _call_interface_type(interface_data)
 
         assert result == expected_netbox_type, (
             f"Interface: {interface_data.get('interface', 'N/A')}\n"
@@ -206,7 +227,7 @@ class TestInterfaceTypeMapping:
             f"Expected: {expected_netbox_type}, Got: {result}"
         )
 
-    def test_production_bug_media_type_priority(self, netbox_sync, sample_interface_data):
+    def test_production_bug_media_type_priority(self, sample_interface_data):
         """
         Регрессионный тест для Проблемы 1 из прода.
 
@@ -216,7 +237,7 @@ class TestInterfaceTypeMapping:
         """
         data = sample_interface_data["c9500_25g_with_10g_sfp"]
 
-        result = netbox_sync._get_interface_type(data)
+        result = _call_interface_type(data)
 
         assert result == "10gbase-lr", (
             f"Проблема 1 из прода: 25G порт с 10G SFP-10GBase-LR\n"
@@ -225,7 +246,7 @@ class TestInterfaceTypeMapping:
             f"Data: {data}"
         )
 
-    def test_media_type_case_insensitive(self, netbox_sync):
+    def test_media_type_case_insensitive(self):
         """Тест что поиск media_type не зависит от регистра."""
         test_cases = [
             {"media_type": "SFP-10GBase-LR"},
@@ -235,10 +256,10 @@ class TestInterfaceTypeMapping:
         ]
 
         for data in test_cases:
-            result = netbox_sync._get_interface_type(data)
+            result = _call_interface_type(data)
             assert result == "10gbase-lr", f"Failed for media_type: {data['media_type']}"
 
-    def test_priority_media_over_port_type(self, netbox_sync):
+    def test_priority_media_over_port_type(self):
         """
         Тест что media_type имеет приоритет над port_type.
 
@@ -251,14 +272,14 @@ class TestInterfaceTypeMapping:
             "hardware_type": "Twenty Five Gigabit Ethernet",
         }
 
-        result = netbox_sync._get_interface_type(data)
+        result = _call_interface_type(data)
 
         assert result == "10gbase-sr", (
             "media_type должен иметь приоритет над port_type!\n"
             f"Expected: '10gbase-sr', Got: '{result}'"
         )
 
-    def test_priority_port_type_over_hardware(self, netbox_sync):
+    def test_priority_port_type_over_hardware(self):
         """
         Тест что port_type имеет приоритет над hardware_type.
         """
@@ -268,32 +289,32 @@ class TestInterfaceTypeMapping:
             "hardware_type": "Twenty Five Gigabit Ethernet",
         }
 
-        result = netbox_sync._get_interface_type(data)
+        result = _call_interface_type(data)
 
         assert result == "10gbase-x-sfpp", (
             "port_type должен иметь приоритет над hardware_type!\n"
             f"Expected: '10gbase-x-sfpp', Got: '{result}'"
         )
 
-    def test_lag_interface(self, netbox_sync):
+    def test_lag_interface(self):
         """Тест что LAG интерфейсы определяются как 'lag'."""
         data = {"port_type": "lag"}
-        result = netbox_sync._get_interface_type(data)
+        result = _call_interface_type(data)
         assert result == "lag"
 
-    def test_virtual_interface(self, netbox_sync):
+    def test_virtual_interface(self):
         """Тест что виртуальные интерфейсы определяются как 'virtual'."""
         data = {"port_type": "virtual"}
-        result = netbox_sync._get_interface_type(data)
+        result = _call_interface_type(data)
         assert result == "virtual"
 
-    def test_empty_data_returns_default(self, netbox_sync):
+    def test_empty_data_returns_default(self):
         """Тест что пустые данные возвращают дефолтный тип."""
         data = {}
-        result = netbox_sync._get_interface_type(data)
+        result = _call_interface_type(data)
         assert result == "1000base-t"  # Дефолт из конфига (самый распространённый тип)
 
-    def test_unknown_media_type_fallback_to_port_type(self, netbox_sync):
+    def test_unknown_media_type_fallback_to_port_type(self):
         """
         Тест что неизвестный media_type игнорируется и используется port_type.
         """
@@ -302,14 +323,14 @@ class TestInterfaceTypeMapping:
             "port_type": "1g-rj45",
         }
 
-        result = netbox_sync._get_interface_type(data)
+        result = _call_interface_type(data)
 
         assert result == "1000base-t", (
             "media_type='unknown' должен игнорироваться!\n"
             f"Expected: '1000base-t', Got: '{result}'"
         )
 
-    def test_not_present_media_type_fallback(self, netbox_sync):
+    def test_not_present_media_type_fallback(self):
         """
         Тест что media_type='not present' игнорируется.
         """
@@ -318,7 +339,7 @@ class TestInterfaceTypeMapping:
             "port_type": "10g-sfp+",
         }
 
-        result = netbox_sync._get_interface_type(data)
+        result = _call_interface_type(data)
 
         assert result == "10gbase-x-sfpp", (
             "media_type='not present' должен игнорироваться!\n"

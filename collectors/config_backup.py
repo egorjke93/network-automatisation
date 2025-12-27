@@ -15,24 +15,22 @@
 """
 
 import re
-import logging
 from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 from dataclasses import dataclass
 
 from ..core.device import Device
 from ..core.connection import ConnectionManager
 from ..core.credentials import Credentials
+from ..core.logging import get_logger
 from ..core.exceptions import (
-    CollectorError,
     ConnectionError,
     AuthenticationError,
     TimeoutError,
     format_error_for_log,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # Команды для получения конфигурации по платформам

@@ -16,21 +16,20 @@
 """
 
 import re
-import logging
 from typing import List, Dict, Any, Optional
 
 from .base import BaseCollector
 from ..core.device import Device
 from ..core.models import Interface
+from ..core.logging import get_logger
 from ..core.exceptions import (
-    CollectorError,
     ConnectionError,
     AuthenticationError,
     TimeoutError,
     format_error_for_log,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class InterfaceCollector(BaseCollector):

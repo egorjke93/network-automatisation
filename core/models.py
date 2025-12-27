@@ -25,6 +25,8 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional, List, Any, Dict
 from enum import Enum
 
+from .constants import mask_to_prefix
+
 
 class InterfaceStatus(str, Enum):
     """Статус интерфейса."""
@@ -290,20 +292,8 @@ class IPAddressEntry:
         if "/" in self.ip_address:
             return self.ip_address
         if self.mask:
-            prefix = self._mask_to_prefix(self.mask)
-            return f"{self.ip_address}/{prefix}"
+            return f"{self.ip_address}/{mask_to_prefix(self.mask)}"
         return f"{self.ip_address}/32"
-
-    def _mask_to_prefix(self, mask: str) -> int:
-        """Конвертирует маску в длину префикса."""
-        if mask.isdigit():
-            return int(mask)
-        try:
-            octets = [int(x) for x in mask.split(".")]
-            binary = "".join(format(x, "08b") for x in octets)
-            return binary.count("1")
-        except Exception:
-            return 24
 
 
 @dataclass

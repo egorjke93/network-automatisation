@@ -26,9 +26,8 @@
     interfaces = interfaces_from_dicts(data)
 """
 
-import logging
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Type, TypeVar, Generic
+from typing import List, Dict, Any, Optional, Type, TypeVar
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # TypeVar для типизированных моделей
@@ -42,15 +41,13 @@ from ..core.exceptions import (
     CollectorError,
     ConnectionError,
     AuthenticationError,
-    CommandError,
-    ParseError,
     TimeoutError,
     format_error_for_log,
-    is_retryable,
 )
+from ..core.logging import get_logger
 from ..parsers.textfsm_parser import NTCParser, NTC_AVAILABLE
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class BaseCollector(ABC):

@@ -18,17 +18,16 @@
     collector = DeviceCollector(csv_fields=["name", "model", "serial"])
 """
 
-import logging
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from scrapli import Scrapli
 from ntc_templates.parse import parse_output
 
-from ..core.device import Device, DeviceStatus
+from ..core.device import Device
 from ..core.connection import ConnectionManager, get_ntc_platform, get_scrapli_platform
 from ..core.credentials import Credentials
 from ..core.constants import normalize_device_model
+from ..core.logging import get_logger
 from ..core.exceptions import (
     CollectorError,
     ConnectionError,
@@ -37,7 +36,7 @@ from ..core.exceptions import (
     format_error_for_log,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # Маппинг полей устройства → CSV

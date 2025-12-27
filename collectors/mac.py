@@ -18,7 +18,6 @@
 """
 
 import re
-import logging
 from typing import List, Dict, Any, Optional, Set, Tuple
 
 from ntc_templates.parse import parse_output
@@ -26,25 +25,25 @@ from ntc_templates.parse import parse_output
 from .base import BaseCollector
 from ..core.device import Device
 from ..core.models import MACEntry
-from ..core.connection import ConnectionManager, get_ntc_platform
+from ..core.connection import get_ntc_platform
+from ..core.logging import get_logger
 from ..core.constants import (
-    INTERFACE_SHORT_MAP,
     ONLINE_PORT_STATUSES,
-    normalize_interface_short,
     CUSTOM_TEXTFSM_TEMPLATES,
+    normalize_interface_short,
+    normalize_mac,
+    normalize_mac_raw,
 )
 from ..core.exceptions import (
-    CollectorError,
     ConnectionError,
     AuthenticationError,
     TimeoutError,
-    ParseError,
     format_error_for_log,
 )
 from ..parsers.textfsm_parser import TextFSMParser
 from ..config import config as app_config
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MACCollector(BaseCollector):
@@ -83,9 +82,6 @@ class MACCollector(BaseCollector):
         "qtech": "show mac address-table",
         "qtech_qsw": "show mac address-table",
     }
-
-    # Маппинг сокращений интерфейсов (из core.constants)
-    INTERFACE_MAP = INTERFACE_SHORT_MAP
 
     def __init__(
         self,
@@ -330,7 +326,7 @@ class MACCollector(BaseCollector):
             # Нормализуем интерфейс
             interface = row.get("interface", row.get("destination_port", ""))
             if self.normalize_interfaces:
-                interface = self._normalize_interface(interface)
+                interface = normalize_interface_short(interface)
             row["interface"] = interface
 
             # Проверяем исключения по интерфейсу
@@ -349,9 +345,10 @@ class MACCollector(BaseCollector):
 
             # Нормализуем MAC
             mac = row.get("mac", row.get("destination_address", ""))
-            mac_normalized = self._normalize_mac_for_compare(mac)
+            mac_normalized = normalize_mac_raw(mac)
             if mac:
-                row["mac"] = self._normalize_mac(mac)
+                normalized_mac = normalize_mac(mac, format=self.mac_format)
+                row["mac"] = normalized_mac if normalized_mac else mac
 
             # Дедупликация
             key = (mac_normalized, vlan, interface)
@@ -380,10 +377,6 @@ class MACCollector(BaseCollector):
 
         return normalized
 
-    def _normalize_mac_for_compare(self, mac: str) -> str:
-        """Нормализует MAC для сравнения (убирает разделители, lowercase)."""
-        return re.sub(r"[.:\-]", "", mac.lower())
-
     def _deduplicate_final(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Финальная дедупликация по полному ключу.
@@ -402,7 +395,7 @@ class MACCollector(BaseCollector):
 
         for row in data:
             hostname = row.get("hostname", "")
-            mac = self._normalize_mac_for_compare(row.get("mac", ""))
+            mac = normalize_mac_raw(row.get("mac", ""))
             vlan = str(row.get("vlan", ""))
             interface = row.get("interface", "")
 
@@ -433,54 +426,6 @@ class MACCollector(BaseCollector):
             if pattern.match(interface):
                 return True
         return False
-
-    def _normalize_mac(self, mac: str) -> str:
-        """
-        Нормализует MAC-адрес в указанный формат.
-
-        Форматы:
-        - cisco: 0011.2233.4455
-        - ieee: 00:11:22:33:44:55
-        - unix: 00-11-22-33-44-55
-
-        Args:
-            mac: Исходный MAC
-
-        Returns:
-            str: Нормализованный MAC
-        """
-        # Убираем все разделители
-        clean_mac = re.sub(r"[.:\-]", "", mac.lower())
-
-        if len(clean_mac) != 12:
-            return mac  # Возвращаем как есть если некорректный
-
-        if self.mac_format == "cisco":
-            # 0011.2233.4455
-            return f"{clean_mac[0:4]}.{clean_mac[4:8]}.{clean_mac[8:12]}"
-        elif self.mac_format == "unix":
-            # 00-11-22-33-44-55
-            return "-".join(clean_mac[i : i + 2] for i in range(0, 12, 2))
-        else:
-            # ieee (default): 00:11:22:33:44:55
-            return ":".join(clean_mac[i : i + 2] for i in range(0, 12, 2))
-
-    def _normalize_interface(self, interface: str) -> str:
-        """
-        Сокращает имя интерфейса.
-
-        GigabitEthernet0/1 -> Gi0/1
-
-        Args:
-            interface: Полное имя интерфейса
-
-        Returns:
-            str: Сокращённое имя
-        """
-        for full_name, short_name in self.INTERFACE_MAP.items():
-            if interface.startswith(full_name):
-                return interface.replace(full_name, short_name, 1)
-        return interface
 
     def _parse_interface_status(
         self,
@@ -548,7 +493,7 @@ class MACCollector(BaseCollector):
         status_map[iface] = status
 
         # Добавляем сокращённую версию
-        short_iface = self._normalize_interface(iface)
+        short_iface = normalize_interface_short(iface)
         if short_iface != iface:
             status_map[short_iface] = status
 
@@ -685,7 +630,7 @@ class MACCollector(BaseCollector):
                 if iface:
                     descriptions[iface] = desc
                     # Добавляем сокращённую версию
-                    short_iface = self._normalize_interface(iface)
+                    short_iface = normalize_interface_short(iface)
                     if short_iface != iface:
                         descriptions[short_iface] = desc
 
@@ -792,10 +737,11 @@ class MACCollector(BaseCollector):
 
                 # Нормализуем интерфейс
                 if self.normalize_interfaces:
-                    interface = self._normalize_interface(interface)
+                    interface = normalize_interface_short(interface)
 
                 # Нормализуем MAC
-                mac = self._normalize_mac(mac)
+                normalized_mac = normalize_mac(mac, format=self.mac_format)
+                mac = normalized_mac if normalized_mac else mac
 
                 # Определяем статус порта
                 port_status = interface_status.get(interface, "")
