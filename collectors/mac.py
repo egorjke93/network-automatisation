@@ -27,12 +27,11 @@ from ..core.device import Device
 from ..core.models import MACEntry
 from ..core.connection import get_ntc_platform
 from ..core.logging import get_logger
+from ..core.domain import MACNormalizer
 from ..core.constants import (
-    ONLINE_PORT_STATUSES,
     CUSTOM_TEXTFSM_TEMPLATES,
     normalize_interface_short,
     normalize_mac,
-    normalize_mac_raw,
 )
 from ..core.exceptions import (
     ConnectionError,
@@ -119,10 +118,13 @@ class MACCollector(BaseCollector):
         self.collect_trunk_ports = collect_trunk_ports
         self.collect_port_security = collect_port_security
 
-        # Компилируем паттерны для исключения
-        self._exclude_patterns = [
-            re.compile(p, re.IGNORECASE) for p in self.exclude_interfaces
-        ]
+        # Domain Layer: нормализатор MAC-данных
+        self._normalizer = MACNormalizer(
+            mac_format=self.mac_format,
+            normalize_interfaces=self.normalize_interfaces,
+            exclude_interfaces=self.exclude_interfaces,
+            exclude_vlans=self.exclude_vlans,
+        )
 
         # Кэш для хранения статуса интерфейсов текущего устройства
         self._current_interface_status: Dict[str, str] = {}
@@ -182,42 +184,36 @@ class MACCollector(BaseCollector):
                 # Сохраняем статус интерфейсов для использования в _parse_output
                 self._current_interface_status = interface_status
 
-                # Парсим MAC-таблицу (статус берётся из self._current_interface_status)
-                data = self._parse_output(mac_output, device)
+                # Парсим MAC-таблицу (сырые данные)
+                raw_data = self._parse_raw(mac_output, device)
+
+                # Domain Layer: нормализация через MACNormalizer
+                data = self._normalizer.normalize_dicts(
+                    raw_data,
+                    interface_status=interface_status,
+                    hostname=hostname,
+                    device_ip=device.host,
+                )
 
                 # Собираем sticky MAC из port-security (show running-config)
                 if self.collect_port_security:
                     sticky_macs = self._collect_sticky_macs(conn, device, interface_status)
-                    # Merge: добавляем sticky MACs которых нет в основной таблице
-                    existing_macs = {row.get("mac", "").lower() for row in data}
-                    for sticky in sticky_macs:
-                        if sticky.get("mac", "").lower() not in existing_macs:
-                            # Sticky MAC нет в активной таблице → offline
-                            sticky["status"] = "offline"
-                            data.append(sticky)
+                    # Domain Layer: объединение через MACNormalizer
+                    data = self._normalizer.merge_sticky_macs(data, sticky_macs)
                     logger.debug(f"{hostname}: добавлено {len(sticky_macs)} sticky MACs")
 
-                # Добавляем metadata к каждой записи
-                for row in data:
-                    row["hostname"] = hostname
-                    row["device_ip"] = device.host
-
-                    # Добавляем описание интерфейса
-                    if self.collect_descriptions:
+                # Добавляем описание интерфейса
+                if self.collect_descriptions:
+                    for row in data:
                         iface = row.get("interface", "")
                         row["description"] = descriptions.get(iface, "")
 
-                    # Фильтруем trunk порты
-                    if not self.collect_trunk_ports:
-                        iface = row.get("interface", "")
-                        if iface in trunk_interfaces:
-                            row["_exclude"] = True
+                # Domain Layer: фильтрация trunk портов через MACNormalizer
+                if not self.collect_trunk_ports:
+                    data = self._normalizer.filter_trunk_ports(data, trunk_interfaces)
 
-                # Исключаем помеченные записи
-                data = [r for r in data if not r.get("_exclude")]
-
-                # Финальная дедупликация по полному ключу (hostname, mac, vlan, interface)
-                data = self._deduplicate_final(data)
+                # Domain Layer: финальная дедупликация
+                data = self._normalizer.deduplicate(data)
 
                 logger.info(f"{hostname}: собрано {len(data)} MAC-адресов")
                 return data
@@ -231,34 +227,34 @@ class MACCollector(BaseCollector):
             logger.error(f"Неизвестная ошибка с {device.host}: {e}")
             return []
 
-    def _parse_output(
+    def _parse_raw(
         self,
         output: str,
         device: Device,
     ) -> List[Dict[str, Any]]:
         """
-        Парсит вывод команды show mac address-table.
+        Парсит вывод команды show mac address-table (сырые данные).
 
         Сначала пробует NTC Templates, затем fallback на regex.
-        Статус интерфейсов берётся из self._current_interface_status.
+        Возвращает сырые данные БЕЗ нормализации — нормализация в Domain Layer.
 
         Args:
             output: Сырой вывод команды
             device: Устройство
 
         Returns:
-            List[Dict]: Список MAC-записей
+            List[Dict]: Сырые данные от парсера
         """
         # Пробуем NTC Templates
         if self.use_ntc:
             data = self._parse_with_ntc(output, device)
             if data:
-                return self._normalize_data(data)
+                return data  # Сырые данные, нормализация в Domain Layer
 
         # Fallback на regex парсинг
-        return self._parse_with_regex(output, device)
+        return self._parse_with_regex_raw(output, device)
 
-    def _parse_with_regex(
+    def _parse_with_regex_raw(
         self,
         output: str,
         device: Device,
@@ -266,12 +262,14 @@ class MACCollector(BaseCollector):
         """
         Парсит вывод с помощью regex (fallback).
 
+        Возвращает сырые данные БЕЗ нормализации.
+
         Args:
             output: Сырой вывод
             device: Устройство
 
         Returns:
-            List[Dict]: Распарсенные данные
+            List[Dict]: Сырые данные
         """
         data = []
 
@@ -297,135 +295,10 @@ class MACCollector(BaseCollector):
                 }
             )
 
-        return self._normalize_data(data)
+        return data  # Сырые данные, нормализация в Domain Layer
 
-    def _normalize_data(
-        self,
-        data: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        """
-        Нормализует данные (MAC формат, интерфейсы, фильтрация).
-
-        Статус online/offline определяется по состоянию порта:
-        - Порт connected → online
-        - Порт notconnect/disabled/etc → offline
-
-        Статус интерфейсов берётся из self._current_interface_status.
-
-        Args:
-            data: Сырые данные
-
-        Returns:
-            List[Dict]: Нормализованные данные
-        """
-        interface_status = self._current_interface_status
-        normalized = []
-        seen_macs: Set[Tuple[str, str, str]] = set()  # Для дедупликации
-
-        for row in data:
-            # Нормализуем интерфейс
-            interface = row.get("interface", row.get("destination_port", ""))
-            if self.normalize_interfaces:
-                interface = normalize_interface_short(interface)
-            row["interface"] = interface
-
-            # Проверяем исключения по интерфейсу
-            if self._should_exclude_interface(interface):
-                continue
-
-            # Проверяем исключения по VLAN
-            vlan = str(row.get("vlan", row.get("vlan_id", "")))
-            if vlan:
-                try:
-                    if int(vlan) in self.exclude_vlans:
-                        continue
-                except ValueError:
-                    pass
-            row["vlan"] = vlan
-
-            # Нормализуем MAC
-            mac = row.get("mac", row.get("destination_address", ""))
-            mac_normalized = normalize_mac_raw(mac)
-            if mac:
-                normalized_mac = normalize_mac(mac, format=self.mac_format)
-                row["mac"] = normalized_mac if normalized_mac else mac
-
-            # Дедупликация
-            key = (mac_normalized, vlan, interface)
-            if key in seen_macs:
-                continue
-            seen_macs.add(key)
-
-            # Тип MAC: dynamic или static (sticky = static)
-            raw_type = str(row.get("type", "")).lower()
-            if "dynamic" in raw_type:
-                row["type"] = "dynamic"
-            else:
-                row["type"] = "static"
-
-            # Определяем status по состоянию порта
-            port_status = interface_status.get(interface, "")
-            if port_status.lower() in ONLINE_PORT_STATUSES:
-                row["status"] = "online"
-            elif port_status:
-                row["status"] = "offline"
-            else:
-                # Если нет данных о порте — unknown
-                row["status"] = "unknown"
-
-            normalized.append(row)
-
-        return normalized
-
-    def _deduplicate_final(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Финальная дедупликация по полному ключу.
-
-        Удаляет полные дубликаты (hostname, mac, vlan, interface).
-        Сохраняет первую запись с каждым ключом.
-
-        Args:
-            data: Список записей
-
-        Returns:
-            List[Dict]: Дедуплицированные записи
-        """
-        seen: Set[Tuple[str, str, str, str]] = set()
-        result = []
-
-        for row in data:
-            hostname = row.get("hostname", "")
-            mac = normalize_mac_raw(row.get("mac", ""))
-            vlan = str(row.get("vlan", ""))
-            interface = row.get("interface", "")
-
-            key = (hostname, mac, vlan, interface)
-            if key in seen:
-                continue
-
-            seen.add(key)
-            result.append(row)
-
-        duplicates_removed = len(data) - len(result)
-        if duplicates_removed > 0:
-            logger.debug(f"Удалено {duplicates_removed} дубликатов")
-
-        return result
-
-    def _should_exclude_interface(self, interface: str) -> bool:
-        """
-        Проверяет, нужно ли исключить интерфейс.
-
-        Args:
-            interface: Имя интерфейса
-
-        Returns:
-            bool: True если нужно исключить
-        """
-        for pattern in self._exclude_patterns:
-            if pattern.match(interface):
-                return True
-        return False
+    # Методы _normalize_data, _deduplicate_final, _should_exclude_interface
+    # перенесены в Domain Layer: core/domain/mac.py (MACNormalizer)
 
     def _parse_interface_status(
         self,
