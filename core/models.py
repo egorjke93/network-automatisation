@@ -22,7 +22,7 @@ Data Models для Network Collector.
 """
 
 from dataclasses import dataclass, field, asdict
-from typing import Optional, List, Any, Dict
+from typing import Optional, List, Any, Dict, Union
 from enum import Enum
 
 from .constants import mask_to_prefix
@@ -117,6 +117,15 @@ class Interface:
         """Конвертирует в словарь."""
         return {k: v for k, v in asdict(self).items() if v is not None and v != ""}
 
+    @classmethod
+    def ensure_list(cls, data: Union[List[Dict[str, Any]], List["Interface"]]) -> List["Interface"]:
+        """Конвертирует List[Dict] в List[Interface] если нужно."""
+        if not data:
+            return []
+        if isinstance(data[0], dict):
+            return [cls.from_dict(d) for d in data]
+        return data
+
 
 @dataclass
 class MACEntry:
@@ -156,6 +165,15 @@ class MACEntry:
     def to_dict(self) -> Dict[str, Any]:
         """Конвертирует в словарь."""
         return asdict(self)
+
+    @classmethod
+    def ensure_list(cls, data: Union[List[Dict[str, Any]], List["MACEntry"]]) -> List["MACEntry"]:
+        """Конвертирует List[Dict] в List[MACEntry] если нужно."""
+        if not data:
+            return []
+        if isinstance(data[0], dict):
+            return [cls.from_dict(d) for d in data]
+        return data
 
 
 @dataclass
@@ -209,6 +227,15 @@ class LLDPNeighbor:
         """Конвертирует в словарь."""
         return asdict(self)
 
+    @classmethod
+    def ensure_list(cls, data: Union[List[Dict[str, Any]], List["LLDPNeighbor"]]) -> List["LLDPNeighbor"]:
+        """Конвертирует List[Dict] в List[LLDPNeighbor] если нужно."""
+        if not data:
+            return []
+        if isinstance(data[0], dict):
+            return [cls.from_dict(d) for d in data]
+        return data
+
 
 @dataclass
 class InventoryItem:
@@ -252,6 +279,15 @@ class InventoryItem:
         """Конвертирует в словарь."""
         return {k: v for k, v in asdict(self).items() if v}
 
+    @classmethod
+    def ensure_list(cls, data: Union[List[Dict[str, Any]], List["InventoryItem"]]) -> List["InventoryItem"]:
+        """Конвертирует List[Dict] в List[InventoryItem] если нужно."""
+        if not data:
+            return []
+        if isinstance(data[0], dict):
+            return [cls.from_dict(d) for d in data]
+        return data
+
 
 @dataclass
 class IPAddressEntry:
@@ -294,6 +330,15 @@ class IPAddressEntry:
         if self.mask:
             return f"{self.ip_address}/{mask_to_prefix(self.mask)}"
         return f"{self.ip_address}/32"
+
+    @classmethod
+    def ensure_list(cls, data: Union[List[Dict[str, Any]], List["IPAddressEntry"]]) -> List["IPAddressEntry"]:
+        """Конвертирует List[Dict] в List[IPAddressEntry] если нужно."""
+        if not data:
+            return []
+        if isinstance(data[0], dict):
+            return [cls.from_dict(d) for d in data]
+        return data
 
 
 @dataclass
@@ -340,6 +385,15 @@ class DeviceInfo:
     def to_dict(self) -> Dict[str, Any]:
         """Конвертирует в словарь."""
         return {k: v for k, v in asdict(self).items() if v}
+
+    @classmethod
+    def ensure_list(cls, data: Union[List[Dict[str, Any]], List["DeviceInfo"]]) -> List["DeviceInfo"]:
+        """Конвертирует List[Dict] в List[DeviceInfo] если нужно."""
+        if not data:
+            return []
+        if isinstance(data[0], dict):
+            return [cls.from_dict(d) for d in data]
+        return data
 
 
 # Type aliases для коллекций
@@ -388,3 +442,28 @@ def inventory_from_dicts(data: List[Dict[str, Any]]) -> Inventory:
 def inventory_to_dicts(items: Inventory) -> List[Dict[str, Any]]:
     """Конвертирует список InventoryItem в список словарей."""
     return [i.to_dict() for i in items]
+
+
+# Type aliases для IP и Device
+IPAddresses = List[IPAddressEntry]
+Devices = List[DeviceInfo]
+
+
+def ip_addresses_from_dicts(data: List[Dict[str, Any]]) -> IPAddresses:
+    """Конвертирует список словарей в список IPAddressEntry."""
+    return [IPAddressEntry.from_dict(d) for d in data]
+
+
+def ip_addresses_to_dicts(addresses: IPAddresses) -> List[Dict[str, Any]]:
+    """Конвертирует список IPAddressEntry в список словарей."""
+    return [a.to_dict() for a in addresses]
+
+
+def devices_from_dicts(data: List[Dict[str, Any]]) -> Devices:
+    """Конвертирует список словарей в список DeviceInfo."""
+    return [DeviceInfo.from_dict(d) for d in data]
+
+
+def devices_to_dicts(devices: Devices) -> List[Dict[str, Any]]:
+    """Конвертирует список DeviceInfo в список словарей."""
+    return [d.to_dict() for d in devices]

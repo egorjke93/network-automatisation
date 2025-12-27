@@ -67,6 +67,7 @@ from .models import (
     Neighbors,
     Inventory,
     IPAddresses,
+    Devices,
     interfaces_from_dicts,
     interfaces_to_dicts,
     mac_entries_from_dicts,
@@ -75,6 +76,10 @@ from .models import (
     neighbors_to_dicts,
     inventory_from_dicts,
     inventory_to_dicts,
+    ip_addresses_from_dicts,
+    ip_addresses_to_dicts,
+    devices_from_dicts,
+    devices_to_dicts,
 )
 from .constants import (
     normalize_interface_short,
@@ -161,6 +166,11 @@ __all__ = [
     "neighbors_to_dicts",
     "inventory_from_dicts",
     "inventory_to_dicts",
+    "ip_addresses_from_dicts",
+    "ip_addresses_to_dicts",
+    "devices_from_dicts",
+    "devices_to_dicts",
+    "Devices",
     # Constants & Normalization
     "normalize_interface_short",
     "normalize_interface_full",

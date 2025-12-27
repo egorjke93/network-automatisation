@@ -32,7 +32,7 @@ from typing import List, Dict, Any, Optional, Union
 
 from .client import NetBoxClient
 from ..core.context import RunContext, get_current_context
-from ..core.models import Interface
+from ..core.models import Interface, IPAddressEntry, InventoryItem
 from ..core.exceptions import (
     NetBoxError,
     NetBoxConnectionError,
@@ -156,12 +156,7 @@ class NetBoxSync:
         exclude_patterns = sync_cfg.get_option("exclude_interfaces", [])
 
         # Конвертируем в Interface модели если нужно
-        interface_models: List[Interface] = []
-        for item in interfaces:
-            if isinstance(item, Interface):
-                interface_models.append(item)
-            else:
-                interface_models.append(Interface.from_dict(item))
+        interface_models = Interface.ensure_list(interfaces)
 
         # Сортируем: сначала LAG интерфейсы (Po*), потом остальные
         def is_lag(intf: Interface) -> int:
@@ -775,7 +770,7 @@ class NetBoxSync:
     def sync_ip_addresses(
         self,
         device_name: str,
-        ip_data: List[Dict[str, Any]],
+        ip_data: Union[List[Dict[str, Any]], List[IPAddressEntry]],
         device_ip: Optional[str] = None,
         update_existing: bool = False,
     ) -> Dict[str, int]:
@@ -784,10 +779,7 @@ class NetBoxSync:
 
         Args:
             device_name: Имя устройства в NetBox
-            ip_data: Список IP-адресов с полями:
-                - interface: Имя интерфейса
-                - ip_address: IP-адрес (может быть с маской или без)
-                - mask или prefix_length: Маска сети
+            ip_data: Список IP-адресов (Dict или IPAddressEntry модели)
             device_ip: IP-адрес подключения (будет установлен как primary_ip4)
             update_existing: Обновлять существующие IP (tenant, description)
 
@@ -815,9 +807,12 @@ class NetBoxSync:
                 ip_only = str(ip.address).split("/")[0]
                 existing_ips[ip_only] = ip
 
-        for entry in ip_data:
-            interface_name = entry.get("interface", "")
-            ip_address = entry.get("ip_address", "")
+        # Конвертируем в модели если нужно
+        entries = IPAddressEntry.ensure_list(ip_data)
+
+        for entry in entries:
+            interface_name = entry.interface
+            ip_address = entry.ip_address
 
             if not interface_name or not ip_address:
                 continue
@@ -825,15 +820,8 @@ class NetBoxSync:
             # Нормализуем IP (убираем маску если есть)
             ip_only = ip_address.split("/")[0]
 
-            # Определяем маску
-            if "/" in ip_address:
-                ip_with_mask = ip_address
-            else:
-                mask = entry.get("mask", entry.get("prefix_length", "24"))
-                # Если маска в формате 255.255.255.0, конвертируем
-                if "." in str(mask):
-                    mask = mask_to_prefix(str(mask))
-                ip_with_mask = f"{ip_only}/{mask}"
+            # Используем with_prefix для получения IP с маской
+            ip_with_mask = entry.with_prefix
 
             # Ищем интерфейс
             intf = self._find_interface(device.id, interface_name)
@@ -1732,19 +1720,14 @@ class NetBoxSync:
     def sync_inventory(
         self,
         device_name: str,
-        inventory_data: List[Dict[str, Any]],
+        inventory_data: Union[List[Dict[str, Any]], List[InventoryItem]],
     ) -> Dict[str, int]:
         """
         Синхронизирует inventory items (модули, SFP, PSU) в NetBox.
 
         Args:
             device_name: Имя устройства в NetBox
-            inventory_data: Данные от InventoryCollector:
-                - name: Имя компонента
-                - pid: Product ID (модель)
-                - serial: Серийный номер
-                - description: Описание
-                - vid: Version ID (опционально)
+            inventory_data: Данные (Dict или InventoryItem модели)
 
         Returns:
             Dict: Статистика {created, updated, skipped, failed}
@@ -1768,16 +1751,19 @@ class NetBoxSync:
             logger.error(f"Устройство не найдено в NetBox: {device_name}")
             return stats
 
-        logger.info(f"Синхронизация inventory для {device_name}: {len(inventory_data)} компонентов")
+        # Конвертируем в модели если нужно
+        items = InventoryItem.ensure_list(inventory_data)
+
+        logger.info(f"Синхронизация inventory для {device_name}: {len(items)} компонентов")
 
         sync_cfg = get_sync_config("inventory")
 
-        for item in inventory_data:
-            name = item.get("name", "").strip()
-            pid = item.get("pid", "").strip()
-            serial = item.get("serial", "").strip()
-            description = item.get("description", "").strip()
-            manufacturer = item.get("manufacturer", "").strip()
+        for item in items:
+            name = item.name.strip() if item.name else ""
+            pid = item.pid.strip() if item.pid else ""
+            serial = item.serial.strip() if item.serial else ""
+            description = item.description.strip() if item.description else ""
+            manufacturer = item.manufacturer.strip() if item.manufacturer else ""
 
             if not name:
                 continue
