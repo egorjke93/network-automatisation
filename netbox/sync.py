@@ -28,11 +28,11 @@
 
 import re
 import logging
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional
 
 from .client import NetBoxClient
 from ..core.context import RunContext, get_current_context
-from ..core.models import Interface, IPAddressEntry, InventoryItem
+from ..core.models import Interface, IPAddressEntry, InventoryItem, LLDPNeighbor
 from ..core.exceptions import (
     NetBoxError,
     NetBoxConnectionError,
@@ -116,7 +116,7 @@ class NetBoxSync:
     def sync_interfaces(
         self,
         device_name: str,
-        interfaces: Union[List[Dict[str, Any]], List[Interface]],
+        interfaces: List[Interface],
         create_missing: Optional[bool] = None,
         update_existing: Optional[bool] = None,
     ) -> Dict[str, int]:
@@ -125,7 +125,7 @@ class NetBoxSync:
 
         Args:
             device_name: Имя устройства в NetBox
-            interfaces: Список интерфейсов (Dict или Interface модели)
+            interfaces: Список интерфейсов (Interface модели)
             create_missing: Создавать отсутствующие (None = из config)
             update_existing: Обновлять существующие (None = из config)
 
@@ -396,7 +396,7 @@ class NetBoxSync:
 
     def sync_cables_from_lldp(
         self,
-        lldp_data: List[Dict[str, Any]],
+        lldp_data: List[LLDPNeighbor],
         skip_unknown: bool = True,
     ) -> Dict[str, int]:
         """
@@ -409,14 +409,7 @@ class NetBoxSync:
         4. Пропустить (если neighbor_type == "unknown" и skip_unknown=True)
 
         Args:
-            lldp_data: Данные LLDP/CDP с полями:
-                - hostname: Локальное устройство
-                - local_interface: Локальный интерфейс
-                - remote_hostname: Имя соседа
-                - remote_port: Порт соседа
-                - remote_mac: MAC соседа (опционально)
-                - remote_ip: IP соседа (опционально)
-                - neighbor_type: Тип идентификации
+            lldp_data: Список LLDP/CDP соседей (LLDPNeighbor модели)
             skip_unknown: Пропускать соседей с типом "unknown"
 
         Returns:
@@ -424,12 +417,15 @@ class NetBoxSync:
         """
         stats = {"created": 0, "skipped": 0, "failed": 0, "already_exists": 0}
 
-        for entry in lldp_data:
-            local_device = entry.get("hostname")
-            local_intf = entry.get("local_interface")
-            remote_hostname = entry.get("remote_hostname")
-            remote_port = entry.get("remote_port")
-            neighbor_type = entry.get("neighbor_type", "unknown")
+        # Конвертируем в модели если нужно
+        neighbors = LLDPNeighbor.ensure_list(lldp_data)
+
+        for entry in neighbors:
+            local_device = entry.hostname
+            local_intf = entry.local_interface
+            remote_hostname = entry.remote_hostname
+            remote_port = entry.remote_port
+            neighbor_type = entry.neighbor_type or "unknown"
 
             # Пропускаем unknown если указано
             if neighbor_type == "unknown" and skip_unknown:
@@ -451,7 +447,7 @@ class NetBoxSync:
                 continue
 
             # Ищем удалённое устройство
-            remote_device_obj = self._find_neighbor_device(entry, neighbor_type)
+            remote_device_obj = self._find_neighbor_device(entry)
             if not remote_device_obj:
                 logger.warning(
                     f"Сосед не найден в NetBox: {remote_hostname} "
@@ -564,8 +560,7 @@ class NetBoxSync:
 
     def _find_neighbor_device(
         self,
-        entry: Dict[str, Any],
-        neighbor_type: str,
+        entry: LLDPNeighbor,
     ) -> Optional[Any]:
         """
         Ищет устройство соседа в NetBox.
@@ -577,15 +572,15 @@ class NetBoxSync:
         - ip: Поиск по IP-адресу
 
         Args:
-            entry: Данные LLDP/CDP
-            neighbor_type: Тип идентификации (hostname, mac, ip, unknown)
+            entry: LLDPNeighbor модель
 
         Returns:
             Device или None
         """
-        hostname = entry.get("remote_hostname", "")
-        mac = entry.get("remote_mac")
-        ip = entry.get("remote_ip")
+        hostname = entry.remote_hostname or ""
+        mac = entry.remote_mac
+        ip = entry.remote_ip
+        neighbor_type = entry.neighbor_type or "unknown"
 
         # Приоритет поиска зависит от neighbor_type
         if neighbor_type == "hostname":
@@ -770,7 +765,7 @@ class NetBoxSync:
     def sync_ip_addresses(
         self,
         device_name: str,
-        ip_data: Union[List[Dict[str, Any]], List[IPAddressEntry]],
+        ip_data: List[IPAddressEntry],
         device_ip: Optional[str] = None,
         update_existing: bool = False,
     ) -> Dict[str, int]:
@@ -779,7 +774,7 @@ class NetBoxSync:
 
         Args:
             device_name: Имя устройства в NetBox
-            ip_data: Список IP-адресов (Dict или IPAddressEntry модели)
+            ip_data: Список IP-адресов (IPAddressEntry модели)
             device_ip: IP-адрес подключения (будет установлен как primary_ip4)
             update_existing: Обновлять существующие IP (tenant, description)
 
@@ -1626,7 +1621,7 @@ class NetBoxSync:
     def sync_vlans_from_interfaces(
         self,
         device_name: str,
-        interfaces: List[Dict[str, Any]],
+        interfaces: List[Interface],
         site: Optional[str] = None,
     ) -> Dict[str, int]:
         """
@@ -1640,7 +1635,7 @@ class NetBoxSync:
 
         Args:
             device_name: Имя устройства в NetBox
-            interfaces: Данные интерфейсов от InterfaceCollector
+            interfaces: Список интерфейсов (Interface модели)
             site: Сайт для создания VLAN (опционально)
 
         Returns:
@@ -1650,23 +1645,23 @@ class NetBoxSync:
             # Интерфейс Vlan10 с description "Management"
             # → Создаёт VLAN 10 с именем "Management"
         """
-        import re
-
         stats = {"created": 0, "skipped": 0, "failed": 0}
 
         # Паттерн для извлечения номера VLAN из имени интерфейса
         vlan_pattern = re.compile(r"^[Vv]lan(\d+)$")
 
+        # Конвертируем в модели если нужно
+        interface_models = Interface.ensure_list(interfaces)
+
         # Собираем уникальные VLAN
         vlans_to_create = {}  # {vid: name}
 
-        for intf in interfaces:
-            intf_name = intf.get("interface", "")
-            match = vlan_pattern.match(intf_name)
+        for intf in interface_models:
+            match = vlan_pattern.match(intf.name)
             if match:
                 vid = int(match.group(1))
                 # Имя VLAN = description интерфейса или "VLAN <N>"
-                description = intf.get("description", "").strip()
+                description = intf.description.strip() if intf.description else ""
                 vlan_name = description if description else f"VLAN {vid}"
                 vlans_to_create[vid] = vlan_name
 
@@ -1720,24 +1715,25 @@ class NetBoxSync:
     def sync_inventory(
         self,
         device_name: str,
-        inventory_data: Union[List[Dict[str, Any]], List[InventoryItem]],
+        inventory_data: List[InventoryItem],
     ) -> Dict[str, int]:
         """
         Синхронизирует inventory items (модули, SFP, PSU) в NetBox.
 
         Args:
             device_name: Имя устройства в NetBox
-            inventory_data: Данные (Dict или InventoryItem модели)
+            inventory_data: Данные (InventoryItem модели)
 
         Returns:
             Dict: Статистика {created, updated, skipped, failed}
 
         Example:
-            inventory_data = [
-                {"name": "Chassis", "pid": "WS-C3750X", "serial": "FDO123"},
-                {"name": "GigabitEthernet0/1", "pid": "SFP-1G-SX", "serial": "ABC"},
+            from network_collector.core import InventoryItem
+            items = [
+                InventoryItem(name="Chassis", pid="WS-C3750X", serial="FDO123"),
+                InventoryItem(name="GigabitEthernet0/1", pid="SFP-1G-SX", serial="ABC"),
             ]
-            sync.sync_inventory("switch1", inventory_data)
+            sync.sync_inventory("switch1", items)
         """
         stats = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
 

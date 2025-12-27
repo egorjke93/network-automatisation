@@ -145,9 +145,42 @@ class BaseCollector(ABC):
         self,
         devices: List[Device],
         parallel: bool = True,
+    ) -> List[T]:
+        """
+        Собирает данные и возвращает типизированные модели.
+
+        Args:
+            devices: Список устройств
+            parallel: Параллельный сбор
+
+        Returns:
+            List[Model]: Типизированные объекты (Interface, MACEntry, etc.)
+
+        Raises:
+            ValueError: Если model_class не определён для коллектора
+
+        Example:
+            collector = InterfaceCollector()
+            interfaces = collector.collect(devices)
+            for intf in interfaces:
+                print(intf.name, intf.status)  # автокомплит в IDE
+        """
+        if self.model_class is None:
+            raise ValueError(
+                f"{self.__class__.__name__} не имеет model_class. "
+                f"Используйте collect_dicts() для сырых данных."
+            )
+
+        data = self.collect_dicts(devices, parallel=parallel)
+        return [self.model_class.from_dict(row) for row in data]
+
+    def collect_dicts(
+        self,
+        devices: List[Device],
+        parallel: bool = True,
     ) -> List[Dict[str, Any]]:
         """
-        Собирает данные со списка устройств.
+        Собирает данные как словари (для экспортеров, pandas).
 
         Args:
             devices: Список устройств
@@ -168,53 +201,24 @@ class BaseCollector(ABC):
         logger.info(f"{self._log_prefix()}Собрано записей: {len(all_data)} с {len(devices)} устройств")
         return all_data
 
+    # Алиас для обратной совместимости
     def collect_models(
         self,
         devices: List[Device],
         parallel: bool = True,
     ) -> List[T]:
-        """
-        Собирает данные и возвращает типизированные модели.
-
-        Args:
-            devices: Список устройств
-            parallel: Параллельный сбор
-
-        Returns:
-            List[Model]: Типизированные объекты (Interface, MACEntry, etc.)
-
-        Raises:
-            ValueError: Если model_class не определён для коллектора
-
-        Example:
-            collector = InterfaceCollector()
-            interfaces = collector.collect_models(devices)
-            for intf in interfaces:
-                print(intf.name, intf.status)  # автокомплит в IDE
-        """
-        if self.model_class is None:
-            raise ValueError(
-                f"{self.__class__.__name__} не имеет model_class. "
-                f"Используйте collect() и конвертируйте вручную."
-            )
-
-        data = self.collect(devices, parallel=parallel)
-        return [self.model_class.from_dict(row) for row in data]
+        """Алиас для collect() (обратная совместимость)."""
+        return self.collect(devices, parallel=parallel)
 
     def to_models(self, data: List[Dict[str, Any]]) -> List[T]:
         """
         Конвертирует словари в типизированные модели.
 
         Args:
-            data: Список словарей (результат collect())
+            data: Список словарей
 
         Returns:
             List[Model]: Типизированные объекты
-
-        Example:
-            data = collector.collect(devices)
-            # ... обработка data ...
-            models = collector.to_models(data)
         """
         if self.model_class is None:
             raise ValueError(

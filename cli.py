@@ -598,8 +598,8 @@ def cmd_devices(args, ctx=None) -> None:
         transport=args.transport,
     )
 
-    # Собираем данные
-    data = collector.collect(devices)
+    # Собираем данные (как словари для экспорта)
+    data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
@@ -674,8 +674,8 @@ def cmd_mac(args, ctx=None) -> None:
         transport=args.transport,
     )
 
-    # Собираем данные
-    data = collector.collect(devices)
+    # Собираем данные (как словари для экспорта)
+    data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
@@ -754,7 +754,8 @@ def cmd_lldp(args, ctx=None) -> None:
         transport=args.transport,
     )
 
-    data = collector.collect(devices)
+    # Собираем данные (как словари для экспорта)
+    data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
@@ -786,7 +787,8 @@ def cmd_interfaces(args, ctx=None) -> None:
         transport=args.transport,
     )
 
-    data = collector.collect(devices)
+    # Собираем данные (как словари для экспорта)
+    data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
@@ -817,7 +819,8 @@ def cmd_inventory(args, ctx=None) -> None:
         transport=args.transport,
     )
 
-    data = collector.collect(devices)
+    # Собираем данные (как словари для экспорта)
+    data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
@@ -1154,7 +1157,7 @@ def cmd_sync_netbox(args, ctx=None) -> None:
         for device in devices:
             data = collector.collect([device])
             if data:
-                hostname = data[0].get("hostname", device.host)
+                hostname = data[0].hostname or device.host
                 sync.sync_interfaces(hostname, data)
 
     # Синхронизация кабелей из LLDP/CDP
@@ -1184,6 +1187,8 @@ def cmd_sync_netbox(args, ctx=None) -> None:
 
     # Синхронизация IP-адресов
     if getattr(args, "ip_addresses", False):
+        from .core.models import IPAddressEntry
+
         logger.info("Сбор IP-адресов с устройств...")
         collector = InterfaceCollector(
             credentials=credentials,
@@ -1191,23 +1196,25 @@ def cmd_sync_netbox(args, ctx=None) -> None:
         )
 
         for device in devices:
-            data = collector.collect([device])
-            if data:
-                hostname = data[0].get("hostname", device.host)
-                # Фильтруем только записи с IP
-                ip_data = [
-                    {
-                        "interface": row.get("interface"),
-                        "ip_address": row.get("ip_address"),
-                        "prefix_length": row.get("prefix_length", "24"),
-                    }
-                    for row in data
-                    if row.get("ip_address")
+            interfaces = collector.collect([device])
+            if interfaces:
+                hostname = interfaces[0].hostname or device.host
+                # Фильтруем только интерфейсы с IP и создаём IPAddressEntry
+                ip_entries = [
+                    IPAddressEntry(
+                        ip_address=intf.ip_address,
+                        interface=intf.name,
+                        mask="",  # mask будет определена из ip_address если есть /
+                        hostname=hostname,
+                        device_ip=device.host,
+                    )
+                    for intf in interfaces
+                    if intf.ip_address
                 ]
-                if ip_data:
+                if ip_entries:
                     sync.sync_ip_addresses(
                         hostname,
-                        ip_data,
+                        ip_entries,
                         device_ip=device.host,
                         update_existing=getattr(args, "update_devices", False),
                     )
@@ -1221,12 +1228,12 @@ def cmd_sync_netbox(args, ctx=None) -> None:
         )
 
         for device in devices:
-            data = collector.collect([device])
-            if data:
-                hostname = data[0].get("hostname", device.host)
+            interfaces = collector.collect([device])
+            if interfaces:
+                hostname = interfaces[0].hostname or device.host
                 sync.sync_vlans_from_interfaces(
                     hostname,
-                    data,
+                    interfaces,
                     site=getattr(args, "site", None),
                 )
 
@@ -1241,10 +1248,10 @@ def cmd_sync_netbox(args, ctx=None) -> None:
         )
 
         for device in devices:
-            data = collector.collect([device])
-            if data:
-                hostname = data[0].get("hostname", device.host)
-                sync.sync_inventory(hostname, data)
+            items = collector.collect([device])
+            if items:
+                hostname = items[0].hostname or device.host
+                sync.sync_inventory(hostname, items)
 
 
 def cmd_backup(args, ctx=None) -> None:
