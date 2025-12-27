@@ -356,6 +356,10 @@ class DeviceInfo:
         uptime: Время работы
         manufacturer: Производитель
         role: Роль (switch, router)
+        name: Имя устройства (hostname или IP)
+        site: Сайт (для NetBox)
+        tenant: Арендатор (для NetBox)
+        status: Статус (active, planned, offline)
     """
     hostname: str
     ip_address: str = ""
@@ -366,12 +370,17 @@ class DeviceInfo:
     uptime: str = ""
     manufacturer: str = ""
     role: str = ""
+    name: str = ""
+    site: str = ""
+    tenant: str = ""
+    status: str = "active"
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "DeviceInfo":
         """Создаёт DeviceInfo из словаря."""
+        hostname = data.get("hostname", data.get("name", ""))
         return cls(
-            hostname=data.get("hostname", data.get("name", "")),
+            hostname=hostname,
             ip_address=data.get("ip_address", data.get("host", "")),
             platform=data.get("platform", ""),
             model=data.get("model", data.get("hardware", "")),
@@ -380,6 +389,10 @@ class DeviceInfo:
             uptime=data.get("uptime", ""),
             manufacturer=data.get("manufacturer", data.get("vendor", "")),
             role=data.get("role", ""),
+            name=data.get("name", hostname),
+            site=data.get("site", ""),
+            tenant=data.get("tenant", ""),
+            status=data.get("status", "active"),
         )
 
     def to_dict(self) -> Dict[str, Any]:

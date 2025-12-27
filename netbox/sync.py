@@ -32,7 +32,7 @@ from typing import List, Dict, Any, Optional
 
 from .client import NetBoxClient
 from ..core.context import RunContext, get_current_context
-from ..core.models import Interface, IPAddressEntry, InventoryItem, LLDPNeighbor
+from ..core.models import Interface, IPAddressEntry, InventoryItem, LLDPNeighbor, DeviceInfo
 from ..core.exceptions import (
     NetBoxError,
     NetBoxConnectionError,
@@ -1086,7 +1086,7 @@ class NetBoxSync:
 
     def sync_devices_from_inventory(
         self,
-        inventory_data: List[Dict[str, Any]],
+        inventory_data: List[DeviceInfo],
         site: str = "Main",
         role: str = "switch",
         update_existing: bool = True,
@@ -1100,13 +1100,7 @@ class NetBoxSync:
         удаляет устройства которых нет в списке.
 
         Args:
-            inventory_data: Данные от DeviceInventoryCollector с полями:
-                - name/hostname: Имя устройства
-                - model: Модель
-                - serial: Серийный номер
-                - manufacturer: Производитель
-                - ip_address: IP-адрес
-                - platform: Платформа
+            inventory_data: Список DeviceInfo от DeviceInventoryCollector
             site: Сайт по умолчанию
             role: Роль по умолчанию
             update_existing: Обновлять существующие устройства
@@ -1118,19 +1112,22 @@ class NetBoxSync:
         """
         stats = {"created": 0, "updated": 0, "skipped": 0, "deleted": 0, "failed": 0}
 
+        # Конвертируем в модели если нужно
+        devices = DeviceInfo.ensure_list(inventory_data)
+
         # Собираем имена устройств из инвентаризации
         inventory_names = set()
 
-        for entry in inventory_data:
-            name = entry.get("name", entry.get("hostname", ""))
-            model = entry.get("model") or "Unknown"
-            serial = entry.get("serial", "")
-            manufacturer = entry.get("manufacturer") or "Cisco"
-            ip_address = entry.get("ip_address", "")
-            platform = entry.get("platform", "")
+        for entry in devices:
+            name = entry.name or entry.hostname
+            model = entry.model or "Unknown"
+            serial = entry.serial or ""
+            manufacturer = entry.manufacturer or "Cisco"
+            ip_address = entry.ip_address or ""
+            platform = entry.platform or ""
             # Параметры CLI имеют приоритет над значениями из inventory_data
             # site и role из CLI передаются в функцию, используем их
-            # entry.get("site") используется только если site не передан в функцию
+            # entry.role используется как fallback если role не передан
 
             if not name:
                 logger.warning("Пропущена запись без имени устройства")

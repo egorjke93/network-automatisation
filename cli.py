@@ -1133,10 +1133,11 @@ def cmd_sync_netbox(args, ctx=None) -> None:
             transport=args.transport,
         )
 
-        inventory_data = collector.collect(devices)
-        if inventory_data:
+        # collect() теперь возвращает List[DeviceInfo]
+        device_infos = collector.collect(devices)
+        if device_infos:
             sync.sync_devices_from_inventory(
-                inventory_data,
+                device_infos,
                 site=getattr(args, "site", "Main"),
                 role=getattr(args, "role", "switch"),
                 update_existing=update_devices,

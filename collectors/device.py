@@ -12,10 +12,10 @@
 
 Пример использования:
     collector = DeviceCollector()
-    data = collector.collect(devices)
+    devices_info = collector.collect(devices)  # List[DeviceInfo]
 
-    # С указанием полей для CSV
-    collector = DeviceCollector(csv_fields=["name", "model", "serial"])
+    # Для экспорта в файлы
+    data = collector.collect_dicts(devices)  # List[Dict]
 """
 
 from typing import List, Dict, Any, Optional
@@ -28,6 +28,7 @@ from ..core.connection import ConnectionManager, get_ntc_platform, get_scrapli_p
 from ..core.credentials import Credentials
 from ..core.constants import normalize_device_model
 from ..core.logging import get_logger
+from ..core.models import DeviceInfo
 from ..core.exceptions import (
     CollectorError,
     ConnectionError,
@@ -68,14 +69,21 @@ class DeviceCollector:
         max_workers: Максимум параллельных подключений
         device_fields: Маппинг полей устройства → CSV
         extra_fields: Дополнительные поля
+        model_class: Класс модели (DeviceInfo)
 
     Example:
         collector = DeviceCollector()
-        data = collector.collect(devices)
+        devices = collector.collect(devices)  # List[DeviceInfo]
 
-        for device_data in data:
-            print(f"{device_data['name']}: {device_data['model']}")
+        for device in devices:
+            print(f"{device.name}: {device.model}")
+
+        # Для экспорта
+        data = collector.collect_dicts(devices)  # List[Dict]
     """
+
+    # Класс модели для типизированного вывода
+    model_class = DeviceInfo
 
     def __init__(
         self,
@@ -117,9 +125,27 @@ class DeviceCollector:
         self,
         devices: List[Device],
         parallel: bool = True,
+    ) -> List[DeviceInfo]:
+        """
+        Собирает данные и возвращает типизированные модели.
+
+        Args:
+            devices: Список устройств
+            parallel: Параллельный сбор
+
+        Returns:
+            List[DeviceInfo]: Типизированные объекты
+        """
+        data = self.collect_dicts(devices, parallel=parallel)
+        return [self.model_class.from_dict(row) for row in data]
+
+    def collect_dicts(
+        self,
+        devices: List[Device],
+        parallel: bool = True,
     ) -> List[Dict[str, Any]]:
         """
-        Собирает данные со списка устройств.
+        Собирает данные как словари (для экспортеров).
 
         Args:
             devices: Список устройств
@@ -140,6 +166,15 @@ class DeviceCollector:
 
         logger.info(f"Собрано устройств: {len(all_data)} из {len(devices)}")
         return all_data
+
+    # Алиас для совместимости
+    def collect_models(
+        self,
+        devices: List[Device],
+        parallel: bool = True,
+    ) -> List[DeviceInfo]:
+        """Алиас для collect() (обратная совместимость)."""
+        return self.collect(devices, parallel=parallel)
 
     def _collect_parallel(self, devices: List[Device]) -> List[Dict[str, Any]]:
         """
