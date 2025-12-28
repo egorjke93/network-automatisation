@@ -24,13 +24,14 @@ INTERFACE_SHORT_MAP: List[tuple] = [
     ("gigabitethernet", "Gi"),
     ("fastethernet", "Fa"),
     ("ethernet", "Eth"),  # NX-OS полное: Ethernet1/1 → Eth1/1
+    ("ethernet", "Et"),
     ("port-channel", "Po"),
     ("vlan", "Vl"),
     ("loopback", "Lo"),
     # Уже короткие формы (не менять)
     ("eth", "Eth"),  # Eth1/1 → Eth1/1 (без изменений)
     ("twe", "Twe"),  # Twe1/0/17 (уже короткий)
-    ("ten", "Te"),   # Ten 1/1/4 (CDP формат)
+    ("ten", "Te"),  # Ten 1/1/4 (CDP формат)
 ]
 
 # Обратный маппинг: короткое имя → полное
@@ -178,7 +179,7 @@ def normalize_interface_short(interface: str, lowercase: bool = False) -> str:
     # Ищем совпадение в маппинге (порядок важен — длинные первыми)
     for full_lower, short in INTERFACE_SHORT_MAP:
         if result_lower.startswith(full_lower):
-            result = short + result[len(full_lower):]
+            result = short + result[len(full_lower) :]
             break
 
     return result.lower() if lowercase else result
@@ -367,11 +368,39 @@ def slugify(name: str) -> str:
 
 # Таблица транслитерации кириллицы в латиницу
 _TRANSLIT_TABLE: Dict[str, str] = {
-    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
-    'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
-    'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
-    'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
-    'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
+    "а": "a",
+    "б": "b",
+    "в": "v",
+    "г": "g",
+    "д": "d",
+    "е": "e",
+    "ё": "yo",
+    "ж": "zh",
+    "з": "z",
+    "и": "i",
+    "й": "y",
+    "к": "k",
+    "л": "l",
+    "м": "m",
+    "н": "n",
+    "о": "o",
+    "п": "p",
+    "р": "r",
+    "с": "s",
+    "т": "t",
+    "у": "u",
+    "ф": "f",
+    "х": "h",
+    "ц": "ts",
+    "ч": "ch",
+    "ш": "sh",
+    "щ": "sch",
+    "ъ": "",
+    "ы": "y",
+    "ь": "",
+    "э": "e",
+    "ю": "yu",
+    "я": "ya",
 }
 
 
@@ -395,12 +424,12 @@ def transliterate_to_slug(name: str) -> str:
     for char in name.lower():
         if char in _TRANSLIT_TABLE:
             result.append(_TRANSLIT_TABLE[char])
-        elif char.isalnum() or char in '-_':
+        elif char.isalnum() or char in "-_":
             result.append(char)
-        elif char == ' ':
-            result.append('-')
+        elif char == " ":
+            result.append("-")
         # Другие символы пропускаем
-    return ''.join(result)
+    return "".join(result)
 
 
 # =============================================================================
@@ -758,7 +787,12 @@ def get_netbox_interface_type(
         return "1000base-t"
 
     # 4. media_type - ВЫСШИЙ ПРИОРИТЕТ (самая точная информация о трансивере)
-    if media_lower and media_lower not in ("unknown", "not present", "no transceiver", ""):
+    if media_lower and media_lower not in (
+        "unknown",
+        "not present",
+        "no transceiver",
+        "",
+    ):
         for pattern, netbox_type in NETBOX_INTERFACE_TYPE_MAP.items():
             if pattern in media_lower:
                 return netbox_type
@@ -785,7 +819,9 @@ def get_netbox_interface_type(
                 return netbox_type
 
     # 7. По имени интерфейса
-    is_sfp_port = "sfp" in media_lower or "sfp" in hw_lower or "no transceiver" in media_lower
+    is_sfp_port = (
+        "sfp" in media_lower or "sfp" in hw_lower or "no transceiver" in media_lower
+    )
 
     # HundredGigE (100G)
     if name_lower.startswith(("hu", "hundredgig")):
@@ -815,7 +851,9 @@ def get_netbox_interface_type(
         return "100base-tx"
 
     # Ethernet (NX-OS) - проверяем hardware_type на максимальную скорость
-    if name_lower.startswith(("eth", "ethernet")) and not name_lower.startswith("ethersvi"):
+    if name_lower.startswith(("eth", "ethernet")) and not name_lower.startswith(
+        "ethersvi"
+    ):
         if "10000" in hw_lower or "10g" in hw_lower:
             return "10gbase-x-sfpp"
         elif "25000" in hw_lower or "25g" in hw_lower:

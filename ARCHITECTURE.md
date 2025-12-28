@@ -72,6 +72,107 @@
 - **Dependency Inversion**: Верхние слои не зависят от реализации нижних
 - **Strategy Pattern**: Collectors, Exporters — подключаемые стратегии
 - **Template Method**: BaseCollector определяет скелет, наследники переопределяют детали
+- **Models Everywhere**: Коллекторы возвращают `List[Model]`, sync принимает `List[Model]`
+- **Dict на границах**: NTC парсит в Dict, экспортеры получают Dict
+
+---
+
+## Data Models (core/models.py)
+
+Типизированные dataclass модели вместо `Dict[str, Any]`:
+
+| Model | Collector | Описание |
+|-------|-----------|----------|
+| `DeviceInfo` | `DeviceCollector` | Информация об устройстве |
+| `Interface` | `InterfaceCollector` | Интерфейс с IP, MAC, mode |
+| `MACEntry` | `MACCollector` | Запись MAC-таблицы |
+| `LLDPNeighbor` | `LLDPCollector` | LLDP/CDP сосед |
+| `InventoryItem` | `InventoryCollector` | Модуль, SFP, PSU |
+| `IPAddressEntry` | — | IP-адрес на интерфейсе |
+
+### Использование
+
+```python
+from network_collector.core import Interface, MACEntry
+
+# Создание из dict (от парсера)
+intf = Interface.from_dict(parsed_data)
+
+# Доступ к полям с автокомплитом
+print(intf.name, intf.status, intf.ip_address)
+
+# Конвертация обратно в dict (для экспорта)
+data = intf.to_dict()
+
+# Автоконвертация списков (backward compat)
+interfaces = Interface.ensure_list(data)  # Dict или Model → List[Model]
+```
+
+### API коллекторов
+
+Все коллекторы имеют единый API:
+
+```python
+collector = MACCollector(credentials)
+
+# Типизированные модели (для sync, нового кода)
+entries = collector.collect(devices)       # → List[MACEntry]
+
+# Словари (для экспорта, pandas)
+data = collector.collect_dicts(devices)    # → List[Dict]
+
+# Алиас (backward compat)
+entries = collector.collect_models(devices)  # → List[MACEntry]
+```
+
+---
+
+## Domain Layer (core/domain/)
+
+Бизнес-логика нормализации данных. Отделена от коллекторов для переиспользования и тестирования.
+
+| Normalizer | Что делает |
+|------------|------------|
+| `MACNormalizer` | MAC формат (ieee/cisco/raw), фильтрация trunk, дедупликация |
+| `InterfaceNormalizer` | Имена интерфейсов (Gi→GigabitEthernet), port_type, mode |
+| `LLDPNormalizer` | neighbor_type (hostname/mac/ip), remote_hostname |
+| `InventoryNormalizer` | PID, serial, manufacturer |
+
+### Использование в коллекторе
+
+```python
+class MACCollector(BaseCollector):
+    def __init__(self, ...):
+        # Domain Layer: нормализатор MAC-данных
+        self._normalizer = MACNormalizer(
+            mac_format=self.mac_format,
+            exclude_vlans=self.exclude_vlans,
+        )
+
+    def _parse_output(self, output, device):
+        # Сырой парсинг
+        raw_data = self._parse_with_ntc(output, device)
+
+        # Нормализация через Domain Layer
+        normalized = self._normalizer.normalize_dicts(raw_data)
+        deduplicated = self._normalizer.deduplicate(normalized)
+
+        return deduplicated
+```
+
+### Тестирование
+
+Domain Layer легко тестировать изолированно:
+
+```python
+def test_mac_normalizer():
+    normalizer = MACNormalizer(mac_format="ieee")
+
+    raw = [{"mac": "00:11:22:33:44:55", "vlan": "1"}]
+    result = normalizer.normalize_dicts(raw)
+
+    assert result[0]["mac"] == "00:11:22:33:44:55"
+```
 
 ---
 
