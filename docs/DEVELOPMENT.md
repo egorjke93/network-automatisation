@@ -314,24 +314,70 @@ python -m network_collector sync-netbox --interfaces --dry-run
 if iface_lower.startswith(("fourhundredgig", "fh")):
     return "400g-qsfp-dd"
 
-# 2. netbox/sync.py → _get_interface_type() → port_type_map
-port_type_map = {
+# 2. core/constants.py → PORT_TYPE_MAP
+PORT_TYPE_MAP = {
     "400g-qsfp-dd": "400gbase-x-qsfpdd",
 }
 ```
 
-### 4.3 Приоритет определения
+### 4.3 Добавление нового media_type
+
+Когда устройство возвращает неизвестный media_type (SFP модуль):
+
+```python
+# core/constants.py → NETBOX_INTERFACE_TYPE_MAP
+NETBOX_INTERFACE_TYPE_MAP = {
+    # Добавить новый маппинг media_type → NetBox type
+    "sfp-25gbase-sr": "25gbase-x-sfp28",
+    "100gbase-zr4": "100gbase-zr",
+    "qsfp 100g cwdm4": "100gbase-x-qsfp28",
+}
+```
+
+**Пример:** устройство возвращает `media_type: "SFP 100GBASE-LR4"` но в NetBox ошибка.
+
+1. Проверить текущие маппинги в `NETBOX_INTERFACE_TYPE_MAP`
+2. Добавить новый маппинг (ключ в lowercase):
+   ```python
+   "sfp 100gbase-lr4": "100gbase-lr4",
+   ```
+
+### 4.4 Таблица: где что добавлять
+
+| Источник | Файл | Переменная | Когда использовать |
+|----------|------|------------|-------------------|
+| Имя интерфейса | `collectors/interfaces.py` | `_detect_port_type()` | Новый тип порта (400G, 800G) |
+| port_type → NetBox | `core/constants.py` | `PORT_TYPE_MAP` | Маппинг port_type в NetBox |
+| media_type → NetBox | `core/constants.py` | `NETBOX_INTERFACE_TYPE_MAP` | Новый SFP/трансивер |
+| hardware_type → NetBox | `core/constants.py` | `NETBOX_HARDWARE_TYPE_MAP` | Маппинг скорости |
+
+### 4.5 Приоритет определения типа
 
 ```
 1. port_type (из коллектора)     — платформонезависимый
    ↓ если пустой
-2. media_type (SFP-10GBase-SR)   — самый точный
+2. media_type (SFP-10GBase-SR)   — самый точный (NETBOX_INTERFACE_TYPE_MAP)
    ↓ если пустой
-3. hardware_type (100/1000/10000) — макс. скорость
+3. hardware_type (100/1000/10000) — макс. скорость (NETBOX_HARDWARE_TYPE_MAP)
    ↓ если пустой
 4. interface_name (TenGigabit)    — по имени
    ↓ если не определился
 5. defaults.type из fields.yaml   — fallback
+```
+
+### 4.6 Проверка доступных типов NetBox
+
+```bash
+# Получить все типы интерфейсов из NetBox API
+curl -s "$NETBOX_URL/api/dcim/interfaces/" \
+  -H "Authorization: Token $NETBOX_TOKEN" | jq '.results[].type.value' | sort -u
+
+# Или через pynetbox
+python -c "
+import pynetbox
+nb = pynetbox.api('$NETBOX_URL', token='$NETBOX_TOKEN')
+print([choice['value'] for choice in nb.dcim.interfaces.choices()['type']])
+"
 ```
 
 ---

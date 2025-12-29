@@ -682,6 +682,72 @@ python -m network_collector sync-netbox --cables --protocol both
 python -m network_collector sync-netbox --cleanup --tenant "MyTenant" --dry-run
 ```
 
+### 4.10 DiffCalculator — предпросмотр изменений
+
+Показывает что будет создано/обновлено ДО применения изменений.
+
+#### CLI использование
+
+```bash
+# Показать diff для интерфейсов
+python -m network_collector sync-netbox --interfaces --show-diff --dry-run
+
+# Вывод:
+# ============================================================
+# DIFF SUMMARY
+# ============================================================
+# interfaces: +5 new, ~2 update, =10 skip
+# ------------------------------------------------------------
+# CREATE:
+#   + Gi0/10
+#   + Gi0/11
+# UPDATE:
+#   ~ Gi0/1: description: '' → 'Server-01'
+#   ~ Gi0/2: enabled: True → False
+```
+
+#### Программное использование
+
+```python
+from network_collector.netbox import NetBoxClient, DiffCalculator
+
+client = NetBoxClient(url, token)
+diff_calc = DiffCalculator(client)
+
+# Diff для интерфейсов
+diff = diff_calc.diff_interfaces("switch-01", collected_interfaces)
+print(diff.summary())           # "interfaces: +5 new, ~2 update"
+print(diff.format_detailed())   # Полный вывод
+
+# Diff для устройств
+diff = diff_calc.diff_devices(inventory_data, update_existing=True)
+
+# Diff для IP-адресов
+diff = diff_calc.diff_ip_addresses("switch-01", ip_data)
+
+# Проверка наличия изменений
+if diff.has_changes:
+    print(f"Будет изменено: {diff.total_changes} объектов")
+
+# Доступ к изменениям
+for change in diff.creates:
+    print(f"CREATE: {change.name}")
+for change in diff.updates:
+    print(f"UPDATE: {change.name}")
+    for field_change in change.changes:
+        print(f"  {field_change.field}: {field_change.old_value} → {field_change.new_value}")
+```
+
+#### Методы DiffResult
+
+| Метод | Описание |
+|-------|----------|
+| `summary()` | Краткая сводка: `interfaces: +5 new, ~2 update` |
+| `format_detailed()` | Полный вывод с деталями |
+| `has_changes` | `True` если есть изменения |
+| `total_changes` | Количество изменений (create + update + delete) |
+| `to_dict()` | Сериализация в словарь (для JSON) |
+
 ---
 
 ## 5. Фильтры и исключения
