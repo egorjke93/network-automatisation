@@ -1092,6 +1092,7 @@ class NetBoxSync:
         update_existing: bool = True,
         cleanup: bool = False,
         tenant: Optional[str] = None,
+        set_primary_ip: bool = False,
     ) -> Dict[str, int]:
         """
         Синхронизирует устройства в NetBox из инвентаризационных данных.
@@ -1106,6 +1107,7 @@ class NetBoxSync:
             update_existing: Обновлять существующие устройства
             cleanup: Удалять устройства не из списка (для данного site и tenant)
             tenant: Арендатор - ОБЯЗАТЕЛЕН для cleanup, фильтрует какие устройства удалять
+            set_primary_ip: Устанавливать primary IP (только при --ip-addresses)
 
         Returns:
             Dict: Статистика {created, updated, skipped, deleted, failed}
@@ -1141,6 +1143,7 @@ class NetBoxSync:
             if existing:
                 if update_existing:
                     # Обновляем существующее устройство (включая tenant, site, role)
+                    # primary_ip передаём только если set_primary_ip=True (--ip-addresses)
                     updated = self._update_device(
                         existing,
                         model=model,
@@ -1150,7 +1153,7 @@ class NetBoxSync:
                         tenant=tenant,
                         site=site,
                         role=role,
-                        primary_ip=ip_address,
+                        primary_ip=ip_address if set_primary_ip else "",
                     )
                     if updated:
                         stats["updated"] += 1

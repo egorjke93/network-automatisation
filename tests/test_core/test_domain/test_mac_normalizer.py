@@ -278,3 +278,56 @@ class TestMACNormalizerMACType:
         result = normalizer.normalize_dicts(raw_data)
 
         assert result[0]["type"] == expected
+
+
+@pytest.mark.unit
+class TestMACNormalizerEdgeCases:
+    """Тесты edge cases и NTC Templates особенностей."""
+
+    def test_destination_port_as_list(self):
+        """destination_port от NTC Templates может быть списком (например ['CPU'])."""
+        normalizer = MACNormalizer()
+        # NTC Templates возвращает destination_port как список для некоторых записей
+        raw_data = [
+            {"mac": "0011.2233.4455", "destination_port": ["CPU"], "vlan": "1"},
+            {"mac": "0011.2233.4466", "destination_port": ["Router"], "vlan": "1"},
+        ]
+        result = normalizer.normalize_dicts(raw_data)
+
+        assert len(result) == 2
+        assert result[0]["interface"] == "CPU"
+        assert result[1]["interface"] == "Router"
+
+    def test_destination_port_empty_list(self):
+        """Пустой список destination_port обрабатывается корректно."""
+        normalizer = MACNormalizer()
+        raw_data = [
+            {"mac": "0011.2233.4455", "destination_port": [], "vlan": "1"},
+        ]
+        result = normalizer.normalize_dicts(raw_data)
+
+        assert len(result) == 1
+        assert result[0]["interface"] == ""
+
+    def test_interface_as_list(self):
+        """interface как список тоже обрабатывается."""
+        normalizer = MACNormalizer()
+        raw_data = [
+            {"mac": "0011.2233.4455", "interface": ["Gi0/1", "Gi0/2"], "vlan": "10"},
+        ]
+        result = normalizer.normalize_dicts(raw_data)
+
+        assert len(result) == 1
+        # Берётся первый элемент списка
+        assert result[0]["interface"] == "Gi0/1"
+
+    def test_destination_port_string(self):
+        """destination_port как строка работает (fallback от interface)."""
+        normalizer = MACNormalizer()
+        raw_data = [
+            {"mac": "0011.2233.4455", "destination_port": "Gi0/1", "vlan": "10"},
+        ]
+        result = normalizer.normalize_dicts(raw_data)
+
+        assert len(result) == 1
+        assert result[0]["interface"] == "Gi0/1"

@@ -424,6 +424,11 @@ def setup_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Полная синхронизация: devices → interfaces → ip-addresses → vlans → cables → inventory",
     )
+    netbox_parser.add_argument(
+        "--show-diff",
+        action="store_true",
+        help="Показать детальный diff изменений перед применением",
+    )
 
     # === Backup (резервное копирование) ===
     backup_parser = subparsers.add_parser("backup", help="Резервное копирование конфигураций")
@@ -1067,7 +1072,7 @@ def cmd_sync_netbox(args, ctx=None) -> None:
     ВАЖНО: С устройств мы только ЧИТАЕМ данные!
     Синхронизация — это выгрузка собранных данных В NetBox.
     """
-    from .netbox import NetBoxClient, NetBoxSync
+    from .netbox import NetBoxClient, NetBoxSync, DiffCalculator
     from .collectors import InterfaceCollector, LLDPCollector
     from .config import config
 
@@ -1143,6 +1148,8 @@ def cmd_sync_netbox(args, ctx=None) -> None:
                 update_existing=update_devices,
                 cleanup=cleanup,
                 tenant=tenant,
+                # Primary IP устанавливается только при --ip-addresses
+                set_primary_ip=getattr(args, "ip_addresses", False),
             )
         else:
             logger.warning("Нет данных инвентаризации")
@@ -1155,10 +1162,25 @@ def cmd_sync_netbox(args, ctx=None) -> None:
             transport=args.transport,
         )
 
+        # DiffCalculator для показа изменений
+        show_diff = getattr(args, "show_diff", False)
+        diff_calc = DiffCalculator(client) if show_diff else None
+
         for device in devices:
             data = collector.collect([device])
             if data:
                 hostname = data[0].hostname or device.host
+
+                # Показываем diff если запрошено
+                if diff_calc:
+                    # Конвертируем в список dict для DiffCalculator
+                    intf_dicts = [intf.to_dict() if hasattr(intf, "to_dict") else intf for intf in data]
+                    diff = diff_calc.diff_interfaces(hostname, intf_dicts)
+                    if diff.has_changes():
+                        logger.info(f"\n{diff.format_detailed()}")
+                    else:
+                        logger.info(f"Интерфейсы {hostname}: нет изменений")
+
                 sync.sync_interfaces(hostname, data)
 
     # Синхронизация кабелей из LLDP/CDP
@@ -1307,8 +1329,20 @@ def main() -> None:
     set_current_context(ctx)
 
     # Настройка логирования из config.yaml
-    log_level = logging.DEBUG if args.verbose else logging.INFO
     log_cfg = config.logging
+
+    # Приоритет: -v флаг > config.yaml > INFO по умолчанию
+    if args.verbose:
+        log_level = logging.DEBUG
+    elif log_cfg and hasattr(log_cfg, "level"):
+        # Поддержка строковых и числовых уровней
+        cfg_level = getattr(log_cfg, "level", "INFO")
+        if isinstance(cfg_level, str):
+            log_level = getattr(logging, cfg_level.upper(), logging.INFO)
+        else:
+            log_level = cfg_level
+    else:
+        log_level = logging.INFO
 
     # Создаём LogConfig из config.yaml
     rotation_str = getattr(log_cfg, "rotation", "size") if log_cfg else "size"

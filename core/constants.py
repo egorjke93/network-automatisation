@@ -563,11 +563,11 @@ NETBOX_INTERFACE_TYPE_MAP: Dict[str, str] = {
     "100base-fx": "100base-fx",
     "100basefx-fe sfp": "100base-fx",  # Cisco format
     "100basefx-fe": "100base-fx",
-    "100baselx": "100base-lx10",  # 100BaseLX (single-mode, 10km)
-    "100base-lx": "100base-lx10",
-    "100baselx-fe sfp": "100base-lx10",  # Cisco format
-    "100baselx-fe": "100base-lx10",
-    "100base-lx10": "100base-lx10",
+    # 100BaseLX → 100base-fx (NetBox не имеет отдельного типа для LX)
+    "100baselx": "100base-fx",  # 100BaseLX (single-mode) → 100base-fx
+    "100base-lx": "100base-fx",
+    "100baselx-fe sfp": "100base-fx",  # Cisco 100BaseLX-FE SFP
+    "100baselx-fe": "100base-fx",
     # === Медные (RJ45) ===
     "basetx": "1000base-t",
     "base-tx": "1000base-t",

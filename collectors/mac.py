@@ -30,6 +30,7 @@ from ..core.logging import get_logger
 from ..core.domain import MACNormalizer
 from ..core.constants import (
     CUSTOM_TEXTFSM_TEMPLATES,
+    ONLINE_PORT_STATUSES,
     normalize_interface_short,
     normalize_mac,
 )
@@ -80,6 +81,18 @@ class MACCollector(BaseCollector):
         "juniper": "show ethernet-switching table",
         "qtech": "show mac address-table",
         "qtech_qsw": "show mac address-table",
+    }
+
+    # Маппинг полных имён интерфейсов к коротким
+    INTERFACE_MAP = {
+        "GigabitEthernet": "Gi",
+        "FastEthernet": "Fa",
+        "TenGigabitEthernet": "Te",
+        "TwentyFiveGigE": "Twe",
+        "FortyGigabitEthernet": "Fo",
+        "HundredGigE": "Hu",
+        "Ethernet": "Eth",
+        "Port-channel": "Po",
     }
 
     def __init__(
@@ -296,6 +309,27 @@ class MACCollector(BaseCollector):
             )
 
         return data  # Сырые данные, нормализация в Domain Layer
+
+    def _parse_output(
+        self,
+        output: str,
+        device: "Device",
+    ) -> List[Dict[str, Any]]:
+        """
+        Парсит вывод команды (реализация абстрактного метода).
+
+        Примечание: MACCollector переопределяет _collect_from_device целиком,
+        поэтому этот метод не вызывается напрямую. Реализован для совместимости
+        с абстрактным классом BaseCollector.
+
+        Args:
+            output: Сырой вывод команды
+            device: Устройство
+
+        Returns:
+            List[Dict]: Распарсенные данные
+        """
+        return self._parse_raw(output, device)
 
     # Методы _normalize_data, _deduplicate_final, _should_exclude_interface
     # перенесены в Domain Layer: core/domain/mac.py (MACNormalizer)

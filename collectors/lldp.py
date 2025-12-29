@@ -202,8 +202,14 @@ class LLDPCollector(BaseCollector):
         - remote_hostname (если LLDP не дал system_name)
         - remote_platform
         - remote_ip
+        - local_interface (если LLDP не дал)
 
-        Соседи сопоставляются по local_interface.
+        Соседи сопоставляются по local_interface или remote_hostname.
+
+        Protocol field:
+        - BOTH: запись объединена из LLDP и CDP
+        - LLDP: запись только из LLDP
+        - CDP: запись только из CDP
 
         Args:
             lldp_data: Данные LLDP
@@ -212,22 +218,37 @@ class LLDPCollector(BaseCollector):
         Returns:
             List[Dict]: Объединённые данные
         """
-        # Создаём индекс CDP по local_interface
+        # Создаём индексы CDP по local_interface и remote_hostname
         cdp_by_interface = {}
+        cdp_by_hostname = {}
         for cdp_row in cdp_data:
             local_intf = normalize_interface_short(
                 cdp_row.get("local_interface", ""), lowercase=True
             )
             if local_intf:
                 cdp_by_interface[local_intf] = cdp_row
+            # Также индексируем по hostname для fallback matching
+            hostname = cdp_row.get("remote_hostname", "").lower()
+            if hostname and not hostname.startswith("["):
+                cdp_by_hostname[hostname] = cdp_row
 
         # Дополняем LLDP данными из CDP
         merged = []
+        matched_cdp_intfs = set()  # Отслеживаем использованные CDP записи
+
         for lldp_row in lldp_data:
             local_intf = normalize_interface_short(
                 lldp_row.get("local_interface", ""), lowercase=True
             )
-            cdp_row = cdp_by_interface.get(local_intf)
+
+            # Пробуем найти CDP по local_interface
+            cdp_row = cdp_by_interface.get(local_intf) if local_intf else None
+
+            # Fallback: ищем по remote_hostname если local_interface не сматчился
+            if not cdp_row:
+                lldp_hostname = lldp_row.get("remote_hostname", "").lower()
+                if lldp_hostname and not lldp_hostname.startswith("["):
+                    cdp_row = cdp_by_hostname.get(lldp_hostname)
 
             if cdp_row:
                 # Дополняем пустые поля из CDP
@@ -250,6 +271,10 @@ class LLDPCollector(BaseCollector):
                 if not lldp_row.get("remote_ip") and cdp_row.get("remote_ip"):
                     lldp_row["remote_ip"] = cdp_row["remote_ip"]
 
+                # local_interface: если пустой в LLDP, берём из CDP
+                if not lldp_row.get("local_interface") and cdp_row.get("local_interface"):
+                    lldp_row["local_interface"] = cdp_row["local_interface"]
+
                 # remote_port: проверяем что это интерфейс, а не hostname
                 lldp_port = lldp_row.get("remote_port", "")
                 cdp_port = cdp_row.get("remote_port", "")
@@ -264,16 +289,24 @@ class LLDPCollector(BaseCollector):
                         lldp_row["remote_port"] = cdp_port
                         logger.debug(f"remote_port из CDP: {cdp_port} (LLDP был: {lldp_port})")
 
-                # Убираем из CDP индекса — уже обработан
-                del cdp_by_interface[local_intf]
+                # Отмечаем CDP запись как использованную
+                cdp_local_intf = normalize_interface_short(
+                    cdp_row.get("local_interface", ""), lowercase=True
+                )
+                if cdp_local_intf:
+                    matched_cdp_intfs.add(cdp_local_intf)
 
-            lldp_row["protocol"] = "BOTH"
+                # Запись объединена из обоих источников
+                lldp_row["protocol"] = "BOTH"
+            # else: сохраняем protocol = "LLDP" (установлен ранее)
+
             merged.append(lldp_row)
 
         # Добавляем CDP соседей, которых нет в LLDP
-        for cdp_row in cdp_by_interface.values():
-            cdp_row["protocol"] = "BOTH"
-            merged.append(cdp_row)
+        # protocol = "CDP" уже установлен ранее
+        for intf, cdp_row in cdp_by_interface.items():
+            if intf not in matched_cdp_intfs:
+                merged.append(cdp_row)
 
         return merged
 

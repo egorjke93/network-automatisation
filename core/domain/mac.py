@@ -148,6 +148,9 @@ class MACNormalizer:
 
         # Нормализуем интерфейс
         interface = row.get("interface", row.get("destination_port", ""))
+        # NTC Templates может вернуть список (например ['CPU'])
+        if isinstance(interface, list):
+            interface = interface[0] if interface else ""
         if self.normalize_interfaces:
             interface = normalize_interface_short(interface)
         result["interface"] = interface
