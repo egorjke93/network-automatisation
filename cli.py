@@ -1142,7 +1142,8 @@ def cmd_sync_netbox(args, ctx=None) -> None:
         device_infos = collector.collect(devices)
         if device_infos:
             # Показываем diff если запрошено
-            show_diff = getattr(args, "show_diff", False)
+            # dry_run автоматически включает show_diff
+            show_diff = getattr(args, "show_diff", False) or getattr(args, "dry_run", False)
             if show_diff:
                 diff_calc = DiffCalculator(client)
                 # Конвертируем DeviceInfo в dict для diff
@@ -1181,8 +1182,8 @@ def cmd_sync_netbox(args, ctx=None) -> None:
             transport=args.transport,
         )
 
-        # DiffCalculator для показа изменений
-        show_diff = getattr(args, "show_diff", False)
+        # DiffCalculator для показа изменений (dry_run включает автоматически)
+        show_diff = getattr(args, "show_diff", False) or getattr(args, "dry_run", False)
         diff_calc = DiffCalculator(client) if show_diff else None
 
         for device in devices:
@@ -1237,8 +1238,8 @@ def cmd_sync_netbox(args, ctx=None) -> None:
             transport=args.transport,
         )
 
-        # DiffCalculator для показа изменений
-        show_diff = getattr(args, "show_diff", False)
+        # DiffCalculator для показа изменений (dry_run включает автоматически)
+        show_diff = getattr(args, "show_diff", False) or getattr(args, "dry_run", False)
         diff_calc = DiffCalculator(client) if show_diff else None
 
         for device in devices:
