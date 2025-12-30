@@ -249,6 +249,12 @@ class TestFieldsToDict:
             speed="1 Gbit",
             duplex="full",
             mtu=1500,
+            vlan="100",
+            mode="access",
+            port_type="1g-rj45",
+            media_type="RJ45",
+            hardware_type="Gigabit Ethernet",
+            lag="",
             hostname="switch-01",
             device_ip="10.0.0.1",
         )

@@ -243,15 +243,15 @@ interfaces:
     name: "Duplex"
     order: 12
   bandwidth:
-    enabled: false
+    enabled: false  # Нет в модели Interface, используйте speed
     name: "Bandwidth"
     order: 13
   hardware_type:
-    enabled: false
+    enabled: true
     name: "Hardware Type"
     order: 14
   media_type:
-    enabled: false
+    enabled: true
     name: "Media Type"
     order: 15
 
@@ -341,10 +341,10 @@ sync:
         enabled: true
         source: platform
       asset_tag:
-        enabled: false
+        enabled: true
         source: asset_tag
       comments:
-        enabled: false
+        enabled: true
         source: comments
     defaults:
       site: "SU"
@@ -369,19 +369,19 @@ sync:
         enabled: true
         source: mtu
       speed:
-        enabled: false
+        enabled: true
         source: speed
       duplex:
-        enabled: false
+        enabled: true
         source: duplex
       mode:
-        enabled: false
+        enabled: true
         source: mode       # access, tagged, tagged-all
       untagged_vlan:
-        enabled: false
+        enabled: true
         source: native_vlan
       tagged_vlans:
-        enabled: false
+        enabled: true
         source: tagged_vlans
       hardware_type:
         enabled: true

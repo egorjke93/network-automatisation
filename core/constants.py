@@ -488,9 +488,10 @@ def mask_to_prefix(mask: str) -> int:
 NETBOX_INTERFACE_TYPE_MAP: Dict[str, str] = {
     # === 100G ===
     "qsfp 100g lr4": "100gbase-lr4",  # QSFP 100G LR4
+    "qsfp-100g-cr4": "100gbase-sr4",
     "qsfp 100g sr4": "100gbase-sr4",
     "qsfp 100g er4": "100gbase-er4",
-    "qsfp 40/100ge srbd": "100gbase-x-qsfp28",  # QSFP 40/100GE SRBD (BiDi)
+    "qsfp 40/100ge srbd": "100gbase-sr1.2",  # QSFP 40/100GE SRBD (BiDi)
     "100gbase-sr4": "100gbase-sr4",
     "100g-sr4": "100gbase-sr4",
     "100gbase-lr4": "100gbase-lr4",
@@ -500,6 +501,8 @@ NETBOX_INTERFACE_TYPE_MAP: Dict[str, str] = {
     "qsfp28": "100gbase-x-qsfp28",
     "qsfp-100g": "100gbase-x-qsfp28",
     # === 40G ===
+    "qsfp 40g cu3m": "40gbase-cr4",
+    "qsfp-40g-cr4": "40gbase-sr4",
     "qsfp 40g cu": "40gbase-x-qsfpp",  # QSFP 40G CU3M (DAC)
     "40gbase-sr4": "40gbase-sr4",
     "40g-sr4": "40gbase-sr4",
@@ -508,7 +511,7 @@ NETBOX_INTERFACE_TYPE_MAP: Dict[str, str] = {
     "qsfp-40g": "40gbase-x-qsfpp",
     "qsfp 40g": "40gbase-x-qsfpp",  # QSFP 40G ...
     # === 25G ===
-    "sfp-25gbase-aoc": "25gbase-x-sfp28",  # SFP-25GBase-AOC3M
+    "sfp-25gbase-aoc": "25gbase-sr",
     "sfp-25gbase-sr": "25gbase-sr",  # SFP-25GBase-SR (must be before generic sfp-25gbase!)
     "sfp-25gbase-lr": "25gbase-lr",  # SFP-25GBase-LR
     "sfp-25gbase": "25gbase-x-sfp28",  # SFP-25GBase-... (generic)

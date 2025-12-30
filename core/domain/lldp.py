@@ -14,6 +14,11 @@ from ..constants import normalize_interface_short
 
 # Маппинг полей из NTC Templates к стандартным именам
 # ВАЖНО: port_id обрабатывается отдельно (может быть MAC)
+#
+# TextFSM для LLDP возвращает:
+#   neighbor_port_id = "Te1/0/2"              ← реальный порт соседа
+#   neighbor_interface = "SU-316-C9200L..."   ← Port Description (НЕ порт!)
+#
 KEY_MAPPING: Dict[str, str] = {
     # Локальный интерфейс
     "local_intf": "local_interface",
@@ -22,9 +27,11 @@ KEY_MAPPING: Dict[str, str] = {
     "neighbor_name": "remote_hostname",
     "system_name": "remote_hostname",
     "device_id": "remote_hostname",
-    # Порт соседа - port_id НЕ маппится (обрабатывается отдельно)
-    "neighbor_interface": "remote_port",
+    # Порт соседа
+    # neighbor_port_id → remote_port (правильный порт из Port ID)
+    # neighbor_interface → port_description (это Port Description, НЕ порт!)
     "neighbor_port_id": "remote_port",
+    "neighbor_interface": "port_description",  # НЕ remote_port!
     "port_description": "port_description",
     # IP соседа
     "mgmt_ip": "remote_ip",
