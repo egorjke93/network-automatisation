@@ -13,6 +13,7 @@ from ..constants import normalize_interface_short
 
 
 # Маппинг полей из NTC Templates к стандартным именам
+# ВАЖНО: port_id обрабатывается отдельно (может быть MAC)
 KEY_MAPPING: Dict[str, str] = {
     # Локальный интерфейс
     "local_intf": "local_interface",
@@ -21,9 +22,10 @@ KEY_MAPPING: Dict[str, str] = {
     "neighbor_name": "remote_hostname",
     "system_name": "remote_hostname",
     "device_id": "remote_hostname",
-    # Порт соседа
+    # Порт соседа - port_id НЕ маппится (обрабатывается отдельно)
     "neighbor_interface": "remote_port",
-    "port_id": "remote_port",
+    "neighbor_port_id": "remote_port",
+    "port_description": "port_description",
     # IP соседа
     "mgmt_ip": "remote_ip",
     "mgmt_address": "remote_ip",
@@ -112,11 +114,32 @@ class LLDPNormalizer:
             Dict: Нормализованные данные
         """
         result = {}
+        port_id_value = None
 
         # Применяем маппинг ключей
         for key, value in row.items():
-            new_key = KEY_MAPPING.get(key.lower(), key.lower())
+            key_lower = key.lower()
+            # port_id обрабатываем отдельно (может быть MAC)
+            if key_lower == "port_id":
+                port_id_value = value
+                continue
+            new_key = KEY_MAPPING.get(key_lower, key_lower)
             result[new_key] = value
+
+        # Определяем remote_port с приоритетом:
+        # 1. remote_port (уже смаплен из neighbor_interface)
+        # 2. port_description (имя интерфейса)
+        # 3. port_id (если не похож на MAC)
+        if not result.get("remote_port"):
+            if result.get("port_description"):
+                result["remote_port"] = result["port_description"]
+            elif port_id_value:
+                # Если port_id похож на MAC - сохраняем в remote_mac
+                if self.is_mac_address(str(port_id_value)):
+                    if not result.get("remote_mac"):
+                        result["remote_mac"] = port_id_value
+                else:
+                    result["remote_port"] = port_id_value
 
         # Определяем тип идентификации соседа
         result["neighbor_type"] = self.determine_neighbor_type(result)

@@ -265,6 +265,8 @@ class MACNormalizer:
         self,
         mac_table: List[Dict[str, Any]],
         sticky_macs: List[Dict[str, Any]],
+        hostname: str = "",
+        device_ip: str = "",
     ) -> List[Dict[str, Any]]:
         """
         Объединяет MAC-таблицу со sticky MAC из port-security.
@@ -274,6 +276,8 @@ class MACNormalizer:
         Args:
             mac_table: Основная MAC-таблица
             sticky_macs: Sticky MAC из port-security
+            hostname: Имя устройства (для добавления к sticky)
+            device_ip: IP устройства (для добавления к sticky)
 
         Returns:
             List[Dict]: Объединённые данные
@@ -288,6 +292,11 @@ class MACNormalizer:
             mac_raw = normalize_mac_raw(sticky.get("mac", ""))
             if mac_raw not in existing_macs:
                 sticky["status"] = "offline"
+                # Добавляем hostname и device_ip из основной таблицы
+                if hostname and "hostname" not in sticky:
+                    sticky["hostname"] = hostname
+                if device_ip and "device_ip" not in sticky:
+                    sticky["device_ip"] = device_ip
                 result.append(sticky)
 
         return result

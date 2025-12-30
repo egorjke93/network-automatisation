@@ -1141,6 +1141,25 @@ def cmd_sync_netbox(args, ctx=None) -> None:
         # collect() теперь возвращает List[DeviceInfo]
         device_infos = collector.collect(devices)
         if device_infos:
+            # Показываем diff если запрошено
+            show_diff = getattr(args, "show_diff", False)
+            if show_diff:
+                diff_calc = DiffCalculator(client)
+                # Конвертируем DeviceInfo в dict для diff
+                inventory_dicts = [
+                    d.to_dict() if hasattr(d, "to_dict") else d
+                    for d in device_infos
+                ]
+                diff = diff_calc.diff_devices(
+                    inventory_dicts,
+                    site=getattr(args, "site", "Main"),
+                    update_existing=update_devices,
+                )
+                if diff.has_changes:
+                    logger.info(f"\n{diff.format_detailed()}")
+                else:
+                    logger.info("Устройства: нет изменений")
+
             sync.sync_devices_from_inventory(
                 device_infos,
                 site=getattr(args, "site", "Main"),
@@ -1176,7 +1195,7 @@ def cmd_sync_netbox(args, ctx=None) -> None:
                     # Конвертируем в список dict для DiffCalculator
                     intf_dicts = [intf.to_dict() if hasattr(intf, "to_dict") else intf for intf in data]
                     diff = diff_calc.diff_interfaces(hostname, intf_dicts)
-                    if diff.has_changes():
+                    if diff.has_changes:
                         logger.info(f"\n{diff.format_detailed()}")
                     else:
                         logger.info(f"Интерфейсы {hostname}: нет изменений")
@@ -1218,6 +1237,10 @@ def cmd_sync_netbox(args, ctx=None) -> None:
             transport=args.transport,
         )
 
+        # DiffCalculator для показа изменений
+        show_diff = getattr(args, "show_diff", False)
+        diff_calc = DiffCalculator(client) if show_diff else None
+
         for device in devices:
             interfaces = collector.collect([device])
             if interfaces:
@@ -1235,6 +1258,15 @@ def cmd_sync_netbox(args, ctx=None) -> None:
                     if intf.ip_address
                 ]
                 if ip_entries:
+                    # Показываем diff если запрошено
+                    if diff_calc:
+                        ip_dicts = [e.to_dict() if hasattr(e, "to_dict") else e for e in ip_entries]
+                        diff = diff_calc.diff_ip_addresses(hostname, ip_dicts)
+                        if diff.has_changes:
+                            logger.info(f"\n{diff.format_detailed()}")
+                        else:
+                            logger.info(f"IP-адреса {hostname}: нет изменений")
+
                     sync.sync_ip_addresses(
                         hostname,
                         ip_entries,

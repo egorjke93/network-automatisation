@@ -212,7 +212,9 @@ class MACCollector(BaseCollector):
                 if self.collect_port_security:
                     sticky_macs = self._collect_sticky_macs(conn, device, interface_status)
                     # Domain Layer: объединение через MACNormalizer
-                    data = self._normalizer.merge_sticky_macs(data, sticky_macs)
+                    data = self._normalizer.merge_sticky_macs(
+                        data, sticky_macs, hostname=hostname, device_ip=device.host
+                    )
                     logger.debug(f"{hostname}: добавлено {len(sticky_macs)} sticky MACs")
 
                 # Добавляем описание интерфейса
