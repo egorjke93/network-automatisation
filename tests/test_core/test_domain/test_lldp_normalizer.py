@@ -234,7 +234,7 @@ class TestLLDPNormalizerMerge:
         assert hostnames == {"switch2", "switch3"}
 
     def test_merge_hostname_priority(self):
-        """CDP hostname имеет приоритет над LLDP MAC."""
+        """CDP hostname имеет приоритет (CDP база)."""
         lldp_data = [
             {
                 "local_interface": "Gi0/1",
@@ -251,8 +251,10 @@ class TestLLDPNormalizerMerge:
 
         result = self.normalizer.merge_lldp_cdp(lldp_data, cdp_data)
 
+        # CDP как база — hostname из CDP
         assert result[0]["remote_hostname"] == "real-switch"
-        assert result[0]["neighbor_type"] == "hostname"
+        # MAC из LLDP дополняет
+        assert result[0]["remote_mac"] == "00:11:22:33:44:55"
 
     def test_merge_remote_port_cdp_preferred(self):
         """CDP port предпочтительнее если LLDP port похож на hostname."""
@@ -275,13 +277,14 @@ class TestLLDPNormalizerMerge:
 
         assert result[0]["remote_port"] == "Gi0/2"
 
-    def test_merge_keeps_lldp_port_if_valid(self):
-        """Если LLDP port валидный — не перезаписываем."""
+    def test_merge_cdp_port_priority(self):
+        """CDP port имеет приоритет (CDP база)."""
         lldp_data = [
             {
                 "local_interface": "Gi0/1",
                 "remote_hostname": "switch2",
                 "remote_port": "Eth1/1",
+                "remote_mac": "aa:bb:cc:dd:ee:ff",
             }
         ]
         cdp_data = [
@@ -294,8 +297,10 @@ class TestLLDPNormalizerMerge:
 
         result = self.normalizer.merge_lldp_cdp(lldp_data, cdp_data)
 
-        # LLDP port сохраняется
-        assert result[0]["remote_port"] == "Eth1/1"
+        # CDP как база — port из CDP
+        assert result[0]["remote_port"] == "Ethernet1/1"
+        # MAC из LLDP дополняет
+        assert result[0]["remote_mac"] == "aa:bb:cc:dd:ee:ff"
 
 
 @pytest.mark.unit

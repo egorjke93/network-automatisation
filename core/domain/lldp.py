@@ -128,18 +128,36 @@ class LLDPNormalizer:
 
         # Определяем remote_port с приоритетом:
         # 1. remote_port (уже смаплен из neighbor_interface)
-        # 2. port_description (имя интерфейса)
-        # 3. port_id (если не похож на MAC)
+        # 2. port_id (если похож на интерфейс: Te/Gi/Fa/Et/Po)
+        # 3. port_description (если похож на интерфейс)
+        # 4. port_id (если не MAC) или port_description
         if not result.get("remote_port"):
-            if result.get("port_description"):
-                result["remote_port"] = result["port_description"]
-            elif port_id_value:
-                # Если port_id похож на MAC - сохраняем в remote_mac
-                if self.is_mac_address(str(port_id_value)):
+            port_desc = result.get("port_description", "")
+
+            if port_id_value:
+                port_id_str = str(port_id_value).strip()
+
+                # Если port_id похож на интерфейс — используем его
+                if self._is_interface_name(port_id_str):
+                    result["remote_port"] = port_id_str
+                # Если port_id — это MAC, сохраняем в remote_mac
+                elif self.is_mac_address(port_id_str):
                     if not result.get("remote_mac"):
-                        result["remote_mac"] = port_id_value
+                        result["remote_mac"] = port_id_str
+                    # port_description как fallback для remote_port
+                    if port_desc:
+                        result["remote_port"] = port_desc
+                # port_id не интерфейс и не MAC
                 else:
-                    result["remote_port"] = port_id_value
+                    # Если port_description — интерфейс, используем его
+                    if port_desc and self._is_interface_name(port_desc):
+                        result["remote_port"] = port_desc
+                    # Иначе используем port_id как есть
+                    else:
+                        result["remote_port"] = port_id_str
+            # Нет port_id — используем port_description
+            elif port_desc:
+                result["remote_port"] = port_desc
 
         # Определяем тип идентификации соседа
         result["neighbor_type"] = self.determine_neighbor_type(result)
@@ -199,6 +217,49 @@ class LLDPNormalizer:
         ]
         return any(re.match(p, value) for p in mac_patterns)
 
+    def _is_interface_name(self, value: str) -> bool:
+        """
+        Проверяет является ли строка именем интерфейса.
+
+        Cisco/Arista/Juniper форматы:
+        - GigabitEthernet0/1, Gi0/1
+        - TenGigabitEthernet1/1/4, Te1/1/4
+        - FastEthernet0/1, Fa0/1
+        - Ethernet1/1, Et1/1
+        - Port-channel1, Po1
+        - mgmt0, Vlan100, Loopback0
+
+        Args:
+            value: Строка для проверки
+
+        Returns:
+            bool: True если похоже на интерфейс
+        """
+        if not value:
+            return False
+
+        value_lower = value.lower()
+
+        # Префиксы интерфейсов
+        interface_prefixes = (
+            "gi", "te", "fa", "et", "po", "xe", "ge",  # Короткие
+            "gigabit", "tengig", "fasteth", "ethernet", "port-channel",  # Полные
+            "mgmt", "vlan", "loopback", "lo", "null",  # Специальные
+            "hundredgig", "fortygig", "twentyfivegig",  # Высокоскоростные
+        )
+
+        # Проверяем начинается ли с префикса интерфейса
+        for prefix in interface_prefixes:
+            if value_lower.startswith(prefix):
+                return True
+
+        # Паттерн: буквы + цифры/слэши (например: eth1/1, swp1)
+        # Минимум 2 буквы чтобы отличить от просто числа
+        if re.match(r"^[a-zA-Z]{2,}\d+[/\d]*$", value):
+            return True
+
+        return False
+
     def merge_lldp_cdp(
         self,
         lldp_data: List[Dict[str, Any]],
@@ -207,11 +268,11 @@ class LLDPNormalizer:
         """
         Объединяет данные LLDP и CDP.
 
-        LLDP берётся как база (есть MAC chassis_id), дополняется из CDP:
-        - remote_hostname (если LLDP не дал system_name)
-        - remote_platform
-        - remote_ip
-        - remote_port
+        CDP имеет ПРИОРИТЕТ (проприетарный Cisco, надёжнее):
+        - local_interface, remote_port, remote_hostname, remote_platform, remote_ip
+
+        LLDP ДОПОЛНЯЕТ:
+        - remote_mac (chassis_id) — главное что даёт LLDP
 
         Args:
             lldp_data: Нормализованные данные LLDP
@@ -225,103 +286,96 @@ class LLDPNormalizer:
         if not cdp_data:
             return lldp_data
 
-        # Индекс CDP по local_interface
-        cdp_by_interface = {}
-        for cdp_row in cdp_data:
-            local_intf = normalize_interface_short(
-                cdp_row.get("local_interface", ""), lowercase=True
-            )
-            if local_intf:
-                cdp_by_interface[local_intf] = cdp_row
-
-        merged = []
+        # Индекс LLDP по local_interface для поиска MAC
+        lldp_by_interface = {}
         for lldp_row in lldp_data:
             local_intf = normalize_interface_short(
                 lldp_row.get("local_interface", ""), lowercase=True
             )
-            cdp_row = cdp_by_interface.get(local_intf)
+            if local_intf:
+                lldp_by_interface[local_intf] = lldp_row
 
-            if cdp_row:
-                lldp_row = self._merge_neighbor(lldp_row, cdp_row)
-                del cdp_by_interface[local_intf]
+        merged = []
+        used_lldp_interfaces = set()
 
-            lldp_row["protocol"] = "BOTH"
-            merged.append(lldp_row)
+        # CDP как база
+        for cdp_row in cdp_data:
+            local_intf = normalize_interface_short(
+                cdp_row.get("local_interface", ""), lowercase=True
+            )
+            lldp_row = lldp_by_interface.get(local_intf)
 
-        # Добавляем CDP соседей без LLDP
-        for cdp_row in cdp_by_interface.values():
-            cdp_row["protocol"] = "BOTH"
-            merged.append(cdp_row)
+            if lldp_row:
+                # CDP база, LLDP дополняет
+                result = self._merge_cdp_with_lldp(cdp_row, lldp_row)
+                used_lldp_interfaces.add(local_intf)
+            else:
+                result = dict(cdp_row)
+
+            result["protocol"] = "BOTH"
+            merged.append(result)
+
+        # Добавляем LLDP соседей без CDP (например, не-Cisco устройства)
+        for lldp_row in lldp_data:
+            local_intf = normalize_interface_short(
+                lldp_row.get("local_interface", ""), lowercase=True
+            )
+            if local_intf not in used_lldp_interfaces:
+                lldp_row = dict(lldp_row)
+                lldp_row["protocol"] = "BOTH"
+                merged.append(lldp_row)
 
         return merged
 
-    def _merge_neighbor(
+    def _merge_cdp_with_lldp(
         self,
-        lldp_row: Dict[str, Any],
         cdp_row: Dict[str, Any],
+        lldp_row: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
-        Объединяет данные одного соседа из LLDP и CDP.
+        Объединяет данные: CDP база, LLDP дополняет.
+
+        CDP поля имеют ПРИОРИТЕТ:
+        - local_interface
+        - remote_port
+        - remote_hostname
+        - remote_platform
+        - remote_ip
+
+        LLDP ДОПОЛНЯЕТ:
+        - remote_mac (главное что даёт LLDP)
+        - capabilities (если нет в CDP)
 
         Args:
-            lldp_row: Данные из LLDP
-            cdp_row: Данные из CDP
+            cdp_row: Данные из CDP (приоритет)
+            lldp_row: Данные из LLDP (дополнение)
 
         Returns:
             Dict: Объединённые данные
         """
-        result = dict(lldp_row)
+        # CDP как база
+        result = dict(cdp_row)
 
-        # Hostname из CDP если LLDP не дал
-        lldp_hostname = result.get("remote_hostname", "")
-        if not lldp_hostname or lldp_hostname.startswith("["):
-            cdp_hostname = cdp_row.get("remote_hostname", "")
-            if cdp_hostname and not cdp_hostname.startswith("["):
-                result["remote_hostname"] = cdp_hostname
-                result["neighbor_type"] = "hostname"
+        # LLDP дополняет MAC (главная ценность LLDP)
+        if not result.get("remote_mac") and lldp_row.get("remote_mac"):
+            result["remote_mac"] = lldp_row["remote_mac"]
 
-        # Дополняем пустые поля
-        if not result.get("remote_platform") and cdp_row.get("remote_platform"):
-            result["remote_platform"] = cdp_row["remote_platform"]
+        # LLDP дополняет capabilities
+        if not result.get("capabilities") and lldp_row.get("capabilities"):
+            result["capabilities"] = lldp_row["capabilities"]
 
-        if not result.get("remote_ip") and cdp_row.get("remote_ip"):
-            result["remote_ip"] = cdp_row["remote_ip"]
-
-        # remote_port: проверяем что это интерфейс
-        lldp_port = result.get("remote_port", "")
-        cdp_port = cdp_row.get("remote_port", "")
-
-        if self._should_use_cdp_port(lldp_port, cdp_port):
-            result["remote_port"] = cdp_port
+        # Если CDP не дал hostname, берём из LLDP
+        if not result.get("remote_hostname"):
+            lldp_hostname = lldp_row.get("remote_hostname", "")
+            if lldp_hostname:
+                result["remote_hostname"] = lldp_hostname
+                # Если это MAC-fallback, сохраняем neighbor_type
+                if lldp_hostname.startswith("["):
+                    result["neighbor_type"] = lldp_row.get("neighbor_type", "mac")
+                else:
+                    result["neighbor_type"] = "hostname"
 
         return result
-
-    def _should_use_cdp_port(self, lldp_port: str, cdp_port: str) -> bool:
-        """
-        Определяет нужно ли использовать port из CDP.
-
-        LLDP port иногда содержит hostname вместо интерфейса.
-
-        Args:
-            lldp_port: Port из LLDP
-            cdp_port: Port из CDP
-
-        Returns:
-            bool: True если использовать CDP
-        """
-        if not cdp_port:
-            return False
-
-        if not lldp_port:
-            return True
-
-        # Если LLDP port похож на hostname (нет / и много букв)
-        if "/" not in lldp_port and len(lldp_port) > 15:
-            prefix = lldp_port[:2].lower()
-            if prefix not in ("gi", "fa", "te", "et", "po"):
-                return True
-
-        return False
 
     def filter_by_local_interface(
         self,

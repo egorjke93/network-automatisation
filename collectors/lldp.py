@@ -312,11 +312,8 @@ class LLDPCollector(BaseCollector):
             if match:
                 neighbor["remote_ip"] = match.group(1)
 
-            # Определяем remote_port: port_description > port_id (если это интерфейс)
-            if "port_description" in neighbor and neighbor["port_description"]:
-                neighbor["remote_port"] = neighbor["port_description"]
-            elif "port_id" in neighbor:
-                neighbor["remote_port"] = neighbor["port_id"]
+            # remote_port определяется в Domain Layer (LLDPNormalizer)
+            # Здесь оставляем сырые port_id и port_description
 
             # Добавляем только если есть хоть какие-то данные о соседе
             if neighbor.get("chassis_id") or neighbor.get("remote_hostname"):

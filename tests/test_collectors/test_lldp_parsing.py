@@ -46,7 +46,9 @@ Management Addresses:
         assert len(result) == 1
         assert result[0]["local_interface"] == "Gi1/0/49"
         assert result[0]["chassis_id"] == "001a.3008.6c00"
-        assert result[0]["remote_port"] == "GigabitEthernet3/13"  # port_description приоритет
+        # Collector возвращает сырые данные, remote_port ставится в Domain
+        assert result[0]["port_id"] == "Gi3/13"
+        assert result[0]["port_description"] == "GigabitEthernet3/13"
         assert result[0]["remote_hostname"] == "c6509-e.corp.ogk4.ru"
         assert result[0]["remote_ip"] == "10.195.124.8"
 
@@ -72,7 +74,9 @@ Management Addresses:
 
         assert len(result) == 1
         assert result[0]["chassis_id"] == "0090.e86f.a0f6"
-        assert result[0]["remote_port"] == "100TX,RJ45."  # port_description
+        # Collector возвращает сырые данные
+        assert result[0]["port_id"] == "3"
+        assert result[0]["port_description"] == "100TX,RJ45."
         assert result[0]["remote_hostname"] == "Managed Redundant Switch 06355"
         assert result[0]["remote_ip"] == "10.195.37.36"
         # local_interface отсутствует в этом формате
