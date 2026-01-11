@@ -5,6 +5,9 @@
     config.output.mac_format
     config.netbox.url
     config.filters.exclude_vlans
+
+Валидация через Pydantic (опционально):
+    config.validate()  # raises ConfigError on failure
 """
 
 import os
@@ -12,6 +15,14 @@ import logging
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# Pydantic валидация (опциональна)
+PYDANTIC_AVAILABLE = False
+try:
+    from .core.config_schema import validate_config, AppConfig
+    PYDANTIC_AVAILABLE = True
+except ImportError:
+    pass
 
 # Путь к файлу конфигурации
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.yaml")
@@ -117,6 +128,17 @@ class Config:
                     r"^Sup-eth",
                 ],
             },
+            "logging": {
+                "level": "INFO",
+                "json_format": False,
+                "console": True,
+                "file_path": None,
+                "rotation": "size",
+                "max_bytes": 10 * 1024 * 1024,  # 10 MB
+                "backup_count": 5,
+                "when": "midnight",
+                "interval": 1,
+            },
             "debug": False,
             "devices_file": "devices_ips.py",
         }
@@ -182,6 +204,38 @@ class Config:
         self._data = self._get_defaults()
         self._load_yaml(config_file)
         self._load_env()
+
+    def validate(self) -> bool:
+        """
+        Валидирует конфигурацию через Pydantic.
+
+        Returns:
+            bool: True если валидация прошла
+
+        Raises:
+            ConfigError: При ошибке валидации
+            ImportError: Если Pydantic не установлен
+        """
+        if not PYDANTIC_AVAILABLE:
+            raise ImportError("Pydantic не установлен. Установите: pip install pydantic")
+
+        validate_config(self._data)
+        return True
+
+    def get_validated(self) -> "AppConfig":
+        """
+        Возвращает валидированную Pydantic модель.
+
+        Returns:
+            AppConfig: Pydantic модель конфигурации
+
+        Raises:
+            ConfigError: При ошибке валидации
+        """
+        if not PYDANTIC_AVAILABLE:
+            raise ImportError("Pydantic не установлен")
+
+        return validate_config(self._data)
 
 
 # Глобальный экземпляр

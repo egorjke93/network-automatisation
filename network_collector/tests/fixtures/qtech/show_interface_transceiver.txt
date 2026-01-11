@@ -1,0 +1,227 @@
+========Interface TFGigabitEthernet 0/1========
+Transceiver Type    :  10GBASE-SR-SFP+
+Connector Type      :  LC
+Wavelength(nm)      :  850
+Transfer Distance   : 
+    50/125 um OM2 fiber
+        -- 80m
+    62.5/125 um OM1 fiber
+        -- 30m
+    50/125 um OM3 fiber
+        -- 300m
+Digital Diagnostic Monitoring  : YES
+Vendor Serial Number           : RQ114410301879  
+Transfer BandWidth             : 10300Mbit/s (10Gbit/s)
+
+Current diagnostic parameters[AP:Average Power]:
+Temp(Celsius)   Voltage(V)      Bias(mA)            RX power(dBm)       TX power(dBm)
+25(OK)          3.29(OK)        5.58(OK)            -3.31(OK)[AP]       -2.49(OK)
+
+Diagnostic parameters threshold:
+                Low Alarm       Low Warn            High Warn           High Alarm
+Temp(Celsius)   -10             -5                  75                  80
+Voltage(V)      2.90            3.00                3.59                3.70
+Bias(mA)        1.00            2.00                15.00               16.00
+RX power(dBm)   -14.00          -13.00              1.00                2.00
+TX power(dBm)   -8.00           -7.00               1.00                2.00
+
+Transceiver current alarm information:
+None
+
+========Interface TFGigabitEthernet 0/2========
+Transceiver Type    :  10GBASE-SR-SFP+
+Connector Type      :  LC
+Wavelength(nm)      :  850
+Transfer Distance   : 
+    50/125 um OM2 fiber
+        -- 80m
+    62.5/125 um OM1 fiber
+        -- 30m
+    50/125 um OM3 fiber
+        -- 300m
+Digital Diagnostic Monitoring  : YES
+Vendor Serial Number           : RQ114410301876  
+Transfer BandWidth             : 10300Mbit/s (10Gbit/s)
+
+Current diagnostic parameters[AP:Average Power]:
+Temp(Celsius)   Voltage(V)      Bias(mA)            RX power(dBm)       TX power(dBm)
+25(OK)          3.29(OK)        5.62(OK)            -1.16(OK)[AP]       -2.50(OK)
+
+Diagnostic parameters threshold:
+                Low Alarm       Low Warn            High Warn           High Alarm
+Temp(Celsius)   -10             -5                  75                  80
+Voltage(V)      2.90            3.00                3.59                3.70
+Bias(mA)        1.00            2.00                15.00               16.00
+RX power(dBm)   -14.00          -13.00              1.00                2.00
+TX power(dBm)   -8.00           -7.00               1.00                2.00
+
+Transceiver current alarm information:
+None
+
+========Interface TFGigabitEthernet 0/3========
+Interface TFGigabitEthernet 0/3 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/4========
+Interface TFGigabitEthernet 0/4 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/5========
+Interface TFGigabitEthernet 0/5 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/6========
+Interface TFGigabitEthernet 0/6 : the transceiver is absent!
+          
+========Interface TFGigabitEthernet 0/7========
+Interface TFGigabitEthernet 0/7 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/8========
+Interface TFGigabitEthernet 0/8 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/9========
+Interface TFGigabitEthernet 0/9 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/10========
+Interface TFGigabitEthernet 0/10 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/11========
+Interface TFGigabitEthernet 0/11 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/12========
+Interface TFGigabitEthernet 0/12 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/13========
+Interface TFGigabitEthernet 0/13 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/14========
+Interface TFGigabitEthernet 0/14 : the transceiver is absent!
+          
+========Interface TFGigabitEthernet 0/15========
+Interface TFGigabitEthernet 0/15 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/16========
+Interface TFGigabitEthernet 0/16 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/17========
+Interface TFGigabitEthernet 0/17 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/18========
+Interface TFGigabitEthernet 0/18 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/19========
+Interface TFGigabitEthernet 0/19 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/20========
+Interface TFGigabitEthernet 0/20 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/21========
+Interface TFGigabitEthernet 0/21 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/22========
+Interface TFGigabitEthernet 0/22 : the transceiver is absent!
+          
+========Interface TFGigabitEthernet 0/23========
+Interface TFGigabitEthernet 0/23 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/24========
+Interface TFGigabitEthernet 0/24 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/25========
+Interface TFGigabitEthernet 0/25 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/26========
+Interface TFGigabitEthernet 0/26 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/27========
+Interface TFGigabitEthernet 0/27 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/28========
+Interface TFGigabitEthernet 0/28 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/29========
+Interface TFGigabitEthernet 0/29 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/30========
+Interface TFGigabitEthernet 0/30 : the transceiver is absent!
+          
+========Interface TFGigabitEthernet 0/31========
+Interface TFGigabitEthernet 0/31 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/32========
+Interface TFGigabitEthernet 0/32 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/33========
+Interface TFGigabitEthernet 0/33 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/34========
+Interface TFGigabitEthernet 0/34 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/35========
+Interface TFGigabitEthernet 0/35 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/36========
+Interface TFGigabitEthernet 0/36 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/37========
+Interface TFGigabitEthernet 0/37 : the transceiver is absent!
+
+========Interface TFGigabitEthernet 0/38========
+Interface TFGigabitEthernet 0/38 : the transceiver is absent!
+          
+========Interface TFGigabitEthernet 0/39========
+Transceiver Type    :  10GBASE-SR-SFP+
+Connector Type      :  LC
+Wavelength(nm)      :  850
+Transfer Distance   : 
+    50/125 um OM2 fiber
+        -- 80m
+    62.5/125 um OM1 fiber
+        -- 20m
+    50/125 um OM3 fiber
+        -- 300m
+Digital Diagnostic Monitoring  : YES
+Vendor Serial Number           : RQ114410303396  
+Transfer BandWidth             : 10300Mbit/s (10Gbit/s)
+
+Current diagnostic parameters[AP:Average Power]:
+Temp(Celsius)   Voltage(V)      Bias(mA)            RX power(dBm)       TX power(dBm)
+33(OK)          3.30(OK)        4.46(OK)            -40.00(OK)[AP]      -3.00(OK)
+
+Diagnostic parameters threshold:
+                Low Alarm       Low Warn            High Warn           High Alarm
+Temp(Celsius)   -10             -5                  70                  75
+Voltage(V)      2.97            3.13                3.46                3.63
+Bias(mA)        0.00            0.00                20.00               25.00
+RX power(dBm)   -40.00          -40.00              0.00                1.00
+TX power(dBm)   -40.00          -40.00              0.00                1.00
+
+Transceiver current alarm information:
+None
+
+========Interface TFGigabitEthernet 0/40========
+Transceiver Type    :  10GBASE-SR-SFP+
+Connector Type      :  LC
+Wavelength(nm)      :  850
+Transfer Distance   : 
+    50/125 um OM2 fiber
+        -- 80m
+    62.5/125 um OM1 fiber
+        -- 20m
+    50/125 um OM3 fiber
+        -- 300m
+Digital Diagnostic Monitoring  : YES
+Vendor Serial Number           : RQ114410303398  
+Transfer BandWidth             : 10300Mbit/s (10Gbit/s)
+
+Current diagnostic parameters[AP:Average Power]:
+Temp(Celsius)   Voltage(V)      Bias(mA)            RX power(dBm)       TX power(dBm)
+35(OK)          3.32(OK)        4.46(OK)            -40.00(OK)[AP]      -3.00(OK)
+
+Diagnostic parameters threshold:
+                Low Alarm       Low Warn            High Warn           High Alarm
+Temp(Celsius)   -10             -5                  70                  75
+Voltage(V)      2.97            3.13                3.46                3.63
+Bias(mA)        0.00            0.00                20.00               25.00
+RX power(dBm)   -40.00          -40.00              0.00                1.00
+TX power(dBm)   -40.00          -40.00              0.00                1.00
+
+Transceiver current alarm information:
+None

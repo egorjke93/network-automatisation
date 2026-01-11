@@ -24,13 +24,22 @@
 """
 
 import re
-import logging
 from typing import List, Dict, Any, Optional
 
 from .base import BaseCollector
 from ..core.device import Device
+from ..core.models import LLDPNeighbor
+from ..core.logging import get_logger
+from ..core.exceptions import (
+    ConnectionError,
+    AuthenticationError,
+    TimeoutError,
+    format_error_for_log,
+)
+from ..core.constants import COLLECTOR_COMMANDS, normalize_interface_short
+from ..core.domain.lldp import LLDPNormalizer
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LLDPCollector(BaseCollector):
@@ -44,24 +53,28 @@ class LLDPCollector(BaseCollector):
 
     Example:
         collector = LLDPCollector(protocol="both")
-        neighbors = collector.collect(devices)
+        neighbors = collector.collect(devices)  # List[Dict]
+
+        # Или типизированные модели
+        neighbors = collector.collect_models(devices)  # List[LLDPNeighbor]
     """
 
-    # Команды для LLDP
-    lldp_commands = {
-        "cisco_ios": "show lldp neighbors detail",
-        "cisco_iosxe": "show lldp neighbors detail",
-        "cisco_nxos": "show lldp neighbors detail",
-        "arista_eos": "show lldp neighbors detail",
-        "juniper_junos": "show lldp neighbors",
+    # Типизированная модель
+    model_class = LLDPNeighbor
+
+    # Команды для LLDP (detail) - из централизованного хранилища
+    lldp_commands = COLLECTOR_COMMANDS.get("lldp", {})
+
+    # Команды для LLDP summary (для local interface)
+    lldp_summary_commands = {
+        "cisco_ios": "show lldp neighbors",
+        "cisco_iosxe": "show lldp neighbors",
+        "cisco_nxos": "show lldp neighbors",
+        "arista_eos": "show lldp neighbors",
     }
 
-    # Команды для CDP
-    cdp_commands = {
-        "cisco_ios": "show cdp neighbors detail",
-        "cisco_iosxe": "show cdp neighbors detail",
-        "cisco_nxos": "show cdp neighbors detail",
-    }
+    # Команды для CDP - из централизованного хранилища
+    cdp_commands = COLLECTOR_COMMANDS.get("cdp", {})
 
     def __init__(
         self,
@@ -77,6 +90,7 @@ class LLDPCollector(BaseCollector):
         """
         super().__init__(**kwargs)
         self.protocol = protocol.lower()
+        self._normalizer = LLDPNormalizer()
 
         # Устанавливаем команды в зависимости от протокола
         if self.protocol == "cdp":
@@ -94,14 +108,15 @@ class LLDPCollector(BaseCollector):
         Для protocol="both" собирает оба протокола и объединяет данные:
         - MAC адрес из LLDP (chassis_id)
         - Platform из CDP
-        """
-        from ..core.connection import get_ntc_platform
 
+        Архитектура:
+        1. Collector: парсинг (TextFSM/regex) → сырые данные
+        2. Domain (LLDPNormalizer): нормализация → типизированные данные
+        """
         command = self._get_command(device)
-        ntc_platform = get_ntc_platform(device.device_type)
 
         if not command:
-            logger.warning(f"Нет команды для {device.device_type}")
+            logger.warning(f"Нет команды для {device.platform}")
             return []
 
         try:
@@ -111,137 +126,222 @@ class LLDPCollector(BaseCollector):
 
                 if self.protocol == "both":
                     # Собираем оба протокола и объединяем
-                    data = self._collect_both_protocols(conn, device)
+                    raw_data = self._collect_both_protocols(conn, device, hostname)
                 else:
-                    # Один протокол
+                    # Один протокол - парсим сырые данные
                     response = conn.send_command(command)
-                    data = self._parse_output(response.result, device)
+                    raw_data = self._parse_output(response.result, device)
+                    # Нормализация через Domain Layer
+                    raw_data = self._normalizer.normalize_dicts(
+                        raw_data,
+                        protocol=self.protocol,
+                        hostname=hostname,
+                        device_ip=device.host,
+                    )
+                    # Для LLDP: дополняем local_interface из summary если пустой
+                    if self.protocol == "lldp":
+                        raw_data = self._enrich_from_summary(conn, device, raw_data)
 
-                # Добавляем hostname и протокол к каждой записи
-                for row in data:
-                    row["hostname"] = hostname
-                    row["device_ip"] = device.host
-                    if "protocol" not in row:
-                        row["protocol"] = self.protocol.upper()
+                logger.info(f"{hostname}: собрано {len(raw_data)} записей")
+                return raw_data
 
-                logger.info(f"{hostname}: собрано {len(data)} записей")
-                return data
-
+        except (ConnectionError, AuthenticationError, TimeoutError) as e:
+            logger.error(f"Ошибка подключения к {device.host}: {format_error_for_log(e)}")
+            return []
         except Exception as e:
-            logger.error(f"Ошибка подключения к {device.host}: {e}")
+            logger.error(f"Неизвестная ошибка с {device.host}: {e}")
             return []
 
-    def _collect_both_protocols(self, conn, device: Device) -> List[Dict[str, Any]]:
+    def _collect_both_protocols(
+        self, conn, device: Device, hostname: str
+    ) -> List[Dict[str, Any]]:
         """
         Собирает LLDP и CDP, объединяет данные для получения полной информации.
 
         LLDP даёт: MAC адрес (chassis_id)
         CDP даёт: Platform, capabilities
 
+        Использует Domain Layer для нормализации и объединения.
+
+        Если в LLDP detail нет local_interface, дополняем из LLDP summary.
+
+        Args:
+            conn: Активное подключение
+            device: Устройство
+            hostname: Имя устройства
+
         Returns:
-            List[Dict]: Объединённые данные соседей
+            List[Dict]: Объединённые нормализованные данные
         """
         lldp_data = []
         cdp_data = []
+        lldp_summary = {}  # device_id -> local_interface
 
-        # Собираем LLDP
-        lldp_command = self.lldp_commands.get(device.device_type)
+        # Сначала собираем LLDP summary для local_interface
+        lldp_summary_cmd = self.lldp_summary_commands.get(device.platform)
+        if lldp_summary_cmd:
+            try:
+                response = conn.send_command(lldp_summary_cmd)
+                lldp_summary = self._parse_lldp_summary(response.result)
+                logger.debug(f"{hostname}: LLDP summary: {len(lldp_summary)} записей")
+            except Exception as e:
+                logger.debug(f"{hostname}: Не удалось собрать LLDP summary: {e}")
+
+        # Собираем и нормализуем LLDP detail
+        lldp_command = self.lldp_commands.get(device.platform)
         if lldp_command:
-            self.protocol = "lldp"
             response = conn.send_command(lldp_command)
-            lldp_data = self._parse_output(response.result, device)
-            for row in lldp_data:
-                row["protocol"] = "LLDP"
+            raw_lldp = self._parse_output(response.result, device)
+            lldp_data = self._normalizer.normalize_dicts(
+                raw_lldp, protocol="lldp", hostname=hostname, device_ip=device.host
+            )
+            # Дополняем local_interface из summary если пустой
+            if lldp_summary:
+                lldp_data = self._enrich_local_interface(lldp_data, lldp_summary)
 
-        # Собираем CDP
-        cdp_command = self.cdp_commands.get(device.device_type)
+        # Собираем и нормализуем CDP
+        cdp_command = self.cdp_commands.get(device.platform)
         if cdp_command:
-            self.protocol = "cdp"
             response = conn.send_command(cdp_command)
-            cdp_data = self._parse_output(response.result, device)
-            for row in cdp_data:
-                row["protocol"] = "CDP"
+            raw_cdp = self._parse_output(response.result, device)
+            cdp_data = self._normalizer.normalize_dicts(
+                raw_cdp, protocol="cdp", hostname=hostname, device_ip=device.host
+            )
 
-        self.protocol = "both"
+        # Объединяем через Domain Layer
+        return self._normalizer.merge_lldp_cdp(lldp_data, cdp_data)
 
-        # Если только один протокол вернул данные
-        if not lldp_data:
-            return cdp_data
-        if not cdp_data:
-            return lldp_data
-
-        # Объединяем данные по local_interface
-        return self._merge_lldp_cdp(lldp_data, cdp_data)
-
-    def _merge_lldp_cdp(
-        self,
-        lldp_data: List[Dict[str, Any]],
-        cdp_data: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+    def _parse_lldp_summary(self, output: str) -> Dict[str, str]:
         """
-        Объединяет данные LLDP и CDP.
+        Парсит show lldp neighbors (без detail) для получения local interface.
 
-        Берёт LLDP как базу (есть MAC) и дополняет из CDP (platform).
-        Соседи сопоставляются по local_interface.
-
-        Args:
-            lldp_data: Данные LLDP
-            cdp_data: Данные CDP
+        Формат вывода:
+        Device ID           Local Intf     Hold-time  Capability      Port ID
+        switch2.domain      Gi0/1          120        B,R             Gi0/24
 
         Returns:
-            List[Dict]: Объединённые данные
+            Dict[str, str]: {device_id: local_interface}
         """
-        # Создаём индекс CDP по local_interface
-        cdp_by_interface = {}
-        for cdp_row in cdp_data:
-            local_intf = self._normalize_interface(cdp_row.get("local_interface", ""))
-            if local_intf:
-                cdp_by_interface[local_intf] = cdp_row
+        result = {}
 
-        # Дополняем LLDP данными из CDP
-        merged = []
-        for lldp_row in lldp_data:
-            local_intf = self._normalize_interface(lldp_row.get("local_interface", ""))
-            cdp_row = cdp_by_interface.get(local_intf)
+        # Пропускаем заголовок и пустые строки
+        lines = output.strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith('Device ID') or line.startswith('Capability'):
+                continue
+            if 'Total entries' in line:
+                continue
 
-            if cdp_row:
-                # Дополняем пустые поля из CDP
-                if not lldp_row.get("remote_platform") and cdp_row.get("remote_platform"):
-                    lldp_row["remote_platform"] = cdp_row["remote_platform"]
+            # Парсим строку: device_id, local_intf, hold-time, capability, port_id
+            # Формат может варьироваться, используем split
+            parts = line.split()
+            if len(parts) >= 2:
+                device_id = parts[0]
+                local_intf = parts[1]
+                # Проверяем что local_intf похож на интерфейс
+                if re.match(r'^(Gi|Fa|Te|Et|Eth|Po|mgmt)', local_intf, re.I):
+                    result[device_id.lower()] = local_intf
 
-                if not lldp_row.get("remote_ip") and cdp_row.get("remote_ip"):
-                    lldp_row["remote_ip"] = cdp_row["remote_ip"]
+        return result
 
-                # Убираем из CDP индекса — уже обработан
-                del cdp_by_interface[local_intf]
+    def _enrich_local_interface(
+        self, data: List[Dict[str, Any]], summary: Dict[str, str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Дополняет local_interface из summary если он пустой.
 
-            lldp_row["protocol"] = "BOTH"
-            merged.append(lldp_row)
+        Учитывает усечение hostname в выводе show lldp neighbors:
+        - Summary показывает "Managed Redundant S" (ограничение ширины столбца)
+        - Detail показывает "Managed Redundant Switch 06355"
+        - Сопоставляем по началу строки (startswith)
 
-        # Добавляем CDP соседей, которых нет в LLDP
-        for cdp_row in cdp_by_interface.values():
-            cdp_row["protocol"] = "BOTH"
-            merged.append(cdp_row)
+        Args:
+            data: Нормализованные LLDP данные
+            summary: {device_id: local_interface} из summary
 
-        return merged
+        Returns:
+            List[Dict]: Обогащённые данные
+        """
+        for entry in data:
+            if not entry.get("local_interface"):
+                remote = entry.get("remote_hostname", "").lower()
+                if not remote:
+                    continue
 
-    def _normalize_interface(self, interface: str) -> str:
-        """Нормализует имя интерфейса для сравнения."""
-        if not interface:
-            return ""
-        # Убираем пробелы и приводим к нижнему регистру
-        intf = interface.strip().lower()
-        # Убираем префиксы типа Ethernet -> Et, GigabitEthernet -> Gi
-        for full, short in [
-            ("ethernet", "et"),
-            ("gigabitethernet", "gi"),
-            ("fastethernet", "fa"),
-            ("tengigabitethernet", "te"),
-        ]:
-            if intf.startswith(full):
-                intf = short + intf[len(full):]
-                break
-        return intf
+                # 1. Точное совпадение
+                if remote in summary:
+                    entry["local_interface"] = summary[remote]
+                    logger.debug(f"Enriched local_interface: {remote} -> {summary[remote]}")
+                    continue
+
+                # 2. Без домена
+                remote_short = remote.split('.')[0]
+                if remote_short in summary:
+                    entry["local_interface"] = summary[remote_short]
+                    logger.debug(f"Enriched local_interface: {remote_short} -> {summary[remote_short]}")
+                    continue
+
+                # 3. Частичное совпадение (усечённые hostname)
+                # Summary может обрезать длинные имена: "Managed Redundant S" → 19 chars
+                # Собираем ВСЕ совпадения, используем только если УНИКАЛЬНОЕ
+                partial_matches = []
+                for summary_host, local_intf in summary.items():
+                    # "managed redundant switch 06355".startswith("managed redundant s")
+                    if remote.startswith(summary_host):
+                        partial_matches.append((summary_host, local_intf))
+                    # summary начинается с detail (если domain в summary)
+                    elif summary_host.startswith(remote_short):
+                        partial_matches.append((summary_host, local_intf))
+
+                # Используем только если ОДНО совпадение (чтобы не путать разные устройства)
+                if len(partial_matches) == 1:
+                    summary_host, local_intf = partial_matches[0]
+                    entry["local_interface"] = local_intf
+                    logger.debug(f"Enriched local_interface (partial): {summary_host} -> {local_intf}")
+                elif len(partial_matches) > 1:
+                    logger.debug(
+                        f"Multiple partial matches for {remote}, skipping: {partial_matches}"
+                    )
+        return data
+
+    def _enrich_from_summary(
+        self, conn, device: Device, data: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Дополняет local_interface из show lldp neighbors (summary).
+
+        Используется когда show lldp neighbors detail не содержит Local Intf.
+
+        Args:
+            conn: Активное подключение
+            device: Устройство
+            data: Нормализованные данные
+
+        Returns:
+            List[Dict]: Обогащённые данные
+        """
+        # Проверяем есть ли записи без local_interface
+        needs_enrichment = any(not d.get("local_interface") for d in data)
+        if not needs_enrichment:
+            return data
+
+        # Собираем summary
+        summary_cmd = self.lldp_summary_commands.get(device.platform)
+        if not summary_cmd:
+            return data
+
+        try:
+            response = conn.send_command(summary_cmd)
+            summary = self._parse_lldp_summary(response.result)
+            if summary:
+                return self._enrich_local_interface(data, summary)
+        except Exception as e:
+            logger.debug(f"Не удалось обогатить из summary: {e}")
+
+        return data
+
+    # Объединение LLDP/CDP перенесено в Domain Layer: core/domain/lldp.py → merge_lldp_cdp
 
     def _parse_output(
         self,
@@ -251,30 +351,34 @@ class LLDPCollector(BaseCollector):
         """
         Парсит вывод команды show lldp/cdp neighbors.
 
+        Возвращает СЫРЫЕ данные. Нормализация происходит в Domain Layer.
+
         Args:
             output: Сырой вывод команды
             device: Устройство
 
         Returns:
-            List[Dict]: Список соседей
+            List[Dict]: Сырые данные соседей
         """
         # Пробуем TextFSM
         if self.use_ntc:
             data = self._parse_with_textfsm(output, device)
             if data:
-                return self._normalize_data(data)
+                return data
 
         # Fallback на regex
         if self.protocol == "cdp":
-            data = self._parse_cdp_regex(output)
+            return self._parse_cdp_regex(output)
         else:
-            data = self._parse_lldp_regex(output)
-
-        return self._normalize_data(data) if data else []
+            return self._parse_lldp_regex(output)
 
     def _parse_lldp_regex(self, output: str) -> List[Dict[str, Any]]:
         """
         Парсит LLDP вывод с помощью regex.
+
+        Поддерживает два формата:
+        1. С "Local Intf:" (новые IOS)
+        2. Без "Local Intf:" (старые устройства) - берём local_interface из заголовка
 
         Args:
             output: Сырой вывод
@@ -284,24 +388,35 @@ class LLDPCollector(BaseCollector):
         """
         neighbors = []
 
-        # Разбиваем на блоки по соседям
-        # Ищем паттерны для Cisco IOS
+        # Паттерны для Cisco IOS LLDP
         local_intf_pattern = re.compile(r"Local Intf:\s*(\S+)")
         chassis_id_pattern = re.compile(r"Chassis id:\s*(\S+)")
-        port_id_pattern = re.compile(r"Port id:\s*(\S+)")
-        system_name_pattern = re.compile(r"System Name:\s*(.+)")
-        system_desc_pattern = re.compile(r"System Description:\s*(.+)")
+        port_id_pattern = re.compile(r"Port id:\s*(.+?)(?:\n|$)")
+        port_desc_pattern = re.compile(r"Port Description:\s*(.+?)(?:\n|$)")
+        system_name_pattern = re.compile(r"System Name:\s*(.+?)(?:\n|$)")
+        system_desc_pattern = re.compile(r"System Description:\s*\n(.+?)(?:\n\n|\nTime)", re.DOTALL)
+        mgmt_ip_pattern = re.compile(r"IP:\s*(\d+\.\d+\.\d+\.\d+)")
 
-        # Разбиваем по "Local Intf:"
-        blocks = re.split(r"(?=Local Intf:)", output)
+        # Определяем формат вывода
+        has_local_intf = "Local Intf:" in output
+
+        if has_local_intf:
+            # Формат с "Local Intf:" - разбиваем по нему
+            blocks = re.split(r"(?=Local Intf:)", output)
+        else:
+            # Формат без "Local Intf:" - разбиваем по разделителю блоков
+            blocks = re.split(r"-{20,}", output)
 
         for block in blocks:
             if not block.strip():
                 continue
+            # Пропускаем блоки без данных соседа
+            if "Chassis id:" not in block:
+                continue
 
             neighbor = {}
 
-            # Локальный интерфейс
+            # Локальный интерфейс (может отсутствовать в старом формате)
             match = local_intf_pattern.search(block)
             if match:
                 neighbor["local_interface"] = match.group(1)
@@ -311,22 +426,44 @@ class LLDPCollector(BaseCollector):
             if match:
                 neighbor["chassis_id"] = match.group(1)
 
-            # Port ID
+            # Port ID (remote port)
             match = port_id_pattern.search(block)
             if match:
-                neighbor["remote_port"] = match.group(1)
+                port_id = match.group(1).strip()
+                # Port ID может быть числом, MAC или именем интерфейса
+                neighbor["port_id"] = port_id
 
-            # System Name
+            # Port Description (может содержать имя интерфейса)
+            match = port_desc_pattern.search(block)
+            if match:
+                port_desc = match.group(1).strip()
+                if port_desc and port_desc != "- not advertised":
+                    neighbor["port_description"] = port_desc
+
+            # System Name (remote hostname)
             match = system_name_pattern.search(block)
             if match:
-                neighbor["remote_hostname"] = match.group(1).strip()
+                sys_name = match.group(1).strip()
+                if sys_name and sys_name != "- not advertised":
+                    neighbor["remote_hostname"] = sys_name
 
             # System Description
             match = system_desc_pattern.search(block)
             if match:
-                neighbor["remote_description"] = match.group(1).strip()
+                sys_desc = match.group(1).strip()
+                if sys_desc:
+                    neighbor["remote_description"] = sys_desc
 
-            if neighbor.get("local_interface"):
+            # Management IP
+            match = mgmt_ip_pattern.search(block)
+            if match:
+                neighbor["remote_ip"] = match.group(1)
+
+            # remote_port определяется в Domain Layer (LLDPNormalizer)
+            # Здесь оставляем сырые port_id и port_description
+
+            # Добавляем только если есть хоть какие-то данные о соседе
+            if neighbor.get("chassis_id") or neighbor.get("remote_hostname"):
                 neighbors.append(neighbor)
 
         return neighbors
@@ -389,114 +526,4 @@ class LLDPCollector(BaseCollector):
 
         return neighbors
 
-    def _normalize_data(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Нормализует данные соседей.
-
-        Добавляет поле neighbor_type для определения способа идентификации:
-        - hostname: Известно имя устройства
-        - mac: Только MAC-адрес
-        - ip: Только IP-адрес
-        - unknown: Не удалось идентифицировать
-
-        Args:
-            data: Сырые данные
-
-        Returns:
-            List[Dict]: Нормализованные данные с типом соседа
-        """
-        # Приводим ключи к единому формату
-        # Маппинг полей из NTC Templates к нашим стандартным именам
-        key_mapping = {
-            # Локальный интерфейс
-            "local_intf": "local_interface",
-            # Имя соседа
-            "neighbor": "remote_hostname",
-            "neighbor_name": "remote_hostname",
-            "system_name": "remote_hostname",
-            "device_id": "remote_hostname",
-            # Порт соседа
-            "neighbor_interface": "remote_port",
-            "port_id": "remote_port",
-            # IP соседа
-            "mgmt_ip": "remote_ip",
-            "mgmt_address": "remote_ip",
-            "management_ip": "remote_ip",
-            # Платформа
-            "hardware": "remote_platform",
-            "platform": "remote_platform",
-            # MAC
-            "chassis_id": "remote_mac",
-        }
-
-        normalized = []
-        for row in data:
-            new_row = {}
-            for key, value in row.items():
-                # Применяем маппинг ключей
-                new_key = key_mapping.get(key.lower(), key.lower())
-                new_row[new_key] = value
-
-            # Определяем тип идентификации соседа
-            new_row["neighbor_type"] = self._determine_neighbor_type(new_row)
-
-            # Если hostname отсутствует, но есть MAC — используем MAC как идентификатор
-            if not new_row.get("remote_hostname"):
-                if new_row.get("remote_mac"):
-                    new_row["remote_hostname"] = f"[MAC:{new_row['remote_mac']}]"
-                elif new_row.get("remote_ip"):
-                    new_row["remote_hostname"] = f"[IP:{new_row['remote_ip']}]"
-                else:
-                    new_row["remote_hostname"] = "[unknown]"
-
-            normalized.append(new_row)
-
-        return normalized
-
-    def _determine_neighbor_type(self, neighbor: Dict[str, Any]) -> str:
-        """
-        Определяет тип идентификации соседа.
-
-        Args:
-            neighbor: Данные соседа
-
-        Returns:
-            str: Тип (hostname, mac, ip, unknown)
-        """
-        hostname = neighbor.get("remote_hostname", "")
-
-        # Проверяем что hostname — это реальное имя, а не MAC/IP
-        if hostname and not hostname.startswith("["):
-            # Проверяем что это не просто MAC-адрес в поле hostname
-            if not self._is_mac_address(hostname):
-                return "hostname"
-
-        if neighbor.get("remote_mac"):
-            return "mac"
-
-        if neighbor.get("remote_ip"):
-            return "ip"
-
-        return "unknown"
-
-    def _is_mac_address(self, value: str) -> bool:
-        """
-        Проверяет является ли строка MAC-адресом.
-
-        Args:
-            value: Строка для проверки
-
-        Returns:
-            bool: True если это MAC
-        """
-        # Паттерны MAC-адресов
-        mac_patterns = [
-            r"^([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}$",  # 00:11:22:33:44:55
-            r"^([0-9a-fA-F]{4}\.){2}[0-9a-fA-F]{4}$",  # 0011.2233.4455
-            r"^[0-9a-fA-F]{12}$",  # 001122334455
-        ]
-
-        for pattern in mac_patterns:
-            if re.match(pattern, value):
-                return True
-        return False
+    # Нормализация перенесена в Domain Layer: core/domain/lldp.py → LLDPNormalizer

@@ -29,12 +29,7 @@ import logging
 from pathlib import Path
 from typing import List
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+# Логгер будет настроен в main() после загрузки конфига
 logger = logging.getLogger(__name__)
 
 
@@ -408,7 +403,27 @@ def setup_parser() -> argparse.ArgumentParser:
     netbox_parser.add_argument(
         "--cleanup",
         action="store_true",
-        help="Удалять устройства из NetBox которых нет в списке",
+        help="Удалять устройства из NetBox которых нет в списке (требует --tenant)",
+    )
+    netbox_parser.add_argument(
+        "--cleanup-interfaces",
+        action="store_true",
+        help="Удалять интерфейсы из NetBox которых нет на устройстве",
+    )
+    netbox_parser.add_argument(
+        "--cleanup-ips",
+        action="store_true",
+        help="Удалять IP-адреса из NetBox которых нет на устройстве",
+    )
+    netbox_parser.add_argument(
+        "--cleanup-cables",
+        action="store_true",
+        help="Удалять кабели из NetBox которых нет в LLDP/CDP данных",
+    )
+    netbox_parser.add_argument(
+        "--update-ips",
+        action="store_true",
+        help="Обновлять существующие IP-адреса (description, tenant)",
     )
     netbox_parser.add_argument(
         "--tenant",
@@ -429,6 +444,11 @@ def setup_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Полная синхронизация: devices → interfaces → ip-addresses → vlans → cables → inventory",
     )
+    netbox_parser.add_argument(
+        "--show-diff",
+        action="store_true",
+        help="Показать детальный diff изменений перед применением",
+    )
 
     # === Backup (резервное копирование) ===
     backup_parser = subparsers.add_parser("backup", help="Резервное копирование конфигураций")
@@ -437,6 +457,29 @@ def setup_parser() -> argparse.ArgumentParser:
         "-o",
         default="backups",
         help="Папка для сохранения конфигураций (default: backups)",
+    )
+
+    # === Validate Fields (валидация fields.yaml) ===
+    validate_parser = subparsers.add_parser(
+        "validate-fields",
+        help="Валидация fields.yaml против моделей"
+    )
+    validate_parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Подробный вывод",
+    )
+    validate_parser.add_argument(
+        "--show-registry",
+        action="store_true",
+        help="Показать реестр полей",
+    )
+    validate_parser.add_argument(
+        "--type",
+        "-t",
+        choices=["lldp", "mac", "interfaces", "devices", "inventory"],
+        help="Показать только указанный тип данных",
     )
 
     return parser
@@ -508,15 +551,24 @@ def load_devices(devices_file: str) -> List:
             logger.warning(f"Пропущен элемент #{idx}: отсутствует 'host'")
             continue
 
+        # Новый формат (рекомендуется):
+        # {"host": "10.0.0.1", "platform": "cisco_iosxe", "device_type": "C9200L-24P-4X", "role": "Switch"}
+        platform = d.get("platform")
         device_type = d.get("device_type")
-        if not device_type:
-            logger.warning(f"Устройство {host}: 'device_type' не указан, используется 'cisco_ios'")
-            device_type = "cisco_ios"
+        role = d.get("role")
+
+        # Backward compatibility: если platform не указан, используем device_type
+        # (в Device.__post_init__ есть логика конвертации device_type → platform)
+        if not platform and not device_type:
+            logger.warning(f"Устройство {host}: ни 'platform' ни 'device_type' не указаны, используется 'cisco_ios'")
+            platform = "cisco_ios"
 
         devices.append(
             Device(
                 host=host,
+                platform=platform,
                 device_type=device_type,
+                role=role,
             )
         )
 
@@ -578,7 +630,7 @@ def prepare_collection(args):
     return devices, credentials
 
 
-def cmd_devices(args) -> None:
+def cmd_devices(args, ctx=None) -> None:
     """Обработчик команды devices (инвентаризация)."""
     from .collectors import DeviceInventoryCollector
     from .fields_config import apply_fields_config
@@ -594,8 +646,8 @@ def cmd_devices(args) -> None:
         transport=args.transport,
     )
 
-    # Собираем данные
-    data = collector.collect(devices)
+    # Собираем данные (как словари для экспорта)
+    data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
@@ -612,7 +664,7 @@ def cmd_devices(args) -> None:
         logger.info(f"Отчёт сохранён: {file_path}")
 
 
-def cmd_mac(args) -> None:
+def cmd_mac(args, ctx=None) -> None:
     """Обработчик команды mac."""
     from .collectors import MACCollector
     from .config import config as app_config
@@ -670,8 +722,8 @@ def cmd_mac(args) -> None:
         transport=args.transport,
     )
 
-    # Собираем данные
-    data = collector.collect(devices)
+    # Собираем данные (как словари для экспорта)
+    data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
@@ -734,7 +786,7 @@ def cmd_mac(args) -> None:
             logger.info(f"Отчёт сохранён: {file_path}")
 
 
-def cmd_lldp(args) -> None:
+def cmd_lldp(args, ctx=None) -> None:
     """Обработчик команды lldp."""
     from .collectors import LLDPCollector
     from .fields_config import apply_fields_config
@@ -750,7 +802,8 @@ def cmd_lldp(args) -> None:
         transport=args.transport,
     )
 
-    data = collector.collect(devices)
+    # Собираем данные (как словари для экспорта)
+    data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
@@ -767,7 +820,7 @@ def cmd_lldp(args) -> None:
         logger.info(f"Отчёт сохранён: {file_path}")
 
 
-def cmd_interfaces(args) -> None:
+def cmd_interfaces(args, ctx=None) -> None:
     """Обработчик команды interfaces."""
     from .collectors import InterfaceCollector
     from .fields_config import apply_fields_config
@@ -782,7 +835,8 @@ def cmd_interfaces(args) -> None:
         transport=args.transport,
     )
 
-    data = collector.collect(devices)
+    # Собираем данные (как словари для экспорта)
+    data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
@@ -798,7 +852,7 @@ def cmd_interfaces(args) -> None:
         logger.info(f"Отчёт сохранён: {file_path}")
 
 
-def cmd_inventory(args) -> None:
+def cmd_inventory(args, ctx=None) -> None:
     """Обработчик команды inventory."""
     from .collectors import InventoryCollector
     from .fields_config import apply_fields_config
@@ -813,7 +867,8 @@ def cmd_inventory(args) -> None:
         transport=args.transport,
     )
 
-    data = collector.collect(devices)
+    # Собираем данные (как словари для экспорта)
+    data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
@@ -829,16 +884,23 @@ def cmd_inventory(args) -> None:
         logger.info(f"Отчёт сохранён: {file_path}")
 
 
-def cmd_run(args) -> None:
+def cmd_run(args, ctx=None) -> None:
     """Обработчик команды run (произвольная команда)."""
     from .core.connection import ConnectionManager, get_ntc_platform
     from .parsers.textfsm_parser import NTCParser, NTC_AVAILABLE
+    from .config import config
 
     devices, credentials = prepare_collection(args)
 
     fields = args.fields.split(",") if args.fields else None
 
-    conn_manager = ConnectionManager(transport=args.transport)
+    # Получаем retry настройки из конфига
+    conn_config = config.get("connection", {})
+    conn_manager = ConnectionManager(
+        transport=args.transport,
+        max_retries=conn_config.get("max_retries", 2),
+        retry_delay=conn_config.get("retry_delay", 5),
+    )
     all_data = []
 
     for device in devices:
@@ -857,7 +919,7 @@ def cmd_run(args) -> None:
                 # Парсим с NTC Templates
                 if NTC_AVAILABLE:
                     parser = NTCParser()
-                    platform = args.platform or get_ntc_platform(device.device_type)
+                    platform = args.platform or get_ntc_platform(device.platform)
                     try:
                         parsed = parser.parse(
                             output=output,
@@ -907,7 +969,7 @@ def cmd_run(args) -> None:
         logger.info(f"Отчёт сохранён: {file_path}")
 
 
-def cmd_match_mac(args) -> None:
+def cmd_match_mac(args, ctx=None) -> None:
     """Обработчик команды match-mac (сопоставление MAC с хостами)."""
     from .configurator import DescriptionMatcher
     import pandas as pd
@@ -961,7 +1023,7 @@ def cmd_match_mac(args) -> None:
     logger.info(f"Результат сохранён: {output_file}")
 
 
-def cmd_push_descriptions(args) -> None:
+def cmd_push_descriptions(args, ctx=None) -> None:
     """Обработчик команды push-descriptions (применение описаний)."""
     from .configurator import DescriptionPusher
     import pandas as pd
@@ -980,27 +1042,40 @@ def cmd_push_descriptions(args) -> None:
         return
 
     # Генерируем команды
+    import pandas as pd  # для pd.isna()
+
     commands: dict = {}
+    device_names: dict = {}  # IP -> hostname для логирования
     for _, row in matched_df.iterrows():
         hostname = row.get("Device", "")
+        device_ip = row.get("IP", "")  # Колонка IP для поиска устройства
         interface = row.get("Interface", "")
         host_name = row.get("Host_Name", "")
         current_desc = row.get("Current_Description", "")
 
-        if not hostname or not interface or not host_name:
+        if not device_ip or not interface or not host_name:
             continue
 
         # Проверяем условия
-        if args.only_empty and current_desc:
+        # Пустая строка: None, NaN, пробелы
+        is_empty = pd.isna(current_desc) or str(current_desc).strip() == ""
+
+        if args.only_empty and not is_empty:
             continue
-        if not args.overwrite and current_desc:
+        if not args.overwrite and not is_empty:
             continue
 
-        if hostname not in commands:
-            commands[hostname] = []
+        # Пропускаем если текущее описание совпадает с новым
+        if str(current_desc).strip() == str(host_name).strip():
+            continue
 
-        commands[hostname].append(f"interface {interface}")
-        commands[hostname].append(f"description {host_name}")
+        # Используем IP как ключ для поиска устройства
+        if device_ip not in commands:
+            commands[device_ip] = []
+            device_names[device_ip] = hostname  # Сохраняем hostname для логов
+
+        commands[device_ip].append(f"interface {interface}")
+        commands[device_ip].append(f"description {host_name}")
 
     if not commands:
         logger.warning("Нет команд для применения")
@@ -1012,8 +1087,9 @@ def cmd_push_descriptions(args) -> None:
 
     if dry_run:
         logger.info("=== DRY RUN (команды не будут применены) ===")
-        for hostname, cmds in commands.items():
-            logger.info(f"\n{hostname}:")
+        for device_ip, cmds in commands.items():
+            display_name = device_names.get(device_ip, device_ip)
+            logger.info(f"\n{display_name} ({device_ip}):")
             for cmd in cmds:
                 logger.info(f"  {cmd}")
         logger.info("\nДля применения используйте флаг --apply")
@@ -1039,14 +1115,14 @@ def cmd_push_descriptions(args) -> None:
             logger.error(f"  {r.device}: {r.error}")
 
 
-def cmd_sync_netbox(args) -> None:
+def cmd_sync_netbox(args, ctx=None) -> None:
     """
     Обработчик команды sync-netbox.
 
     ВАЖНО: С устройств мы только ЧИТАЕМ данные!
     Синхронизация — это выгрузка собранных данных В NetBox.
     """
-    from .netbox import NetBoxClient, NetBoxSync
+    from .netbox import NetBoxClient, NetBoxSync, DiffCalculator
     from .collectors import InterfaceCollector, LLDPCollector
     from .config import config
 
@@ -1082,6 +1158,16 @@ def cmd_sync_netbox(args) -> None:
     # Загружаем устройства и учётные данные
     devices, credentials = prepare_collection(args)
 
+    # Статистика для сводки в конце
+    summary = {
+        "devices": {"created": 0, "updated": 0, "deleted": 0, "skipped": 0},
+        "interfaces": {"created": 0, "updated": 0, "deleted": 0, "skipped": 0},
+        "ip_addresses": {"created": 0, "updated": 0, "deleted": 0, "skipped": 0},
+        "vlans": {"created": 0, "updated": 0, "deleted": 0, "skipped": 0},
+        "cables": {"created": 0, "updated": 0, "deleted": 0, "skipped": 0},
+        "inventory": {"created": 0, "updated": 0, "deleted": 0, "skipped": 0},
+    }
+
     # Создание/обновление устройств в NetBox из инвентаризации
     # ВАЖНО: Должно идти первым, чтобы устройства существовали для интерфейсов/IP/кабелей
     if getattr(args, "create_devices", False):
@@ -1112,36 +1198,80 @@ def cmd_sync_netbox(args) -> None:
             transport=args.transport,
         )
 
-        inventory_data = collector.collect(devices)
-        if inventory_data:
-            sync.sync_devices_from_inventory(
-                inventory_data,
+        # collect() теперь возвращает List[DeviceInfo]
+        device_infos = collector.collect(devices)
+        if device_infos:
+            # Показываем diff если запрошено
+            # dry_run автоматически включает show_diff
+            show_diff = getattr(args, "show_diff", False) or getattr(args, "dry_run", False)
+            if show_diff:
+                diff_calc = DiffCalculator(client)
+                # Конвертируем DeviceInfo в dict для diff
+                inventory_dicts = [
+                    d.to_dict() if hasattr(d, "to_dict") else d
+                    for d in device_infos
+                ]
+                diff = diff_calc.diff_devices(
+                    inventory_dicts,
+                    site=getattr(args, "site", "Main"),
+                    update_existing=update_devices,
+                )
+                if diff.has_changes:
+                    logger.info(f"\n{diff.format_detailed()}")
+                else:
+                    logger.info("Устройства: нет изменений")
+
+            stats = sync.sync_devices_from_inventory(
+                device_infos,
                 site=getattr(args, "site", "Main"),
                 role=getattr(args, "role", "switch"),
                 update_existing=update_devices,
                 cleanup=cleanup,
                 tenant=tenant,
+                # Primary IP устанавливается только при --ip-addresses
+                set_primary_ip=getattr(args, "ip_addresses", False),
             )
+            for key in stats:
+                summary["devices"][key] += stats.get(key, 0)
         else:
             logger.warning("Нет данных инвентаризации")
 
     # Синхронизация интерфейсов
     if args.interfaces:
+        cleanup_interfaces = getattr(args, "cleanup_interfaces", False)
         logger.info("Сбор интерфейсов с устройств...")
         collector = InterfaceCollector(
             credentials=credentials,
             transport=args.transport,
         )
 
+        # DiffCalculator для показа изменений (dry_run включает автоматически)
+        show_diff = getattr(args, "show_diff", False) or getattr(args, "dry_run", False)
+        diff_calc = DiffCalculator(client) if show_diff else None
+
         for device in devices:
             data = collector.collect([device])
             if data:
-                hostname = data[0].get("hostname", device.host)
-                sync.sync_interfaces(hostname, data)
+                hostname = data[0].hostname or device.host
+
+                # Показываем diff если запрошено
+                if diff_calc:
+                    # Конвертируем в список dict для DiffCalculator
+                    intf_dicts = [intf.to_dict() if hasattr(intf, "to_dict") else intf for intf in data]
+                    diff = diff_calc.diff_interfaces(hostname, intf_dicts)
+                    if diff.has_changes:
+                        logger.info(f"\n{diff.format_detailed()}")
+                    else:
+                        logger.info(f"Интерфейсы {hostname}: нет изменений")
+
+                stats = sync.sync_interfaces(hostname, data, cleanup=cleanup_interfaces)
+                for key in stats:
+                    summary["interfaces"][key] += stats.get(key, 0)
 
     # Синхронизация кабелей из LLDP/CDP
     if getattr(args, "cables", False):
         protocol = getattr(args, "protocol", "both")
+        cleanup_cables = getattr(args, "cleanup_cables", False)
         logger.info(f"Сбор {protocol.upper()} данных с устройств...")
         collector = LLDPCollector(
             credentials=credentials,
@@ -1157,37 +1287,67 @@ def cmd_sync_netbox(args) -> None:
 
         if all_lldp_data:
             logger.info(f"Найдено {len(all_lldp_data)} соседей, создаём кабели...")
-            sync.sync_cables_from_lldp(
+            stats = sync.sync_cables_from_lldp(
                 all_lldp_data,
                 skip_unknown=getattr(args, "skip_unknown", True),
+                cleanup=cleanup_cables,
             )
+            for key in stats:
+                summary["cables"][key] += stats.get(key, 0)
         else:
             logger.warning("LLDP/CDP данные не найдены")
 
     # Синхронизация IP-адресов
     if getattr(args, "ip_addresses", False):
+        from .core.models import IPAddressEntry
+
+        update_ips = getattr(args, "update_ips", False)
+        cleanup_ips = getattr(args, "cleanup_ips", False)
         logger.info("Сбор IP-адресов с устройств...")
         collector = InterfaceCollector(
             credentials=credentials,
             transport=args.transport,
         )
 
+        # DiffCalculator для показа изменений (dry_run включает автоматически)
+        show_diff = getattr(args, "show_diff", False) or getattr(args, "dry_run", False)
+        diff_calc = DiffCalculator(client) if show_diff else None
+
         for device in devices:
-            data = collector.collect([device])
-            if data:
-                hostname = data[0].get("hostname", device.host)
-                # Фильтруем только записи с IP
-                ip_data = [
-                    {
-                        "interface": row.get("interface"),
-                        "ip_address": row.get("ip_address"),
-                        "prefix_length": row.get("prefix_length", "24"),
-                    }
-                    for row in data
-                    if row.get("ip_address")
+            interfaces = collector.collect([device])
+            if interfaces:
+                hostname = interfaces[0].hostname or device.host
+                # Фильтруем только интерфейсы с IP и создаём IPAddressEntry
+                ip_entries = [
+                    IPAddressEntry(
+                        ip_address=intf.ip_address,
+                        interface=intf.name,
+                        mask="",  # mask будет определена из ip_address если есть /
+                        hostname=hostname,
+                        device_ip=device.host,
+                    )
+                    for intf in interfaces
+                    if intf.ip_address
                 ]
-                if ip_data:
-                    sync.sync_ip_addresses(hostname, ip_data)
+                if ip_entries:
+                    # Показываем diff если запрошено
+                    if diff_calc:
+                        ip_dicts = [e.to_dict() if hasattr(e, "to_dict") else e for e in ip_entries]
+                        diff = diff_calc.diff_ip_addresses(hostname, ip_dicts)
+                        if diff.has_changes:
+                            logger.info(f"\n{diff.format_detailed()}")
+                        else:
+                            logger.info(f"IP-адреса {hostname}: нет изменений")
+
+                    stats = sync.sync_ip_addresses(
+                        hostname,
+                        ip_entries,
+                        device_ip=device.host,
+                        update_existing=update_ips,
+                        cleanup=cleanup_ips,
+                    )
+                    for key in stats:
+                        summary["ip_addresses"][key] += stats.get(key, 0)
 
     # Синхронизация VLAN из SVI интерфейсов
     if getattr(args, "vlans", False):
@@ -1198,14 +1358,16 @@ def cmd_sync_netbox(args) -> None:
         )
 
         for device in devices:
-            data = collector.collect([device])
-            if data:
-                hostname = data[0].get("hostname", device.host)
-                sync.sync_vlans_from_interfaces(
+            interfaces = collector.collect([device])
+            if interfaces:
+                hostname = interfaces[0].hostname or device.host
+                stats = sync.sync_vlans_from_interfaces(
                     hostname,
-                    data,
+                    interfaces,
                     site=getattr(args, "site", None),
                 )
+                for key in stats:
+                    summary["vlans"][key] += stats.get(key, 0)
 
     # Синхронизация inventory (модули, SFP, PSU)
     if getattr(args, "inventory", False):
@@ -1218,13 +1380,83 @@ def cmd_sync_netbox(args) -> None:
         )
 
         for device in devices:
-            data = collector.collect([device])
-            if data:
-                hostname = data[0].get("hostname", device.host)
-                sync.sync_inventory(hostname, data)
+            items = collector.collect([device])
+            if items:
+                hostname = items[0].hostname or device.host
+                stats = sync.sync_inventory(hostname, items)
+                for key in stats:
+                    summary["inventory"][key] += stats.get(key, 0)
+
+    # === СВОДКА В КОНЦЕ ===
+    _print_sync_summary(summary, args)
 
 
-def cmd_backup(args) -> None:
+def _print_sync_summary(summary: dict, args) -> None:
+    """Выводит сводку синхронизации в конце."""
+    import json
+
+    # Подсчёт общих изменений
+    total_created = sum(s["created"] for s in summary.values())
+    total_updated = sum(s["updated"] for s in summary.values())
+    total_deleted = sum(s["deleted"] for s in summary.values())
+    total_skipped = sum(s["skipped"] for s in summary.values())
+    has_changes = total_created > 0 or total_updated > 0 or total_deleted > 0
+
+    # JSON формат
+    if getattr(args, "format", None) == "json":
+        result = {
+            "dry_run": getattr(args, "dry_run", False),
+            "has_changes": has_changes,
+            "summary": summary,
+            "totals": {
+                "created": total_created,
+                "updated": total_updated,
+                "deleted": total_deleted,
+                "skipped": total_skipped,
+            },
+        }
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+
+    # Консольный вывод
+    mode = "[DRY-RUN] " if getattr(args, "dry_run", False) else ""
+    print(f"\n{'='*60}")
+    print(f"{mode}СВОДКА СИНХРОНИЗАЦИИ NetBox")
+    print(f"{'='*60}")
+
+    # Названия категорий на русском
+    category_names = {
+        "devices": "Устройства",
+        "interfaces": "Интерфейсы",
+        "ip_addresses": "IP-адреса",
+        "vlans": "VLANs",
+        "cables": "Кабели",
+        "inventory": "Inventory",
+    }
+
+    for category, stats in summary.items():
+        if any(v > 0 for v in stats.values()):
+            name = category_names.get(category, category)
+            parts = []
+            if stats["created"] > 0:
+                parts.append(f"+{stats['created']} создано")
+            if stats["updated"] > 0:
+                parts.append(f"~{stats['updated']} обновлено")
+            if stats["deleted"] > 0:
+                parts.append(f"-{stats['deleted']} удалено")
+            if stats["skipped"] > 0:
+                parts.append(f"={stats['skipped']} пропущено")
+            print(f"  {name}: {', '.join(parts)}")
+
+    print(f"{'-'*60}")
+    if has_changes:
+        print(f"  ИТОГО: +{total_created} создано, ~{total_updated} обновлено, -{total_deleted} удалено")
+    else:
+        print("  Изменений нет")
+    print(f"{'='*60}\n")
+
+
+def cmd_backup(args, ctx=None) -> None:
     """Обработчик команды backup (резервное копирование конфигураций)."""
     from .collectors import ConfigBackupCollector
 
@@ -1253,9 +1485,53 @@ def cmd_backup(args) -> None:
             logger.error(f"  {r.hostname}: {r.error}")
 
 
+def cmd_validate_fields(args, ctx=None) -> None:
+    """
+    Валидация fields.yaml против моделей.
+
+    Проверяет что все поля в конфигурации существуют в моделях.
+    """
+    from .core.field_registry import (
+        validate_fields_config,
+        print_field_registry,
+        FIELD_REGISTRY,
+    )
+
+    # Показать реестр полей
+    if args.show_registry:
+        print_field_registry(args.type)
+        return
+
+    print("Validating fields.yaml against models...\n")
+
+    # Валидация
+    errors = validate_fields_config()
+
+    if errors:
+        print(f"Found {len(errors)} issue(s):\n")
+        for err in errors:
+            print(f"  ✗ {err}")
+        print()
+        sys.exit(1)
+    else:
+        print("✓ All fields are valid!\n")
+
+    # Статистика
+    if args.verbose:
+        print("Field Registry Statistics:")
+        for data_type, fields in FIELD_REGISTRY.items():
+            enabled_count = len([f for f in fields.values() if f.aliases])
+            print(f"  {data_type}: {len(fields)} fields ({enabled_count} with aliases)")
+
+        print("\n  Use --show-registry to see all fields")
+        print("  Use --type <type> to filter by data type")
+
+
 def main() -> None:
     """Главная функция CLI."""
-    from .config import load_config
+    from .config import load_config, config
+    from .core.context import RunContext, set_current_context
+    from .core.logging import LogConfig, RotationType, setup_logging_from_config
 
     parser = setup_parser()
     args = parser.parse_args()
@@ -1263,33 +1539,84 @@ def main() -> None:
     # Загружаем конфигурацию из YAML (если есть)
     load_config(args.config)
 
-    # Настройка уровня логирования
+    # Создаём контекст выполнения
+    dry_run = getattr(args, "dry_run", False)
+    ctx = RunContext.create(
+        dry_run=dry_run,
+        triggered_by="cli",
+        command=args.command or "",
+        base_output_dir=Path(args.output) if hasattr(args, "output") else None,
+    )
+    set_current_context(ctx)
+
+    # Настройка логирования из config.yaml
+    log_cfg = config.logging
+
+    # Приоритет: -v флаг > config.yaml > INFO по умолчанию
     if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+        log_level = logging.DEBUG
+    elif log_cfg and hasattr(log_cfg, "level"):
+        # Поддержка строковых и числовых уровней
+        cfg_level = getattr(log_cfg, "level", "INFO")
+        if isinstance(cfg_level, str):
+            log_level = getattr(logging, cfg_level.upper(), logging.INFO)
+        else:
+            log_level = cfg_level
+    else:
+        log_level = logging.INFO
+
+    # Создаём LogConfig из config.yaml
+    rotation_str = getattr(log_cfg, "rotation", "size") if log_cfg else "size"
+    try:
+        rotation = RotationType(rotation_str) if rotation_str else RotationType.SIZE
+    except ValueError:
+        rotation = RotationType.SIZE
+
+    log_config = LogConfig(
+        level=log_level,
+        json_format=getattr(log_cfg, "json_format", False) if log_cfg else False,
+        console=getattr(log_cfg, "console", True) if log_cfg else True,
+        file_path=getattr(log_cfg, "file_path", None) if log_cfg else None,
+        rotation=rotation,
+        max_bytes=getattr(log_cfg, "max_bytes", 10 * 1024 * 1024) if log_cfg else 10 * 1024 * 1024,
+        backup_count=getattr(log_cfg, "backup_count", 5) if log_cfg else 5,
+        when=getattr(log_cfg, "when", "midnight") if log_cfg else "midnight",
+        interval=getattr(log_cfg, "interval", 1) if log_cfg else 1,
+    )
+
+    setup_logging_from_config(log_config)
+
+    logger.info(f"Run started (command={args.command}, dry_run={dry_run})")
 
     # Выбор команды
     if args.command == "devices":
-        cmd_devices(args)
+        cmd_devices(args, ctx)
     elif args.command == "mac":
-        cmd_mac(args)
+        cmd_mac(args, ctx)
     elif args.command == "lldp":
-        cmd_lldp(args)
+        cmd_lldp(args, ctx)
     elif args.command == "interfaces":
-        cmd_interfaces(args)
+        cmd_interfaces(args, ctx)
     elif args.command == "inventory":
-        cmd_inventory(args)
+        cmd_inventory(args, ctx)
     elif args.command == "run":
-        cmd_run(args)
+        cmd_run(args, ctx)
     elif args.command == "match-mac":
-        cmd_match_mac(args)
+        cmd_match_mac(args, ctx)
     elif args.command == "push-descriptions":
-        cmd_push_descriptions(args)
+        cmd_push_descriptions(args, ctx)
     elif args.command == "sync-netbox":
-        cmd_sync_netbox(args)
+        cmd_sync_netbox(args, ctx)
     elif args.command == "backup":
-        cmd_backup(args)
+        cmd_backup(args, ctx)
+    elif args.command == "validate-fields":
+        cmd_validate_fields(args, ctx)
     else:
         parser.print_help()
+        return
+
+    # Логируем завершение
+    logger.info(f"Run completed: {ctx.run_id} (elapsed={ctx.elapsed_human})")
 
 
 if __name__ == "__main__":

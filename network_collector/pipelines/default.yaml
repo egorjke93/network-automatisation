@@ -1,0 +1,73 @@
+# Default Pipeline - Полная синхронизация с NetBox
+#
+# Шаги выполняются последовательно:
+# 1. Сбор данных с устройств
+# 2. Синхронизация устройств в NetBox
+# 3. Сбор интерфейсов
+# 4. Синхронизация интерфейсов
+# 5. Сбор LLDP/CDP
+# 6. Синхронизация кабелей
+
+id: default
+name: "Full Sync"
+description: "Полная синхронизация с NetBox: устройства, интерфейсы, кабели"
+enabled: true
+
+steps:
+  # === Шаг 1: Сбор информации об устройствах ===
+  - id: collect_devices
+    type: collect
+    target: devices
+    enabled: true
+    options: {}
+
+  # === Шаг 2: Синхронизация устройств ===
+  - id: sync_devices
+    type: sync
+    target: devices
+    enabled: true
+    depends_on:
+      - collect_devices
+    options:
+      create: true
+      update: true
+      # site: "Default"  # Можно указать site
+
+  # === Шаг 3: Сбор интерфейсов ===
+  - id: collect_interfaces
+    type: collect
+    target: interfaces
+    enabled: true
+    depends_on:
+      - sync_devices
+
+  # === Шаг 4: Синхронизация интерфейсов ===
+  - id: sync_interfaces
+    type: sync
+    target: interfaces
+    enabled: true
+    depends_on:
+      - collect_interfaces
+    options:
+      sync_mac: true
+      sync_mode: true  # 802.1Q mode (access/tagged)
+
+  # === Шаг 5: Сбор LLDP/CDP ===
+  - id: collect_neighbors
+    type: collect
+    target: lldp
+    enabled: true
+    depends_on:
+      - sync_interfaces
+    options:
+      protocol: both  # lldp, cdp, both
+
+  # === Шаг 6: Синхронизация кабелей ===
+  - id: sync_cables
+    type: sync
+    target: cables
+    enabled: true
+    depends_on:
+      - collect_neighbors
+    options:
+      source: lldp  # Источник данных о соседях

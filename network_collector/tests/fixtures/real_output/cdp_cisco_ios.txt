@@ -1,0 +1,441 @@
+SU-316-C2960X-48LPD-L-01#show lldp neighbors detail 
+------------------------------------------------
+Local Intf: Gi1/0/47
+Chassis id: cc16.7edc.45ec
+Port id: 0
+Port Description: eth0
+System Name: SU-2802-XX-331
+
+System Description: 
+Cisco AP Software, ap3g3-k9w8 Version: 8.5.182.0
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 1986-2021 by Cisco Systems, Inc.
+Compiled Mon Aug 30 05:03:28 GMT 2021 by aut
+
+Time remaining: 98 seconds
+System Capabilities: B
+Enabled Capabilities: B
+Management Addresses:
+    IP: 10.195.227.149
+Auto Negotiation - supported, enabled
+Physical media capabilities:
+    1000baseT(FD)
+    1000baseT(HD)
+    100base-TX(FD)
+    100base-TX(HD)
+    10base-T(FD)
+    10base-T(HD)
+Media Attachment Unit type: 30
+Vlan ID: - not advertised
+
+------------------------------------------------
+Local Intf: Gi1/0/46
+Chassis id: 28ac.9e57.65d2
+Port id: 0
+Port Description: eth0
+System Name: SU-2802-XX-310
+
+System Description: 
+Cisco AP Software, ap3g3-k9w8 Version: 8.5.182.0
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 1986-2021 by Cisco Systems, Inc.
+Compiled Mon Aug 30 05:03:28 GMT 2021 by aut
+
+Time remaining: 109 seconds
+System Capabilities: B
+Enabled Capabilities: B
+Management Addresses:
+    IP: 10.195.227.154
+Auto Negotiation - supported, enabled
+Physical media capabilities:
+    1000baseT(FD)
+    1000baseT(HD)
+    100base-TX(FD)
+    100base-TX(HD)
+    10base-T(FD)
+    10base-T(HD)
+Media Attachment Unit type: 30
+Vlan ID: - not advertised
+
+------------------------------------------------
+Local Intf: Te1/0/1
+Chassis id: 10b3.d697.5400
+Port id: Te1/1/3
+Port Description: SU-316-C2960X-48LPD-L-01
+System Name: SU-316-C9200L-48P-4X-01.corp.ogk4.ru
+
+System Description: 
+Cisco IOS Software [IOSXE], Catalyst L3 Switch Software (CAT9K_LITE_IOSXE), Version 17.15.4, RELEASE SOFTWARE (fc6)
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 1986-2025 by Cisco Systems, Inc.
+Compiled Tue 05-Aug-25 00:37 by mcpre
+
+Time remaining: 104 seconds
+System Capabilities: B,R
+Enabled Capabilities: B
+Management Addresses:
+    IP: 10.177.30.219
+Auto Negotiation - not supported
+Physical media capabilities:
+    Other/unknown
+Media Attachment Unit type: 31
+Vlan ID: - not advertised
+
+------------------------------------------------
+Local Intf: Te1/0/2
+Chassis id: 10b3.d697.5400
+Port id: Te1/1/4
+Port Description: SU-316-C2960X-48LPD-L-01
+System Name: SU-316-C9200L-48P-4X-01.corp.ogk4.ru
+
+System Description: 
+Cisco IOS Software [IOSXE], Catalyst L3 Switch Software (CAT9K_LITE_IOSXE), Version 17.15.4, RELEASE SOFTWARE (fc6)
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 1986-2025 by Cisco Systems, Inc.
+Compiled Tue 05-Aug-25 00:37 by mcpre
+
+Time remaining: 102 seconds
+System Capabilities: B,R
+Enabled Capabilities: B
+Management Addresses:
+    IP: 10.177.30.219
+Auto Negotiation - not supported
+Physical media capabilities:
+    Other/unknown
+Media Attachment Unit type: 31
+Vlan ID: - not advertised
+
+------------------------------------------------
+Local Intf: Gi1/0/43
+Chassis id: 0896.ad9d.0c3a
+Port id: 0
+Port Description: eth0
+System Name: SU-2802-02-304
+
+System Description: 
+Cisco AP Software, ap3g3-k9w8 Version: 8.5.182.0
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 1986-2021 by Cisco Systems, Inc.
+Compiled Mon Aug 30 05:03:28 GMT 2021 by aut
+
+Time remaining: 93 seconds
+System Capabilities: B
+Enabled Capabilities: B
+Management Addresses:
+    IP: 10.195.227.142
+Auto Negotiation - supported, enabled
+Physical media capabilities:
+    1000baseT(FD)
+    1000baseT(HD)
+    100base-TX(FD)
+    100base-TX(HD)
+    10base-T(FD)
+    10base-T(HD)
+Media Attachment Unit type: 30
+Vlan ID: - not advertised
+
+------------------------------------------------
+Local Intf: Gi1/0/45
+Chassis id: 0896.ad9d.0c34
+Port id: 0
+Port Description: eth0
+System Name: SU-2802-XX-316
+
+System Description: 
+Cisco AP Software, ap3g3-k9w8 Version: 8.5.182.0
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 1986-2021 by Cisco Systems, Inc.
+Compiled Mon Aug 30 05:03:28 GMT 2021 by aut
+
+Time remaining: 93 seconds
+System Capabilities: B
+Enabled Capabilities: B
+Management Addresses:
+    IP: 10.195.227.131
+Auto Negotiation - supported, enabled
+Physical media capabilities:
+    1000baseT(FD)
+    1000baseT(HD)
+    100base-TX(FD)
+    100base-TX(HD)
+    10base-T(FD)
+    10base-T(HD)
+Media Attachment Unit type: 30
+Vlan ID: - not advertised
+
+------------------------------------------------
+Local Intf: Gi1/0/40
+Chassis id: dc8c.37fe.9002
+Port id: 0
+Port Description: eth0
+System Name: SU-2802-308-KVSH
+
+System Description: 
+Cisco AP Software, ap3g3-k9w8 Version: 8.5.182.0
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 1986-2021 by Cisco Systems, Inc.
+Compiled Mon Aug 30 05:03:28 GMT 2021 by aut
+
+Time remaining: 117 seconds
+System Capabilities: B
+Enabled Capabilities: B
+Management Addresses:
+    IP: 10.195.227.173
+Auto Negotiation - supported, enabled
+Physical media capabilities:
+    1000baseT(FD)
+    1000baseT(HD)
+    100base-TX(FD)
+    100base-TX(HD)
+    10base-T(FD)
+    10base-T(HD)
+Media Attachment Unit type: 30
+Vlan ID: - not advertised
+
+------------------------------------------------
+Local Intf: Gi1/0/48
+Chassis id: 00d7.8f9a.39ce
+Port id: 0
+Port Description: eth0
+System Name: SU-2802-DEM-OIT
+
+System Description: 
+Cisco AP Software, ap3g3-k9w8 Version: 8.5.182.0
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 1986-2021 by Cisco Systems, Inc.
+Compiled Mon Aug 30 05:03:28 GMT 2021 by aut
+
+Time remaining: 99 seconds
+System Capabilities: B
+Enabled Capabilities: B
+Management Addresses:
+    IP: 10.195.227.150
+Auto Negotiation - supported, enabled
+Physical media capabilities:
+    1000baseT(FD)
+    1000baseT(HD)
+    100base-TX(FD)
+    100base-TX(HD)
+    10base-T(FD)
+    10base-T(HD)
+Media Attachment Unit type: 30
+Vlan ID: - not advertised
+
+------------------------------------------------
+Local Intf: Gi1/0/1
+Chassis id: 6c02.e080.2b55
+Port id: 6c02.e080.2b55
+Port Description - not advertised
+System Name - not advertised
+System Description - not advertised
+          
+Time remaining: 3099 seconds
+System Capabilities - not advertised
+Enabled Capabilities - not advertised
+Management Addresses - not advertised
+Auto Negotiation - supported, enabled
+Physical media capabilities:
+    1000baseT(FD)
+Media Attachment Unit type - not advertised
+Vlan ID: - not advertised
+
+MED Information:
+
+    MED Codes:
+          (NP) Network Policy, (LI) Location Identification
+          (PS) Power Source Entity, (PD) Power Device
+          (IN) Inventory
+
+    Inventory information - not advertised
+    Capabilities: 
+    Device type: Endpoint Class I
+    Network Policies - not advertised
+    Power requirements - not advertised
+    Location - not advertised
+
+
+Total entries displayed: 9
+
+SU-316-C2960X-48LPD-L-01#                          
+SU-316-C2960X-48LPD-L-01#
+SU-316-C2960X-48LPD-L-01#
+SU-316-C2960X-48LPD-L-01#show cdp ne
+SU-316-C2960X-48LPD-L-01#show cdp neighbors de
+SU-316-C2960X-48LPD-L-01#show cdp neighbors detail 
+-------------------------
+Device ID: SU-2802-XX-310
+Entry address(es): 
+  IP address: 10.195.227.154
+  IPv6 address: FE80::2AAC:9EFF:FE57:65D2  (link-local)
+Platform: cisco AIR-AP2802I-R-K9,  Capabilities: Router Trans-Bridge 
+Interface: GigabitEthernet1/0/46,  Port ID (outgoing port): GigabitEthernet0
+Holdtime : 161 sec
+
+Version :
+Cisco AP Software, ap3g3-k9w8 Version: 8.5.182.0
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 2014-2015 by Cisco Systems, Inc.
+
+advertisement version: 2
+Duplex: full
+Power drawn: 26.100 Watts
+Power request id: 50913, Power management id: 4
+Power request levels are:26100 15400 0 0 0 
+Management address(es): 
+  IP address: 10.195.227.154
+
+-------------------------
+Device ID: SU-2802-XX-331
+Entry address(es): 
+  IP address: 10.195.227.149
+  IPv6 address: FE80::CE16:7EFF:FEDC:45EC  (link-local)
+Platform: cisco AIR-AP2802I-R-K9,  Capabilities: Router Trans-Bridge 
+Interface: GigabitEthernet1/0/47,  Port ID (outgoing port): GigabitEthernet0
+Holdtime : 133 sec
+
+Version :
+Cisco AP Software, ap3g3-k9w8 Version: 8.5.182.0
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 2014-2015 by Cisco Systems, Inc.
+
+advertisement version: 2
+Duplex: full
+Power drawn: 26.100 Watts
+Power request id: 45799, Power management id: 2
+Power request levels are:26100 15400 0 0 0 
+Management address(es): 
+  IP address: 10.195.227.149
+
+-------------------------
+Device ID: SU-2802-02-304
+Entry address(es): 
+  IP address: 10.195.227.142
+  IPv6 address: FE80::A96:ADFF:FE9D:C3A  (link-local)
+Platform: cisco AIR-AP2802I-R-K9,  Capabilities: Router Trans-Bridge 
+Interface: GigabitEthernet1/0/43,  Port ID (outgoing port): GigabitEthernet0
+Holdtime : 157 sec
+
+Version :
+Cisco AP Software, ap3g3-k9w8 Version: 8.5.182.0
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 2014-2015 by Cisco Systems, Inc.
+
+advertisement version: 2
+Duplex: full
+Power drawn: 26.100 Watts
+Power request id: 36762, Power management id: 4
+Power request levels are:26100 15400 0 0 0 
+Management address(es): 
+  IP address: 10.195.227.142
+
+-------------------------
+Device ID: SU-2802-XX-316
+Entry address(es): 
+  IP address: 10.195.227.131
+  IPv6 address: FE80::A96:ADFF:FE9D:C34  (link-local)
+Platform: cisco AIR-AP2802I-R-K9,  Capabilities: Router Trans-Bridge 
+Interface: GigabitEthernet1/0/45,  Port ID (outgoing port): GigabitEthernet0
+Holdtime : 150 sec
+
+Version :
+Cisco AP Software, ap3g3-k9w8 Version: 8.5.182.0
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 2014-2015 by Cisco Systems, Inc.
+
+advertisement version: 2
+Duplex: full
+Power drawn: 26.100 Watts
+Power request id: 20016, Power management id: 4
+Power request levels are:26100 15400 0 0 0 
+Management address(es): 
+  IP address: 10.195.227.131
+
+-------------------------
+Device ID: SU-2802-308-KVSH
+Entry address(es): 
+  IP address: 10.195.227.173
+  IPv6 address: FE80::DE8C:37FF:FEFE:9002  (link-local)
+Platform: cisco AIR-AP2802I-R-K9,  Capabilities: Router Trans-Bridge 
+Interface: GigabitEthernet1/0/40,  Port ID (outgoing port): GigabitEthernet0
+Holdtime : 172 sec
+
+Version :
+Cisco AP Software, ap3g3-k9w8 Version: 8.5.182.0
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 2014-2015 by Cisco Systems, Inc.
+
+advertisement version: 2
+Duplex: full
+Power drawn: 26.100 Watts
+Power request id: 58167, Power management id: 2
+Power request levels are:26100 15400 0 0 0 
+Management address(es): 
+  IP address: 10.195.227.173
+
+-------------------------
+Device ID: SU-2802-DEM-OIT
+Entry address(es): 
+  IP address: 10.195.227.150
+  IPv6 address: FE80::2D7:8FFF:FE9A:39CE  (link-local)
+Platform: cisco AIR-AP2802I-R-K9,  Capabilities: Router Trans-Bridge 
+Interface: GigabitEthernet1/0/48,  Port ID (outgoing port): GigabitEthernet0
+Holdtime : 145 sec
+
+Version :
+Cisco AP Software, ap3g3-k9w8 Version: 8.5.182.0
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 2014-2015 by Cisco Systems, Inc.
+
+advertisement version: 2
+Duplex: full
+Power drawn: 26.100 Watts
+Power request id: 520, Power management id: 4
+Power request levels are:26100 15400 0 0 0 
+Management address(es): 
+  IP address: 10.195.227.150
+
+-------------------------
+Device ID: SU-316-C9200L-48P-4X-01.corp.ogk4.ru
+Entry address(es): 
+  IP address: 10.177.30.219
+Platform: cisco C9200L-48P-4X,  Capabilities: Switch IGMP 
+Interface: TenGigabitEthernet1/0/2,  Port ID (outgoing port): TenGigabitEthernet1/1/4
+Holdtime : 156 sec
+
+Version :
+Cisco IOS Software [IOSXE], Catalyst L3 Switch Software (CAT9K_LITE_IOSXE), Version 17.15.4, RELEASE SOFTWARE (fc6)
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 1986-2025 by Cisco Systems, Inc.
+Compiled Tue 05-Aug-25 00:37 by mcpre
+
+advertisement version: 2
+VTP Management Domain: 'ogk4_su_vtp'
+Native VLAN: 1
+Duplex: full
+Management address(es): 
+  IP address: 10.177.30.219
+
+-------------------------
+Device ID: SU-316-C9200L-48P-4X-01.corp.ogk4.ru
+Entry address(es): 
+  IP address: 10.177.30.219
+Platform: cisco C9200L-48P-4X,  Capabilities: Switch IGMP 
+Interface: TenGigabitEthernet1/0/1,  Port ID (outgoing port): TenGigabitEthernet1/1/3
+Holdtime : 134 sec
+
+Version :
+Cisco IOS Software [IOSXE], Catalyst L3 Switch Software (CAT9K_LITE_IOSXE), Version 17.15.4, RELEASE SOFTWARE (fc6)
+Technical Support: http://www.cisco.com/techsupport
+Copyright (c) 1986-2025 by Cisco Systems, Inc.
+Compiled Tue 05-Aug-25 00:37 by mcpre
+
+advertisement version: 2
+VTP Management Domain: 'ogk4_su_vtp'
+Native VLAN: 1
+Duplex: full
+Management address(es): 
+  IP address: 10.177.30.219
+
+
+Total cdp entries displayed : 8
+SU-316-C2960X-48LPD-L-01#      

@@ -15,17 +15,22 @@
 """
 
 import re
-import logging
 from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 from dataclasses import dataclass
 
 from ..core.device import Device
 from ..core.connection import ConnectionManager
 from ..core.credentials import Credentials
+from ..core.logging import get_logger
+from ..core.exceptions import (
+    ConnectionError,
+    AuthenticationError,
+    TimeoutError,
+    format_error_for_log,
+)
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # Команды для получения конфигурации по платформам
@@ -81,6 +86,8 @@ class ConfigBackupCollector:
         timeout_transport: int = 30,
         timeout_ops: int = 120,
         transport: str = "ssh2",
+        max_retries: int = 2,
+        retry_delay: int = 5,
     ):
         """
         Инициализация коллектора бэкапов.
@@ -91,6 +98,8 @@ class ConfigBackupCollector:
             timeout_transport: Таймаут транспорта
             timeout_ops: Таймаут операций (для больших конфигов)
             transport: Транспорт SSH
+            max_retries: Максимум повторных попыток при ошибке подключения
+            retry_delay: Задержка между попытками (секунды)
         """
         self.credentials = credentials
 
@@ -99,6 +108,8 @@ class ConfigBackupCollector:
             timeout_transport=timeout_transport,
             timeout_ops=timeout_ops,
             transport=transport,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
         )
 
     def backup(
@@ -157,7 +168,7 @@ class ConfigBackupCollector:
 
         # Получаем команду для платформы
         command = CONFIG_COMMANDS.get(
-            device.device_type.lower(),
+            device.platform.lower(),
             "show running-config"
         )
 
@@ -185,8 +196,11 @@ class ConfigBackupCollector:
 
                 logger.info(f"[OK] {hostname}: сохранено в {file_path.name}")
 
+        except (ConnectionError, AuthenticationError, TimeoutError) as e:
+            result.error = format_error_for_log(e)
+            logger.error(f"[ERROR] {device.host}: {format_error_for_log(e)}")
         except Exception as e:
             result.error = str(e)
-            logger.error(f"[ERROR] {device.host}: {e}")
+            logger.error(f"[ERROR] {device.host}: неизвестная ошибка: {e}")
 
         return result

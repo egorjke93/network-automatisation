@@ -18,24 +18,34 @@
 """
 
 import re
-import logging
 from typing import List, Dict, Any, Optional, Set, Tuple
 
 from ntc_templates.parse import parse_output
 
 from .base import BaseCollector
 from ..core.device import Device
-from ..core.connection import ConnectionManager, get_ntc_platform
+from ..core.models import MACEntry
+from ..core.connection import get_ntc_platform
+from ..core.logging import get_logger
+from ..core.domain import MACNormalizer
 from ..core.constants import (
-    INTERFACE_SHORT_MAP,
-    ONLINE_PORT_STATUSES,
-    normalize_interface_short,
+    COLLECTOR_COMMANDS,
     CUSTOM_TEXTFSM_TEMPLATES,
+    ONLINE_PORT_STATUSES,
+    get_interface_aliases,
+    normalize_interface_short,
+    normalize_mac,
+)
+from ..core.exceptions import (
+    ConnectionError,
+    AuthenticationError,
+    TimeoutError,
+    format_error_for_log,
 )
 from ..parsers.textfsm_parser import TextFSMParser
 from ..config import config as app_config
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MACCollector(BaseCollector):
@@ -54,23 +64,17 @@ class MACCollector(BaseCollector):
 
     Example:
         collector = MACCollector(mac_format="ieee")
-        data = collector.collect(devices)
+        data = collector.collect(devices)  # List[Dict]
+
+        # Или типизированные модели
+        macs = collector.collect_models(devices)  # List[MACEntry]
     """
 
-    # Команды для разных платформ
-    platform_commands = {
-        "cisco_ios": "show mac address-table",
-        "cisco_iosxe": "show mac address-table",
-        "cisco_nxos": "show mac address-table",
-        "arista_eos": "show mac address-table",
-        "juniper_junos": "show ethernet-switching table",
-        "juniper": "show ethernet-switching table",
-        "qtech": "show mac address-table",
-        "qtech_qsw": "show mac address-table",
-    }
+    # Типизированная модель
+    model_class = MACEntry
 
-    # Маппинг сокращений интерфейсов (из core.constants)
-    INTERFACE_MAP = INTERFACE_SHORT_MAP
+    # Команды для разных платформ (из централизованного хранилища)
+    platform_commands = COLLECTOR_COMMANDS.get("mac", {})
 
     def __init__(
         self,
@@ -108,10 +112,13 @@ class MACCollector(BaseCollector):
         self.collect_trunk_ports = collect_trunk_ports
         self.collect_port_security = collect_port_security
 
-        # Компилируем паттерны для исключения
-        self._exclude_patterns = [
-            re.compile(p, re.IGNORECASE) for p in self.exclude_interfaces
-        ]
+        # Domain Layer: нормализатор MAC-данных
+        self._normalizer = MACNormalizer(
+            mac_format=self.mac_format,
+            normalize_interfaces=self.normalize_interfaces,
+            exclude_interfaces=self.exclude_interfaces,
+            exclude_vlans=self.exclude_vlans,
+        )
 
         # Кэш для хранения статуса интерфейсов текущего устройства
         self._current_interface_status: Dict[str, str] = {}
@@ -132,10 +139,10 @@ class MACCollector(BaseCollector):
             List[Dict]: Данные с устройства
         """
         command = self._get_command(device)
-        ntc_platform = get_ntc_platform(device.device_type)
+        ntc_platform = get_ntc_platform(device.platform)
 
         if not command:
-            logger.warning(f"Нет команды для {device.device_type}")
+            logger.warning(f"Нет команды для {device.platform}")
             return []
 
         try:
@@ -171,78 +178,79 @@ class MACCollector(BaseCollector):
                 # Сохраняем статус интерфейсов для использования в _parse_output
                 self._current_interface_status = interface_status
 
-                # Парсим MAC-таблицу (статус берётся из self._current_interface_status)
-                data = self._parse_output(mac_output, device)
+                # Парсим MAC-таблицу (сырые данные)
+                raw_data = self._parse_raw(mac_output, device)
+
+                # Domain Layer: нормализация через MACNormalizer
+                data = self._normalizer.normalize_dicts(
+                    raw_data,
+                    interface_status=interface_status,
+                    hostname=hostname,
+                    device_ip=device.host,
+                )
 
                 # Собираем sticky MAC из port-security (show running-config)
                 if self.collect_port_security:
                     sticky_macs = self._collect_sticky_macs(conn, device, interface_status)
-                    # Merge: добавляем sticky MACs которых нет в основной таблице
-                    existing_macs = {row.get("mac", "").lower() for row in data}
-                    for sticky in sticky_macs:
-                        if sticky.get("mac", "").lower() not in existing_macs:
-                            # Sticky MAC нет в активной таблице → offline
-                            sticky["status"] = "offline"
-                            data.append(sticky)
+                    # Domain Layer: объединение через MACNormalizer
+                    data = self._normalizer.merge_sticky_macs(
+                        data, sticky_macs, hostname=hostname, device_ip=device.host
+                    )
                     logger.debug(f"{hostname}: добавлено {len(sticky_macs)} sticky MACs")
 
-                # Добавляем metadata к каждой записи
-                for row in data:
-                    row["hostname"] = hostname
-                    row["device_ip"] = device.host
-
-                    # Добавляем описание интерфейса
-                    if self.collect_descriptions:
+                # Добавляем описание интерфейса
+                if self.collect_descriptions:
+                    for row in data:
                         iface = row.get("interface", "")
                         row["description"] = descriptions.get(iface, "")
 
-                    # Фильтруем trunk порты
-                    if not self.collect_trunk_ports:
-                        iface = row.get("interface", "")
-                        if iface in trunk_interfaces:
-                            row["_exclude"] = True
+                # Domain Layer: фильтрация trunk портов через MACNormalizer
+                if not self.collect_trunk_ports:
+                    data = self._normalizer.filter_trunk_ports(data, trunk_interfaces)
 
-                # Исключаем помеченные записи
-                data = [r for r in data if not r.get("_exclude")]
-
-                # Финальная дедупликация по полному ключу (hostname, mac, vlan, interface)
-                data = self._deduplicate_final(data)
+                # Domain Layer: финальная дедупликация
+                data = self._normalizer.deduplicate(data)
 
                 logger.info(f"{hostname}: собрано {len(data)} MAC-адресов")
                 return data
 
+        except (ConnectionError, AuthenticationError, TimeoutError) as e:
+            # Типизированные ошибки подключения
+            logger.error(f"Ошибка подключения к {device.host}: {format_error_for_log(e)}")
+            return []
         except Exception as e:
-            logger.error(f"Ошибка подключения к {device.host}: {e}")
+            # Неизвестные ошибки
+            logger.error(f"Неизвестная ошибка с {device.host}: {e}")
             return []
 
-    def _parse_output(
+    def _parse_raw(
         self,
         output: str,
         device: Device,
     ) -> List[Dict[str, Any]]:
         """
-        Парсит вывод команды show mac address-table.
+        Парсит вывод команды show mac address-table (сырые данные).
 
         Сначала пробует NTC Templates, затем fallback на regex.
-        Статус интерфейсов берётся из self._current_interface_status.
+        Возвращает сырые данные БЕЗ нормализации — нормализация в Domain Layer.
 
         Args:
             output: Сырой вывод команды
             device: Устройство
 
         Returns:
-            List[Dict]: Список MAC-записей
+            List[Dict]: Сырые данные от парсера
         """
         # Пробуем NTC Templates
         if self.use_ntc:
             data = self._parse_with_ntc(output, device)
             if data:
-                return self._normalize_data(data)
+                return data  # Сырые данные, нормализация в Domain Layer
 
         # Fallback на regex парсинг
-        return self._parse_with_regex(output, device)
+        return self._parse_with_regex_raw(output, device)
 
-    def _parse_with_regex(
+    def _parse_with_regex_raw(
         self,
         output: str,
         device: Device,
@@ -250,12 +258,14 @@ class MACCollector(BaseCollector):
         """
         Парсит вывод с помощью regex (fallback).
 
+        Возвращает сырые данные БЕЗ нормализации.
+
         Args:
             output: Сырой вывод
             device: Устройство
 
         Returns:
-            List[Dict]: Распарсенные данные
+            List[Dict]: Сырые данные
         """
         data = []
 
@@ -281,186 +291,31 @@ class MACCollector(BaseCollector):
                 }
             )
 
-        return self._normalize_data(data)
+        return data  # Сырые данные, нормализация в Domain Layer
 
-    def _normalize_data(
+    def _parse_output(
         self,
-        data: List[Dict[str, Any]],
+        output: str,
+        device: "Device",
     ) -> List[Dict[str, Any]]:
         """
-        Нормализует данные (MAC формат, интерфейсы, фильтрация).
+        Парсит вывод команды (реализация абстрактного метода).
 
-        Статус online/offline определяется по состоянию порта:
-        - Порт connected → online
-        - Порт notconnect/disabled/etc → offline
-
-        Статус интерфейсов берётся из self._current_interface_status.
+        Примечание: MACCollector переопределяет _collect_from_device целиком,
+        поэтому этот метод не вызывается напрямую. Реализован для совместимости
+        с абстрактным классом BaseCollector.
 
         Args:
-            data: Сырые данные
+            output: Сырой вывод команды
+            device: Устройство
 
         Returns:
-            List[Dict]: Нормализованные данные
+            List[Dict]: Распарсенные данные
         """
-        interface_status = self._current_interface_status
-        normalized = []
-        seen_macs: Set[Tuple[str, str, str]] = set()  # Для дедупликации
+        return self._parse_raw(output, device)
 
-        for row in data:
-            # Нормализуем интерфейс
-            interface = row.get("interface", row.get("destination_port", ""))
-            if self.normalize_interfaces:
-                interface = self._normalize_interface(interface)
-            row["interface"] = interface
-
-            # Проверяем исключения по интерфейсу
-            if self._should_exclude_interface(interface):
-                continue
-
-            # Проверяем исключения по VLAN
-            vlan = str(row.get("vlan", row.get("vlan_id", "")))
-            if vlan:
-                try:
-                    if int(vlan) in self.exclude_vlans:
-                        continue
-                except ValueError:
-                    pass
-            row["vlan"] = vlan
-
-            # Нормализуем MAC
-            mac = row.get("mac", row.get("destination_address", ""))
-            mac_normalized = self._normalize_mac_for_compare(mac)
-            if mac:
-                row["mac"] = self._normalize_mac(mac)
-
-            # Дедупликация
-            key = (mac_normalized, vlan, interface)
-            if key in seen_macs:
-                continue
-            seen_macs.add(key)
-
-            # Тип MAC: dynamic или static (sticky = static)
-            raw_type = str(row.get("type", "")).lower()
-            if "dynamic" in raw_type:
-                row["type"] = "dynamic"
-            else:
-                row["type"] = "static"
-
-            # Определяем status по состоянию порта
-            port_status = interface_status.get(interface, "")
-            if port_status.lower() in ONLINE_PORT_STATUSES:
-                row["status"] = "online"
-            elif port_status:
-                row["status"] = "offline"
-            else:
-                # Если нет данных о порте — unknown
-                row["status"] = "unknown"
-
-            normalized.append(row)
-
-        return normalized
-
-    def _normalize_mac_for_compare(self, mac: str) -> str:
-        """Нормализует MAC для сравнения (убирает разделители, lowercase)."""
-        return re.sub(r"[.:\-]", "", mac.lower())
-
-    def _deduplicate_final(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Финальная дедупликация по полному ключу.
-
-        Удаляет полные дубликаты (hostname, mac, vlan, interface).
-        Сохраняет первую запись с каждым ключом.
-
-        Args:
-            data: Список записей
-
-        Returns:
-            List[Dict]: Дедуплицированные записи
-        """
-        seen: Set[Tuple[str, str, str, str]] = set()
-        result = []
-
-        for row in data:
-            hostname = row.get("hostname", "")
-            mac = self._normalize_mac_for_compare(row.get("mac", ""))
-            vlan = str(row.get("vlan", ""))
-            interface = row.get("interface", "")
-
-            key = (hostname, mac, vlan, interface)
-            if key in seen:
-                continue
-
-            seen.add(key)
-            result.append(row)
-
-        duplicates_removed = len(data) - len(result)
-        if duplicates_removed > 0:
-            logger.debug(f"Удалено {duplicates_removed} дубликатов")
-
-        return result
-
-    def _should_exclude_interface(self, interface: str) -> bool:
-        """
-        Проверяет, нужно ли исключить интерфейс.
-
-        Args:
-            interface: Имя интерфейса
-
-        Returns:
-            bool: True если нужно исключить
-        """
-        for pattern in self._exclude_patterns:
-            if pattern.match(interface):
-                return True
-        return False
-
-    def _normalize_mac(self, mac: str) -> str:
-        """
-        Нормализует MAC-адрес в указанный формат.
-
-        Форматы:
-        - cisco: 0011.2233.4455
-        - ieee: 00:11:22:33:44:55
-        - unix: 00-11-22-33-44-55
-
-        Args:
-            mac: Исходный MAC
-
-        Returns:
-            str: Нормализованный MAC
-        """
-        # Убираем все разделители
-        clean_mac = re.sub(r"[.:\-]", "", mac.lower())
-
-        if len(clean_mac) != 12:
-            return mac  # Возвращаем как есть если некорректный
-
-        if self.mac_format == "cisco":
-            # 0011.2233.4455
-            return f"{clean_mac[0:4]}.{clean_mac[4:8]}.{clean_mac[8:12]}"
-        elif self.mac_format == "unix":
-            # 00-11-22-33-44-55
-            return "-".join(clean_mac[i : i + 2] for i in range(0, 12, 2))
-        else:
-            # ieee (default): 00:11:22:33:44:55
-            return ":".join(clean_mac[i : i + 2] for i in range(0, 12, 2))
-
-    def _normalize_interface(self, interface: str) -> str:
-        """
-        Сокращает имя интерфейса.
-
-        GigabitEthernet0/1 -> Gi0/1
-
-        Args:
-            interface: Полное имя интерфейса
-
-        Returns:
-            str: Сокращённое имя
-        """
-        for full_name, short_name in self.INTERFACE_MAP.items():
-            if interface.startswith(full_name):
-                return interface.replace(full_name, short_name, 1)
-        return interface
+    # Методы _normalize_data, _deduplicate_final, _should_exclude_interface
+    # перенесены в Domain Layer: core/domain/mac.py (MACNormalizer)
 
     def _parse_interface_status(
         self,
@@ -511,48 +366,17 @@ class MACCollector(BaseCollector):
         """
         Добавляет статус интерфейса во все возможные варианты имени.
 
+        Использует get_interface_aliases() для генерации всех возможных
+        форматов имени интерфейса (полное, короткое, альтернативные).
+
         Args:
             status_map: Словарь статусов
             iface: Имя интерфейса
             status: Статус
         """
-        status_map[iface] = status
-
-        # Добавляем сокращённую версию
-        short_iface = self._normalize_interface(iface)
-        if short_iface != iface:
-            status_map[short_iface] = status
-
-        # Добавляем альтернативные сокращения для разных форматов
-        if iface.startswith("Ethernet"):
-            suffix = iface[8:]
-            status_map[f"Et{suffix}"] = status
-            status_map[f"Eth{suffix}"] = status
-        elif iface.startswith("GigabitEthernet"):
-            suffix = iface[15:]
-            status_map[f"Gi{suffix}"] = status
-            status_map[f"Gig{suffix}"] = status
-        elif iface.startswith("FastEthernet"):
-            suffix = iface[12:]
-            status_map[f"Fa{suffix}"] = status
-        elif iface.startswith("TenGigabitEthernet"):
-            suffix = iface[18:]
-            status_map[f"Te{suffix}"] = status
-            status_map[f"Ten{suffix}"] = status
-        # Добавляем обратные маппинги (короткие -> полные)
-        elif iface.startswith("Gi"):
-            suffix = iface[2:]
-            status_map[f"GigabitEthernet{suffix}"] = status
-        elif iface.startswith("Fa"):
-            suffix = iface[2:]
-            status_map[f"FastEthernet{suffix}"] = status
-        elif iface.startswith("Te"):
-            suffix = iface[2:]
-            status_map[f"TenGigabitEthernet{suffix}"] = status
-        elif iface.startswith("Et"):
-            suffix = iface[2:]
-            status_map[f"Ethernet{suffix}"] = status
-            status_map[f"Eth{suffix}"] = status
+        # Получаем все возможные варианты написания интерфейса
+        for alias in get_interface_aliases(iface):
+            status_map[alias] = status
 
     def _parse_interface_status_regex(self, output: str) -> Dict[str, str]:
         """
@@ -618,7 +442,7 @@ class MACCollector(BaseCollector):
                 if iface:
                     descriptions[iface] = desc
                     # Добавляем сокращённую версию
-                    short_iface = self._normalize_interface(iface)
+                    short_iface = normalize_interface_short(iface)
                     if short_iface != iface:
                         descriptions[short_iface] = desc
 
@@ -661,13 +485,8 @@ class MACCollector(BaseCollector):
                 if parts:
                     iface = parts[0]
                     if re.match(r"^(Gi|Fa|Te|Eth|Po)", iface, re.IGNORECASE):
-                        trunk_interfaces.add(iface)
-                        # Добавляем полное имя тоже
-                        for full, short in self.INTERFACE_MAP.items():
-                            if iface.startswith(short):
-                                full_iface = iface.replace(short, full, 1)
-                                trunk_interfaces.add(full_iface)
-                                break
+                        # Добавляем все возможные варианты написания
+                        trunk_interfaces.update(get_interface_aliases(iface))
 
         return trunk_interfaces
 
@@ -692,7 +511,7 @@ class MACCollector(BaseCollector):
             List[Dict]: Список sticky MAC записей
         """
         sticky_macs = []
-        platform = device.device_type
+        platform = device.platform
 
         # Проверяем есть ли шаблон для этой платформы
         template_key = (platform, "port-security")
@@ -725,10 +544,11 @@ class MACCollector(BaseCollector):
 
                 # Нормализуем интерфейс
                 if self.normalize_interfaces:
-                    interface = self._normalize_interface(interface)
+                    interface = normalize_interface_short(interface)
 
                 # Нормализуем MAC
-                mac = self._normalize_mac(mac)
+                normalized_mac = normalize_mac(mac, format=self.mac_format)
+                mac = normalized_mac if normalized_mac else mac
 
                 # Определяем статус порта
                 port_status = interface_status.get(interface, "")

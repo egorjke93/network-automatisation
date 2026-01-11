@@ -1,0 +1,1282 @@
+
+Ок, давай **финальную архитектурную схему** — в виде **логической диаграммы**, без привязки к конкретному фреймворку. Это именно то, к чему твой код **уже почти пришёл**, просто пока всё в одном месте.
+
+Ниже — **целевая схема**, к которой имеет смысл идти.
+
+---
+
+## 🎯 ЦЕЛЬ АРХИТЕКТУРЫ
+
+* Надёжный backend-сервис
+* Переиспользуемый (для тебя и коллег)
+* UI / API поверх
+* Независимость от вендоров
+* Минимум переделок текущего кода
+
+---
+
+## 🧱 ФИНАЛЬНАЯ ЛОГИЧЕСКАЯ СХЕМА
+
+```
+┌─────────────────────────────┐
+│            UI               │
+│  (Web / CLI / Grafana / NB) │
+└───────────────┬─────────────┘
+                │
+                ▼
+┌─────────────────────────────┐
+│          API Layer          │
+│  FastAPI / REST / gRPC      │
+│  - auth                     │
+│  - validation               │
+│  - versioning               │
+└───────────────┬─────────────┘
+                │
+                ▼
+┌─────────────────────────────┐
+│        Application          │
+│        (Use Cases)          │
+│                             │
+│  collect_interfaces()       │
+│  sync_to_netbox()            │
+│  diff_state()               │
+│  export()                   │
+└───────────────┬─────────────┘
+                │
+                ▼
+┌─────────────────────────────┐
+│           Domain             │  ← САМОЕ ВАЖНОЕ
+│   (Vendor-agnostic models)   │
+│                             │
+│  Interface                  │
+│  Device                     │
+│  LAG                         │
+│  VLAN                        │
+│                             │
+│  Interface.port_type         │
+│  Interface.mode              │
+│  Interface.media_type        │
+└───────────────┬─────────────┘
+                │
+                ▼
+┌─────────────────────────────┐
+│      Infrastructure         │
+│                             │
+│  Collectors                 │
+│   - InterfaceCollector      │ ← ТВОЙ КОД
+│   - VLANCollector           │
+│   - LLDPCollector           │
+│                             │
+│  Parsers                    │
+│   - NTC                     │
+│   - Regex fallback          │
+│                             │
+│  Connections                │
+│   - SSH                     │
+│   - Netmiko / Scrapli       │
+└───────────────┬─────────────┘
+                │
+                ▼
+┌─────────────────────────────┐
+│     External Systems        │
+│                             │
+│  Cisco / Arista / Juniper   │
+│  NetBox                     │
+│  Monitoring                 │
+└─────────────────────────────┘
+```
+
+---
+
+## 🔍 ГДЕ ТЫ СЕЙЧАС
+
+Если честно и точно:
+
+```
+Infrastructure + Domain (смешаны)
+```
+
+Твой `InterfaceCollector`:
+
+* ❌ знает слишком много
+* ❌ решает бизнес-логику
+* ❌ нормализует под NetBox
+* ❌ детектит port_type внутри коллектора
+
+НО
+👉 **всё это качественно написано**, просто лежит не там.
+
+---
+
+## 🧠 КЛЮЧЕВОЕ АРХИТЕКТУРНОЕ РЕШЕНИЕ
+
+### ✂️ Разделить на 3 слоя (без переписывания)
+
+### 1️⃣ Infrastructure (оставить почти как есть)
+
+Твой код остаётся тут:
+
+```python
+InterfaceCollector
+  ├─ знает команды
+  ├─ парсит вывод
+  ├─ возвращает "сырые, но нормализованные" данные
+```
+
+**НО:**
+
+* `_detect_port_type()` → убрать
+* NetBox-специфику → убрать
+* `mode/tagged-all` → перенести выше
+
+---
+
+### 2️⃣ Domain (добавить новый слой)
+
+Новый код, **маленький и чистый**:
+
+```python
+@dataclass
+class Interface:
+    name: str
+    status: InterfaceStatus
+    media: MediaType
+    mode: SwitchportMode
+    lag: Optional[str]
+```
+
+И сервисы:
+
+```python
+class InterfaceClassifier:
+    def detect_port_type(interface) -> PortType
+```
+
+👉 ВАЖНО:
+**Domain не знает ни Cisco, ни NX-OS, ни NTC**
+
+---
+
+### 3️⃣ Application (тонкий glue-код)
+
+```python
+raw = collector.collect(devices)
+interfaces = InterfaceMapper.from_raw(raw)
+```
+
+---
+
+## 🛠 СЛОЖНО ЛИ ПЕРЕДЕЛАТЬ?
+
+**Честно: нет.**
+
+Оценка:
+
+* 70% кода остаётся
+* 20% перенос логики
+* 10% рефакторинг имён
+
+Ты **не выкидываешь**, а **расставляешь по местам**.
+
+---
+
+## 📈 БУДЕТ ЛИ СПРОС НА ЭТО НАПРАВЛЕНИЕ?
+
+Да. Причины:
+
+* NetBox стал стандартом
+* Network Source of Truth — тренд
+* Компании устали от Ansible-скриптов «на коленке»
+* Архитекторов, которые **понимают домен**, а не просто код — мало
+
+👉 Особенно ценятся люди, которые:
+
+* мыслят моделями
+* умеют абстрагировать вендоров
+* строят платформы, а не скрипты
+
+---
+
+## 🧩 ТВОЯ РОЛЬ (очень важный момент)
+
+> «я больше архитектурного с ии работаю, код знаю не слишком»
+
+Это **НЕ минус**.
+
+Ты:
+
+* видишь целостную модель
+* знаешь сеть
+* понимаешь, зачем это бизнесу
+
+ИИ:
+
+* допишет код
+* отрефакторит
+* покроет тестами
+
+👉 **архитектор + ИИ = сильная комбинация**
+
+---
+
+## ✅ ИТОГ
+
+Ты:
+
+* выбрал правильное направление
+* уже написал сильное ядро
+* находишься **в 1–2 шагах** от продукта
+
+### Следующий шаг (если хочешь):
+
+1. Я могу **разрезать твой код по слоям**
+2. Или помочь **с Domain-моделью**
+3. Или показать, **как из этого сделать UI/API**
+
+Скажи, куда идём дальше 👍
+---
+
+# 🧱 Цель этапа
+
+Сделать систему:
+
+* **предсказуемой**
+* **воспроизводимой**
+* **безопасной**
+* **готовой к росту**, но без оверинжиниринга
+
+---
+
+# 🔴 PRIORITY 1 — Надёжность и контроль (обязательно)
+
+## 1️⃣ Run / Execution Context (самое важное)
+
+### Что сделать
+
+Ввести **контекст запуска**, который прокидывается везде.
+
+```python
+class RunContext:
+    run_id: str
+    started_at: datetime
+    dry_run: bool
+    triggered_by: str  # cli / cron / api
+```
+
+### Где использовать
+
+* логи
+* sync с NetBox
+* ошибки
+* экспорт файлов
+
+```text
+reports/
+└── run_2025-03-14T12-30-22/
+     ├── mac.xlsx
+     ├── interfaces.json
+     └── summary.json
+```
+
+### Почему это must-have
+
+* легко дебажить
+* легко сравнивать
+* безопасный cleanup
+
+⏱ 0.5–1 день
+🔥 **Максимальный эффект**
+
+---
+
+## 2️⃣ Строгая модель данных (нормализация)
+
+### Сейчас (типично)
+
+```python
+dict[str, Any]
+```
+
+### Нужно
+
+```python
+@dataclass
+class InterfaceState:
+    name: str
+    enabled: bool
+    description: str | None
+    mac: str | None
+    port_type: str | None
+```
+
+### Где
+
+* после парсинга
+* до экспорта
+* до NetBox
+
+### Что это решает
+
+* ошибки ловятся раньше
+* тесты проще
+* diff элементарен
+
+⏱ 1–2 дня
+💎 **Огромный плюс к качеству**
+
+---
+
+## 3️⃣ Diff перед Apply (без этого дальше нельзя)
+
+### Архитектура
+
+```text
+Collector → DesiredState
+NetBox → ActualState
+           ↓
+         Diff
+           ↓
+        Apply | Dry-run
+```
+
+### Пример
+
+```python
+diff = InterfaceDiff(desired, actual)
+
+if diff.has_changes():
+    sync.apply(diff)
+```
+
+### Почему
+
+* нет случайных изменений
+* понятный dry-run
+* аудит
+
+⏱ 1–2 дня
+🚨 **Без diff автоматизация опасна**
+
+---
+
+# 🟠 PRIORITY 2 — Ошибки, логи, тестируемость
+
+## 4️⃣ Типизированные ошибки
+
+### Ввести базовую иерархию
+
+```python
+class CollectorError(Exception): ...
+class SSHError(CollectorError): ...
+class ParseError(CollectorError): ...
+class NetBoxError(CollectorError): ...
+```
+
+### Использовать
+
+* retries
+* статистика
+* отчёты
+
+⏱ 0.5 дня
+
+---
+
+## 5️⃣ Структурированные логи
+
+### Не так
+
+```text
+ERROR: failed
+```
+
+### А так
+
+```json
+{
+  "run_id": "...",
+  "device": "SW1",
+  "collector": "mac",
+  "error": "ParseError",
+  "command": "show mac address-table"
+}
+```
+
+### Минимум
+
+* `run_id`
+* `device`
+* `collector`
+* `stage`
+
+⏱ 0.5–1 день
+
+---
+
+## 6️⃣ Тесты (без фанатизма)
+
+### Что тестировать ОБЯЗАТЕЛЬНО
+
+| Что           | Тип  |
+| ------------- | ---- |
+| парсеры       | unit |
+| нормализацию  | unit |
+| diff          | unit |
+| NetBox client | mock |
+
+### Пример
+
+```python
+def test_mac_parser():
+    output = load_fixture("show_mac.txt")
+    result = parse_mac(output)
+    assert result[0].mac == "0011.2233.4455"
+```
+
+⏱ 1–2 дня
+
+---
+
+# 🟡 PRIORITY 3 — Конфиги и безопасность
+
+## 7️⃣ Валидация config.yaml
+
+### Сейчас
+
+* runtime errors
+
+### Нужно
+
+```python
+class NetBoxConfig(BaseModel):
+    url: HttpUrl
+    token: SecretStr
+```
+
+(Pydantic)
+
+⏱ 0.5 дня
+
+---
+
+## 8️⃣ Секреты — финальная схема
+
+### Best practice (для тебя)
+
+| Что          | Где                        |
+| ------------ | -------------------------- |
+| NetBox token | Windows Credential Manager |
+| Device creds | ввод при запуске           |
+| config.yaml  | без секретов               |
+
+### В коде
+
+```python
+token = get_credential("netbox", "api_token")
+```
+
+⏱ 0.5 дня
+
+---
+
+# 🧩 PRIORITY 4 — Уборка архитектуры
+
+## 9️⃣ Чёткие границы слоёв
+
+### Проверка
+
+* collectors **не знают про NetBox**
+* exporters **не знают про SSH**
+* sync **не парсит CLI**
+
+Если где-то нарушено — вынести.
+
+⏱ 0.5–1 день
+
+---
+
+## 🔟 Документация как код
+
+### Минимум
+
+* `ARCHITECTURE.md` ✔ (уже есть)
+* `DECISIONS.md` — почему так
+* `CONTRIBUTING.md` — как добавлять
+
+⏱ 0.5 дня
+
+---
+
+# 🧭 Рекомендуемый порядок (реальный)
+
+```
+1. RunContext
+2. Data models
+3. Diff
+4. Errors
+5. Logs
+6. Tests
+7. Config validation
+8. Secrets
+9. Cleanup boundaries
+```
+
+👉 **Это ~1–2 недели спокойной, качественной работы**
+
+---
+
+# 🧠 Главное
+
+Ты **уже перерос уровень “скрипт”**.
+Сейчас ты делаешь **инженерное цементирование** — именно его почти никто не делает.
+
+Если хочешь, следующим шагом могу:
+
+* разобрать **конкретно твой код и сказать “вынести / оставить”**
+* помочь написать **RunContext + Diff skeleton**
+* составить **Definition of Done для “причесано”**
+
+Скажи, с какого пункта начнём — я проведу тебя пошагово 👌
+
+
+Отличный вопрос. Отвечу **подробно, по-инженерному**, без абстракций и без «переписывай всё».
+Спойлер: **это не сложно**, если делать правильно. Это **рефакторинг, а не новая система**.
+
+---
+
+# 🥇 PRIORITY 1 — Domain layer
+
+**(самое важное и самое непонятное на первый взгляд)**
+
+## Что это ПРОСТЫМИ СЛОВАМИ
+
+> Domain layer — это место, где ты описываешь **как должна выглядеть сеть**,
+> а не **как ты её собираешь или куда ты её записываешь**.
+
+Сейчас у тебя логика типа:
+
+* если speed такой → обновить
+* если интерфейс такой → пропустить
+* если LAG → особое поведение
+
+Но эта логика:
+
+* размазана по collectors
+* размазана по netbox/sync
+
+👉 Domain layer **собирает все правила в одном месте**.
+
+---
+
+## Как это выглядит СЕЙЧАС (типично)
+
+```python
+# collectors/interfaces.py
+if row["speed"] != nb_interface.speed:
+    update_interface(...)
+```
+
+❌ collector решает бизнес-логику.
+
+---
+
+## Как это должно выглядеть
+
+```python
+# domain/interface.py
+class InterfaceState:
+    def needs_update(self, nb_obj) -> bool:
+        return self.speed != nb_obj.speed
+```
+
+```python
+# netbox/sync.py
+if iface_state.needs_update(nb_iface):
+    nb.update_interface(...)
+```
+
+---
+
+## Минимальный Domain слой (реально)
+
+```
+core/domain/
+  interface.py
+  device.py
+  lag.py
+```
+
+### Пример (минимум)
+
+```python
+@dataclass
+class InterfaceState:
+    name: str
+    speed: int
+    admin_up: bool
+
+    def differs(self, nb) -> bool:
+        return (
+            self.speed != nb.speed or
+            self.admin_up != nb.enabled
+        )
+```
+
+---
+
+## Сложно ли?
+
+**Нет.**
+Это:
+
+* перенос логики
+* не изменение поведения
+
+⏱ **1–2 дня**, максимум **3**, даже в большом проекте.
+
+---
+
+## Что ты получаешь
+
+* можно тестировать без сети
+* можно менять правила без ломки collectors
+* код сразу читается как “сетевая модель”
+
+---
+
+# 🥈 PRIORITY 2 — Явный Pipeline
+
+## Что это простыми словами
+
+> Pipeline — это **явный сценарий синхронизации**,
+> а не “main.py вызывает 10 функций в нужном порядке”.
+
+---
+
+## Как обычно бывает сейчас
+
+```python
+collect_devices()
+collect_interfaces()
+sync_devices()
+sync_interfaces()
+sync_links()
+```
+
+❌
+
+* порядок не зафиксирован
+* сложно логировать
+* сложно делать web UI
+
+---
+
+## Как это должно быть
+
+```python
+class SyncPipeline:
+    steps = [
+        CollectDevices,
+        CollectInterfaces,
+        SyncDevices,
+        SyncInterfaces,
+        SyncLinks,
+    ]
+
+    def run(self):
+        for step in self.steps:
+            step.execute()
+```
+
+---
+
+## Что такое Step
+
+```python
+class Step:
+    name = "sync_interfaces"
+
+    def execute(self, ctx):
+        ...
+```
+
+`ctx` — общий контекст:
+
+* inventory
+* config
+* run_id
+* dry_run
+
+---
+
+## Сложно ли?
+
+**Вообще нет.**
+
+Ты:
+
+* просто оборачиваешь существующие функции
+* НЕ переписываешь логику
+
+⏱ **1 день**, максимум **2**.
+
+---
+
+## Что ты получаешь
+
+* единый контроль запуска
+* можно:
+
+  * отключать шаги
+  * делать dry-run
+  * логировать прогресс
+* web UI делается за вечер
+
+---
+
+# 🥉 PRIORITY 3 — Async execution backend
+
+## Самый частый страх
+
+> “Придётся всё переписать под async”
+
+❌ НЕТ.
+
+---
+
+## Правильный подход
+
+> **Не заменять sync → async**,
+> а **добавить второй backend**.
+
+---
+
+## Как это выглядит
+
+```python
+class InterfaceCollector:
+    def collect(self):
+        return scrapli_sync()
+
+    async def collect_async(self):
+        return await scrapli_async()
+```
+
+CLI:
+
+```
+--mode sync
+--mode async
+```
+
+---
+
+## Где используется
+
+```python
+if mode == "async":
+    await collector.collect_async()
+else:
+    collector.collect()
+```
+
+---
+
+## Сложно ли?
+
+* если ты знаешь Scrapli → **не сложно**
+* сложность:
+
+  * await
+  * gather
+  * timeouts
+
+⏱ **2–4 дня**, в зависимости от количества collectors.
+
+---
+
+## Что ты получаешь
+
+* масштабирование
+* скорость
+* готовность к web
+* плюс 100 очков на собесе
+
+---
+
+# ❗ Что важно понять (очень)
+
+### Эти 3 пункта:
+
+* **НЕ ломают существующий код**
+* **НЕ требуют новой архитектуры**
+* **НЕ требуют новых технологий**
+
+Это:
+
+* рефакторинг
+* формализация
+* взросление проекта
+
+---
+
+# Итог по сложности
+
+| Пункт         | Сложность  | Время   |
+| ------------- | ---------- | ------- |
+| Domain layer  | 🟡 Средняя | 1–3 дня |
+| Pipeline      | 🟢 Лёгкая  | 1–2 дня |
+| Async backend | 🟡 Средняя | 2–4 дня |
+
+👉 **В сумме 1–1.5 недели**, без стресса.
+
+
+
+
+
+
+
+## СПРАВОЧНИК КОМАНД CLI
+
+### 1. devices — Сбор инвентаризации устройств
+```bash
+python -m network_collector devices [OPTIONS]
+```
+| Опция | Описание | Default |
+|-------|----------|---------|
+| `--format`, `-f` | Формат вывода (excel/csv/json) | csv |
+| `--delimiter` | Разделитель для CSV | , |
+| `--site` | Сайт для NetBox | Main |
+| `--role` | Роль устройства | Switch |
+| `--manufacturer` | Производитель по умолчанию | Cisco |
+
+### 2. mac — Сбор MAC-адресов
+```bash
+python -m network_collector mac [OPTIONS]
+```
+| Опция | Описание | Default |
+|-------|----------|---------|
+| `--format`, `-f` | Формат вывода (excel/csv/json) | excel |
+| `--delimiter` | Разделитель для CSV | , |
+| `--mac-format` | Формат MAC (ieee/cisco/unix) | из config |
+| `--fields` | Поля для вывода (через запятую) | все |
+| `--with-descriptions` | Собирать описания интерфейсов | из config |
+| `--no-descriptions` | Не собирать описания | - |
+| `--include-trunk` | Включать trunk порты | из config |
+| `--exclude-trunk` | Исключать trunk порты | - |
+| `--match-file` | Excel для сопоставления MAC с хостами | - |
+| `--per-device` | Отдельный файл для каждого устройства | - |
+| `--with-port-security` | Sticky MAC из port-security | - |
+
+### 3. lldp — Сбор LLDP/CDP соседей
+```bash
+python -m network_collector lldp [OPTIONS]
+```
+| Опция | Описание | Default |
+|-------|----------|---------|
+| `--format`, `-f` | Формат вывода (excel/csv/json) | excel |
+| `--delimiter` | Разделитель для CSV | , |
+| `--protocol` | Протокол (lldp/cdp/both) | lldp |
+| `--fields` | Поля для вывода | все |
+
+### 4. interfaces — Сбор информации об интерфейсах
+```bash
+python -m network_collector interfaces [OPTIONS]
+```
+| Опция | Описание | Default |
+|-------|----------|---------|
+| `--format`, `-f` | Формат вывода (excel/csv/json) | excel |
+| `--delimiter` | Разделитель для CSV | , |
+| `--fields` | Поля для вывода | все |
+
+### 5. inventory — Сбор инвентаризации (модули, SFP, PSU)
+```bash
+python -m network_collector inventory [OPTIONS]
+```
+| Опция | Описание | Default |
+|-------|----------|---------|
+| `--format`, `-f` | Формат вывода (excel/csv/json) | json |
+| `--delimiter` | Разделитель для CSV | , |
+| `--fields` | Поля для вывода | все |
+
+### 6. run — Выполнить произвольную команду
+```bash
+python -m network_collector run "show version" [OPTIONS]
+```
+| Опция | Описание | Default |
+|-------|----------|---------|
+| `cmd` | Команда для выполнения | обязательный |
+| `--platform` | Платформа для NTC Templates | авто |
+| `--format`, `-f` | Формат вывода (excel/csv/json/raw) | json |
+| `--fields` | Поля для извлечения из NTC | все |
+
+### 7. match-mac — Сопоставление MAC с хостами
+```bash
+python -m network_collector match-mac --mac-file mac.xlsx --hosts-file glpi.xlsx [OPTIONS]
+```
+| Опция | Описание | Default |
+|-------|----------|---------|
+| `--mac-file` | Excel с MAC-адресами | обязательный |
+| `--hosts-file` | Excel со справочником хостов | обязательный |
+| `--hosts-folder` | Папка с несколькими справочниками | - |
+| `--mac-column` | Колонка с MAC в справочнике | MAC |
+| `--name-column` | Колонка с именем хоста | Name |
+| `--output`, `-o` | Файл результатов | matched_data.xlsx |
+
+### 8. push-descriptions — Применение описаний портов
+```bash
+python -m network_collector push-descriptions --matched-file matched.xlsx [OPTIONS]
+```
+| Опция | Описание | Default |
+|-------|----------|---------|
+| `--matched-file` | Excel с сопоставлениями | обязательный |
+| `--only-empty` | Только порты без описания | - |
+| `--overwrite` | Перезаписывать существующие | - |
+| `--dry-run` | Режим симуляции | True |
+| `--apply` | Применить изменения | - |
+
+### 9. sync-netbox — Синхронизация с NetBox
+```bash
+python -m network_collector sync-netbox [OPTIONS]
+```
+| Опция | Описание | Default |
+|-------|----------|---------|
+| `--url` | URL NetBox (или env NETBOX_URL) | env |
+| `--token` | API токен (или env NETBOX_TOKEN) | env |
+| `--sync-all` | Полная синхронизация | - |
+| `--create-devices` | Создать устройства | - |
+| `--update-devices` | Обновлять устройства (serial, model) | - |
+| `--interfaces` | Синхронизировать интерфейсы | - |
+| `--ip-addresses` | Синхронизировать IP-адреса | - |
+| `--vlans` | Синхронизировать VLAN | - |
+| `--cables` | Создать кабели из LLDP/CDP | - |
+| `--inventory` | Синхронизировать inventory | - |
+| `--protocol` | Протокол для соседей (lldp/cdp/both) | both |
+| `--site` | Сайт для устройств | из config |
+| `--role` | Роль для устройств | из config |
+| `--tenant` | Арендатор (для --cleanup) | - |
+| `--cleanup` | Удалять лишние устройства | - |
+| `--dry-run` | Режим симуляции | - |
+| `--create-only` | Только создавать новые | - |
+| `--skip-unknown` | Пропускать соседей без hostname | True |
+
+### 10. backup — Резервное копирование конфигураций
+```bash
+python -m network_collector backup [OPTIONS]
+```
+| Опция | Описание | Default |
+|-------|----------|---------|
+| `--output`, `-o` | Папка для конфигураций | backups |
+
+---
+
+## КОМАНДЫ УСТРОЙСТВ (show commands)
+
+Команды, выполняемые на сетевом оборудовании для сбора данных.
+
+### devices (инвентаризация)
+| Платформа | Команда |
+|-----------|---------|
+| cisco_ios / cisco_iosxe / cisco_nxos | `show version` |
+| arista_eos | `show version` |
+| juniper_junos | `show version` |
+
+### mac (MAC-адреса)
+| Платформа | Команда |
+|-----------|---------|
+| cisco_ios / cisco_iosxe / cisco_nxos | `show mac address-table` |
+| arista_eos | `show mac address-table` |
+| juniper_junos | `show ethernet-switching table` |
+| qtech / qtech_qsw | `show mac address-table` |
+
+### lldp (соседи LLDP)
+| Платформа | Команда |
+|-----------|---------|
+| cisco_ios / cisco_iosxe / cisco_nxos | `show lldp neighbors detail` |
+| arista_eos | `show lldp neighbors detail` |
+| juniper_junos | `show lldp neighbors` |
+
+### lldp --protocol cdp (соседи CDP)
+| Платформа | Команда |
+|-----------|---------|
+| cisco_ios / cisco_iosxe / cisco_nxos | `show cdp neighbors detail` |
+
+### interfaces (интерфейсы)
+| Платформа | Команда |
+|-----------|---------|
+| cisco_ios / cisco_iosxe | `show interfaces` |
+| cisco_nxos | `show interface` |
+| arista_eos | `show interfaces` |
+| juniper_junos | `show interfaces extensive` |
+
+### interfaces (дополнительные команды)
+| Данные | Платформа | Команда |
+|--------|-----------|---------|
+| LAG membership | cisco_ios / cisco_iosxe | `show etherchannel summary` |
+| LAG membership | cisco_nxos / arista_eos | `show port-channel summary` |
+| Switchport mode | cisco_ios / cisco_iosxe | `show interfaces switchport` |
+| Switchport mode | cisco_nxos | `show interface switchport` |
+| Switchport mode | arista_eos | `show interfaces switchport` |
+
+### inventory (модули, SFP, PSU)
+| Платформа | Команда |
+|-----------|---------|
+| cisco_ios / cisco_iosxe / cisco_nxos | `show inventory` |
+| arista_eos | `show inventory` |
+
+### backup (конфигурации)
+| Платформа | Команда |
+|-----------|---------|
+| cisco_ios / cisco_iosxe / cisco_nxos / cisco_iosxr | `show running-config` |
+| arista_eos | `show running-config` |
+| juniper_junos | `show configuration \| display set` |
+| qtech / qtech_qsw | `show running-config` |
+
+---
+
+### Сводная таблица всех команд для Cisco IOS/IOS-XE
+
+```
+# Инвентаризация устройства
+show version
+
+# MAC-адреса
+show mac address-table
+
+# Соседи
+show lldp neighbors detail
+show cdp neighbors detail
+
+# Интерфейсы
+show interfaces
+show interfaces switchport
+show etherchannel summary
+
+# Модули и трансиверы
+show inventory
+
+# Конфигурация
+show running-config
+```
+
+---
+
+8. ТЕСТИРОВАНИЕ УТИЛИТЫ
+
+Покрыть тестами парсеры, коллекторы, нормализацию данных для обеспечения стабильности при добавлении новых вендоров/устройств.
+
+### Структура тестов
+
+```
+tests/
+├── fixtures/                    # Реальные выводы команд с устройств
+│   ├── cisco_ios/
+│   │   ├── show_interfaces.txt
+│   │   ├── show_mac_address_table.txt
+│   │   ├── show_lldp_neighbors_detail.txt
+│   │   ├── show_cdp_neighbors_detail.txt
+│   │   ├── show_interfaces_switchport.txt
+│   │   └── show_etherchannel_summary.txt
+│   ├── cisco_nxos/
+│   ├── arista_eos/
+│   ├── juniper_junos/
+│   └── qtech/
+│
+├── test_parsers/                # Тесты парсинга выводов
+│   ├── test_interfaces.py       # show interfaces
+│   ├── test_mac.py              # show mac address-table
+│   ├── test_lldp.py             # show lldp/cdp neighbors
+│   ├── test_switchport.py       # show interfaces switchport
+│   └── test_lag.py              # show etherchannel summary
+│
+├── test_collectors/             # Тесты нормализации и логики
+│   ├── test_normalize.py        # Единообразие вывода всех платформ
+│   ├── test_merge_lldp_cdp.py   # Объединение LLDP + CDP
+│   └── test_switchport_mode.py  # tagged vs tagged-all
+│
+├── test_netbox/                 # Тесты синхронизации (с mock API)
+│   ├── test_sync_interfaces.py
+│   ├── test_sync_cables.py
+│   └── test_find_neighbor.py
+│
+└── conftest.py                  # Общие fixtures, MockDevice
+```
+
+### Приоритеты тестирования
+
+| Приоритет | Модуль | Что тестировать |
+|-----------|--------|-----------------|
+| 🔴 Высокий | parsers | Парсинг выводов (regex + NTC fallback) |
+| 🔴 Высокий | normalize | Единообразие полей для всех платформ |
+| 🔴 Высокий | switchport | tagged vs tagged-all логика |
+| 🟡 Средний | lldp merge | Объединение LLDP + CDP данных |
+| 🟡 Средний | lag | LAG membership парсинг |
+| 🟢 Низкий | netbox sync | Требует mock pynetbox API |
+
+### Обязательные поля для проверки единообразия
+
+```python
+REQUIRED_FIELDS = {
+    "interfaces": ["interface", "status", "mac", "description", "mode"],
+    "mac": ["mac", "vlan", "interface", "type"],
+    "lldp": ["local_interface", "remote_hostname", "remote_port", "neighbor_type"],
+    "inventory": ["name", "part_id", "serial", "description"],
+}
+```
+
+### Примеры тестов
+
+1. Парсинг интерфейсов:
+   - Все платформы возвращают обязательные поля
+   - Статусы нормализуются (up/down/disabled/error)
+   - MAC-адреса в едином формате
+
+2. Switchport mode:
+   - trunk + "Trunking VLANs: ALL" → tagged-all
+   - trunk + "Trunking VLANs: 10,20,30" → tagged
+   - access → access
+
+3. LLDP/CDP merge:
+   - LLDP даёт MAC (chassis_id)
+   - CDP даёт hostname если LLDP не дал system_name
+   - Соседи сопоставляются по local_interface
+
+4. Единообразие вывода:
+   - Все платформы дают одинаковую структуру
+   - Новый вендор должен пройти все тесты
+
+### Как добавлять новый вендор
+
+1. Собрать реальные выводы команд → tests/fixtures/new_vendor/
+2. Добавить платформу в параметризованные тесты
+3. Запустить тесты — увидеть что падает
+4. Добавить парсинг/маппинг в код
+5. Все тесты должны пройти
+
+### Запуск тестов
+
+```bash
+# Установка pytest
+pip install pytest pytest-cov
+
+# Все тесты
+pytest tests/ -v
+
+# Только парсеры
+pytest tests/test_parsers/ -v
+
+# С coverage отчётом
+pytest tests/ --cov=network_collector --cov-report=html
+
+# Конкретный тест
+pytest tests/test_parsers/test_switchport.py -v
+```
+
+### Зависимости для тестов
+
+```
+# requirements-dev.txt
+pytest>=7.0
+pytest-cov>=4.0
+pytest-mock>=3.0
+```
+
+---
+
+# ✅ ВЫПОЛНЕНО (2025-12-27)
+
+## Реализовано
+
+| Компонент | Статус | Описание |
+|-----------|--------|----------|
+| RunContext | ✅ | run_id, dry_run, timing, output_dir |
+| Data Models | ✅ | Interface, MACEntry, LLDPNeighbor, InventoryItem |
+| Typed Exceptions | ✅ | Иерархия ошибок, is_retryable |
+| Structured Logs | ✅ | JSON формат, ротация, LogConfig |
+| Diff before Apply | ✅ | DiffCalculator, preview changes |
+| Config Validation | ✅ | Pydantic схемы (config_schema.py) |
+| Domain Layer | ✅ | InterfaceNormalizer, MACNormalizer, LLDPNormalizer, InventoryNormalizer |
+| Tests | ✅ | 621 тест проходят |
+
+## Domain Layer — готов
+
+```
+core/domain/
+├── __init__.py
+├── interface.py   # InterfaceNormalizer (57 тестов)
+├── mac.py         # MACNormalizer (47 тестов)
+├── lldp.py        # LLDPNormalizer (31 тест)
+└── inventory.py   # InventoryNormalizer (31 тест)
+```
+
+---
+
+# 🚀 СЛЕДУЮЩИЕ ШАГИ — Использование Domain Layer
+
+## Приоритет 1: Рефакторинг Collectors
+
+Перенести использование Normalizers в collectors:
+
+```python
+# collectors/interfaces.py (ТЕКУЩИЙ)
+class InterfaceCollector:
+    def collect(self, devices) -> List[Dict]:
+        ...  # логика нормализации внутри
+
+# collectors/interfaces.py (ЦЕЛЕВОЙ)
+from core.domain import InterfaceNormalizer
+
+class InterfaceCollector:
+    def __init__(self):
+        self.normalizer = InterfaceNormalizer()
+
+    def collect(self, devices) -> List[Dict]:
+        raw_data = self._collect_raw(devices)
+        return self.normalizer.normalize_dicts(raw_data)
+
+    def collect_models(self, devices) -> List[Interface]:
+        raw_data = self._collect_raw(devices)
+        return self.normalizer.normalize(raw_data)
+```
+
+## Приоритет 2: Интеграция с NetBox Sync
+
+```python
+# netbox/sync.py (ЦЕЛЕВОЙ)
+from core.domain import InterfaceNormalizer
+
+class NetBoxSync:
+    def __init__(self):
+        self.interface_normalizer = InterfaceNormalizer()
+
+    def sync_interfaces(self, device, raw_interfaces):
+        # Нормализация через Domain Layer
+        interfaces = self.interface_normalizer.normalize(raw_interfaces)
+
+        for intf in interfaces:
+            # Работа с типизированными моделями
+            port_type = intf.port_type  # уже определён
+            mode = intf.mode  # уже определён
+```
+
+## Приоритет 3: Unit-тесты без SSH
+
+```python
+# tests/test_collectors/test_interface_collector.py
+def test_collector_uses_normalizer():
+    """Collector использует Domain Layer для нормализации."""
+    raw_data = [{"interface": "Gi0/1", "link_status": "up"}]
+
+    collector = InterfaceCollector()
+    result = collector.collect_models(mock_device_with_data(raw_data))
+
+    assert result[0].status == "up"
+    assert result[0].port_type == "1g-rj45"
+```
+
+## Ожидаемые результаты
+
+- **Collectors** — только сбор данных (SSH, парсинг)
+- **Domain Layer** — вся бизнес-логика (нормализация, валидация)
+- **NetBox Sync** — использует типизированные модели
+- **Тесты** — можно тестировать без SSH инфраструктуры

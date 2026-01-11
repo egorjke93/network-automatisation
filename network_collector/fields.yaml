@@ -243,15 +243,15 @@ interfaces:
     name: "Duplex"
     order: 12
   bandwidth:
-    enabled: false
+    enabled: false  # Нет в модели Interface, используйте speed
     name: "Bandwidth"
     order: 13
   hardware_type:
-    enabled: false
+    enabled: true
     name: "Hardware Type"
     order: 14
   media_type:
-    enabled: false
+    enabled: true
     name: "Media Type"
     order: 15
 
@@ -341,10 +341,10 @@ sync:
         enabled: true
         source: platform
       asset_tag:
-        enabled: false
+        enabled: true
         source: asset_tag
       comments:
-        enabled: false
+        enabled: true
         source: comments
     defaults:
       site: "SU"
@@ -369,19 +369,19 @@ sync:
         enabled: true
         source: mtu
       speed:
-        enabled: false
+        enabled: true
         source: speed
       duplex:
-        enabled: false
+        enabled: true
         source: duplex
       mode:
-        enabled: false
+        enabled: true
         source: mode       # access, tagged, tagged-all
       untagged_vlan:
-        enabled: false
+        enabled: true
         source: native_vlan
       tagged_vlans:
-        enabled: false
+        enabled: true
         source: tagged_vlans
       hardware_type:
         enabled: true
@@ -395,6 +395,14 @@ sync:
       create_missing: true
       update_existing: true
       auto_detect_type: true  # Определять тип по hardware_type/media_type/speed
+      # Исключить интерфейсы из синхронизации (regex паттерны)
+      exclude_interfaces:
+        - "^Vlan1$"         # Vlan1 (дефолтный VLAN)
+        - "^Null\\d+"       # Null интерфейсы
+      # MAC-адрес только на интерфейсы с IP (L3)
+      # Если true - MAC добавляется только на интерфейсы где есть ip_address
+      # Если false - MAC добавляется на все интерфейсы
+      sync_mac_only_with_ip: true
 
   # --- IP-адреса ---
   ip_addresses:

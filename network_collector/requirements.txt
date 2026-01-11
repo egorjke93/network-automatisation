@@ -12,5 +12,9 @@ pandas>=2.0.0               # Работа с данными, сопоставл
 # NetBox интеграция (опционально)
 pynetbox>=7.4.0             # NetBox API клиент (совместим с NetBox 4.x)
 
+# Безопасность (опционально)
+keyring>=24.0.0             # Хранение токенов в системном хранилище (Credential Manager/Keychain)
+python-certifi-win32>=1.6.0 # SSL сертификаты из Windows Certificate Store
+
 # Для scrapli ssh2 транспорта (рекомендуется)
 ssh2-python>=1.0.0          # SSH2 транспорт для Scrapli (быстрее paramiko)

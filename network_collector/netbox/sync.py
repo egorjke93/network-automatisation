@@ -26,54 +26,35 @@
     sync.sync_cables_from_lldp(lldp_data)
 """
 
+import re
 import logging
 from typing import List, Dict, Any, Optional
 
 from .client import NetBoxClient
+from ..core.context import RunContext, get_current_context
+from ..core.models import Interface, IPAddressEntry, InventoryItem, LLDPNeighbor, DeviceInfo
+from ..core.domain.sync import SyncComparator, SyncDiff, ChangeType, get_cable_endpoints
+from ..core.exceptions import (
+    NetBoxError,
+    NetBoxConnectionError,
+    NetBoxAPIError,
+    NetBoxValidationError,
+    format_error_for_log,
+)
 from ..core.constants import (
     INTERFACE_FULL_MAP,
     DEFAULT_PREFIX_LENGTH,
-    NETBOX_INTERFACE_TYPE_MAP,
-    NETBOX_HARDWARE_TYPE_MAP,
-    VIRTUAL_INTERFACE_PREFIXES,
-    MGMT_INTERFACE_PATTERNS,
     normalize_interface_full,
     normalize_device_model,
+    normalize_mac_netbox,
+    get_netbox_interface_type,
+    slugify,
+    mask_to_prefix,
+    transliterate_to_slug,
 )
 from ..fields_config import get_sync_config
 
 logger = logging.getLogger(__name__)
-
-# Таблица транслитерации кириллицы в латиницу
-_TRANSLIT_TABLE = {
-    'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
-    'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
-    'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
-    'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
-    'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
-}
-
-
-def transliterate_to_slug(name: str) -> str:
-    """
-    Транслитерирует кириллицу в латиницу и создаёт валидный slug.
-
-    Args:
-        name: Имя (может содержать кириллицу)
-
-    Returns:
-        str: Валидный slug (только латиница, цифры, дефисы, подчёркивания)
-    """
-    result = []
-    for char in name.lower():
-        if char in _TRANSLIT_TABLE:
-            result.append(_TRANSLIT_TABLE[char])
-        elif char.isalnum() or char in '-_':
-            result.append(char)
-        elif char == ' ':
-            result.append('-')
-        # Другие символы пропускаем
-    return ''.join(result)
 
 
 class NetBoxSync:
@@ -105,6 +86,7 @@ class NetBoxSync:
         dry_run: bool = False,
         create_only: bool = False,
         update_only: bool = False,
+        context: Optional[RunContext] = None,
     ):
         """
         Инициализация синхронизатора.
@@ -114,8 +96,10 @@ class NetBoxSync:
             dry_run: Режим симуляции (ничего не меняет)
             create_only: Только создавать новые объекты
             update_only: Только обновлять существующие
+            context: Контекст выполнения (если None — использует глобальный)
         """
         self.client = client
+        self.ctx = context or get_current_context()
         self.dry_run = dry_run
         self.create_only = create_only
         self.update_only = update_only
@@ -124,26 +108,34 @@ class NetBoxSync:
         self._device_cache: Dict[str, Any] = {}
         self._mac_cache: Dict[str, Any] = {}
 
+    def _log_prefix(self) -> str:
+        """Возвращает префикс для логов с run_id."""
+        if self.ctx:
+            return f"[{self.ctx.run_id}] "
+        return ""
+
     def sync_interfaces(
         self,
         device_name: str,
-        interfaces: List[Dict[str, Any]],
+        interfaces: List[Interface],
         create_missing: Optional[bool] = None,
         update_existing: Optional[bool] = None,
+        cleanup: bool = False,
     ) -> Dict[str, int]:
         """
         Синхронизирует интерфейсы устройства.
 
         Args:
             device_name: Имя устройства в NetBox
-            interfaces: Список интерфейсов для синхронизации
+            interfaces: Список интерфейсов (Interface модели)
             create_missing: Создавать отсутствующие (None = из config)
             update_existing: Обновлять существующие (None = из config)
+            cleanup: Удалять интерфейсы из NetBox которых нет на устройстве
 
         Returns:
-            Dict: Статистика {created: N, updated: N, skipped: N}
+            Dict: Статистика {created, updated, deleted, skipped}
         """
-        stats = {"created": 0, "updated": 0, "skipped": 0}
+        stats = {"created": 0, "updated": 0, "deleted": 0, "skipped": 0}
         sync_cfg = get_sync_config("interfaces")
 
         # Используем значения из config если не переданы явно
@@ -159,92 +151,132 @@ class NetBoxSync:
             return stats
 
         # Получаем существующие интерфейсы
-        existing = {
-            intf.name: intf for intf in self.client.get_interfaces(device_id=device.id)
-        }
+        existing = list(self.client.get_interfaces(device_id=device.id))
 
-        for intf_data in interfaces:
-            intf_name = intf_data.get("interface", intf_data.get("name"))
-            if not intf_name:
-                continue
+        # Фильтры исключения интерфейсов
+        exclude_patterns = sync_cfg.get_option("exclude_interfaces", [])
 
-            if intf_name in existing:
-                # Обновляем существующий
-                if update_existing:
-                    self._update_interface(existing[intf_name], intf_data)
+        # Конвертируем в Interface модели если нужно
+        interface_models = Interface.ensure_list(interfaces)
+
+        # Сортируем: сначала LAG интерфейсы (Po*), потом остальные
+        def is_lag(intf: Interface) -> int:
+            return 0 if intf.name.lower().startswith(("port-channel", "po")) else 1
+
+        sorted_interfaces = sorted(interface_models, key=is_lag)
+
+        # Используем SyncComparator для определения изменений
+        comparator = SyncComparator()
+        local_data = [intf.to_dict() for intf in sorted_interfaces if intf.name]
+        diff = comparator.compare_interfaces(
+            local=local_data,
+            remote=existing,
+            exclude_patterns=exclude_patterns,
+            create_missing=create_missing,
+            update_existing=update_existing,
+            cleanup=cleanup,
+        )
+
+        # Создаём новые интерфейсы
+        for item in diff.to_create:
+            intf = next((i for i in sorted_interfaces if i.name == item.name), None)
+            if intf:
+                self._create_interface(device.id, intf)
+                stats["created"] += 1
+
+        # Обновляем существующие
+        for item in diff.to_update:
+            intf = next((i for i in sorted_interfaces if i.name == item.name), None)
+            if intf and item.remote_data:
+                updated = self._update_interface(item.remote_data, intf)
+                if updated:
                     stats["updated"] += 1
                 else:
                     stats["skipped"] += 1
-            else:
-                # Создаём новый
-                if create_missing:
-                    self._create_interface(device.id, intf_name, intf_data)
-                    stats["created"] += 1
-                else:
-                    stats["skipped"] += 1
+
+        # Удаляем лишние (cleanup)
+        for item in diff.to_delete:
+            self._delete_interface(item.remote_data)
+            stats["deleted"] += 1
+
+        # Подсчёт skipped
+        stats["skipped"] = len(diff.to_skip)
 
         logger.info(
             f"Синхронизация интерфейсов {device_name}: "
             f"создано={stats['created']}, обновлено={stats['updated']}, "
-            f"пропущено={stats['skipped']}"
+            f"удалено={stats['deleted']}, пропущено={stats['skipped']}"
         )
         return stats
+
+    def _delete_interface(self, interface) -> None:
+        """Удаляет интерфейс из NetBox."""
+        if self.dry_run:
+            logger.info(f"[DRY-RUN] Удаление интерфейса: {interface.name}")
+            return
+
+        try:
+            interface.delete()
+            logger.info(f"Удалён интерфейс: {interface.name}")
+        except Exception as e:
+            logger.error(f"Ошибка удаления интерфейса {interface.name}: {e}")
 
     def _create_interface(
         self,
         device_id: int,
-        name: str,
-        data: Dict[str, Any],
+        intf: Interface,
     ) -> None:
         """Создаёт интерфейс в NetBox."""
         sync_cfg = get_sync_config("interfaces")
 
         if self.dry_run:
-            logger.info(f"[DRY-RUN] Создание интерфейса: {name}")
+            logger.info(f"[DRY-RUN] Создание интерфейса: {intf.name}")
             return
 
         # Формируем данные согласно настройкам
         kwargs = {}
         if sync_cfg.is_field_enabled("description"):
-            kwargs["description"] = data.get("description", "")
+            kwargs["description"] = intf.description
         if sync_cfg.is_field_enabled("enabled"):
-            kwargs["enabled"] = data.get("status", "up") == "up"
+            kwargs["enabled"] = intf.status == "up"
+
         # MAC будет добавлен отдельно через assign_mac_to_interface (NetBox 4.x)
         mac_to_assign = None
-        if sync_cfg.is_field_enabled("mac_address") and data.get("mac"):
-            mac_to_assign = self._normalize_mac(data.get("mac", ""))
-        if sync_cfg.is_field_enabled("mtu") and data.get("mtu"):
-            try:
-                kwargs["mtu"] = int(data.get("mtu"))
-            except (ValueError, TypeError):
-                pass
-        if sync_cfg.is_field_enabled("speed") and data.get("speed"):
-            # speed в NetBox в kbps
-            kwargs["speed"] = self._parse_speed(data.get("speed", ""))
-        if sync_cfg.is_field_enabled("duplex") and data.get("duplex"):
-            kwargs["duplex"] = self._parse_duplex(data.get("duplex", ""))
+        if sync_cfg.is_field_enabled("mac_address") and intf.mac:
+            sync_mac_only_with_ip = sync_cfg.get_option("sync_mac_only_with_ip", False)
+            if not (sync_mac_only_with_ip and not intf.ip_address):
+                mac_to_assign = normalize_mac_netbox(intf.mac)
+
+        if sync_cfg.is_field_enabled("mtu") and intf.mtu:
+            kwargs["mtu"] = intf.mtu
+        if sync_cfg.is_field_enabled("speed") and intf.speed:
+            kwargs["speed"] = self._parse_speed(intf.speed)
+        if sync_cfg.is_field_enabled("duplex") and intf.duplex:
+            kwargs["duplex"] = self._parse_duplex(intf.duplex)
+
+        # 802.1Q mode (access, tagged, tagged-all)
+        if sync_cfg.is_field_enabled("mode") and intf.mode:
+            kwargs["mode"] = intf.mode
+
+        # Получаем LAG интерфейс если указан
+        if intf.lag:
+            lag_interface = self.client.get_interface_by_name(device_id, intf.lag)
+            if lag_interface:
+                kwargs["lag"] = lag_interface.id
+                logger.debug(f"Привязка {intf.name} к LAG {intf.lag} (id={lag_interface.id})")
+            else:
+                logger.warning(f"LAG интерфейс {intf.lag} не найден для {intf.name}")
 
         interface = self.client.create_interface(
             device_id=device_id,
-            name=name,
-            interface_type=self._get_interface_type(data),
+            name=intf.name,
+            interface_type=get_netbox_interface_type(interface=intf),
             **kwargs,
         )
 
         # Привязываем MAC-адрес (NetBox 4.x - отдельная модель)
         if mac_to_assign and interface:
             self.client.assign_mac_to_interface(interface.id, mac_to_assign)
-
-    def _normalize_mac(self, mac: str) -> str:
-        """Нормализует MAC в формат NetBox (AA:BB:CC:DD:EE:FF)."""
-        if not mac:
-            return ""
-        # Убираем все разделители
-        mac_clean = mac.replace(":", "").replace("-", "").replace(".", "").upper()
-        if len(mac_clean) != 12:
-            return ""
-        # Форматируем с двоеточиями
-        return ":".join(mac_clean[i:i+2] for i in range(0, 12, 2))
 
     def _parse_speed(self, speed_str: str) -> Optional[int]:
         """Парсит скорость в kbps для NetBox."""
@@ -279,188 +311,111 @@ class NetBoxSync:
             return "auto"
         return None
 
-    def _get_interface_type(self, data: Dict[str, Any]) -> str:
-        """
-        Определяет тип интерфейса для NetBox на основе hardware_type, media_type, скорости.
-
-        Приоритет определения:
-        1. media_type (наиболее точный: "10/100/1000BaseTX", "SFP-10GBase-SR")
-        2. hardware_type ("Gigabit Ethernet", "Ten Gigabit Ethernet SFP+")
-        3. speed + имя интерфейса (fallback)
-
-        Маппинги типов определены в core/constants.py:
-        - NETBOX_INTERFACE_TYPE_MAP (media_type → NetBox type)
-        - NETBOX_HARDWARE_TYPE_MAP (hardware_type → NetBox type)
-
-        Args:
-            data: Данные интерфейса
-
-        Returns:
-            str: Тип интерфейса для NetBox API
-        """
-        sync_cfg = get_sync_config("interfaces")
-
-        # Проверяем включено ли автоопределение
-        if not sync_cfg.get_option("auto_detect_type", True):
-            return sync_cfg.get_default("type", "1000base-t")
-
-        hardware_type = data.get("hardware_type", "").lower()
-        media_type = data.get("media_type", "").lower()
-        interface_name = data.get("interface", "").lower()
-        speed_str = data.get("speed", "")
-
-        # Виртуальные интерфейсы (Vlan, Loopback, и т.д.)
-        if interface_name.startswith(VIRTUAL_INTERFACE_PREFIXES):
-            return "virtual"
-
-        # Management интерфейсы - всегда медь
-        if any(x in interface_name for x in MGMT_INTERFACE_PATTERNS):
-            return "1000base-t"
-
-        # 1. Определяем по media_type (маппинг из constants.py)
-        if media_type and media_type not in ("unknown", "not present", ""):
-            for pattern, netbox_type in NETBOX_INTERFACE_TYPE_MAP.items():
-                if pattern in media_type:
-                    return netbox_type
-
-            # Универсальный SFP для 1G если не определился конкретный
-            if "sfp" in media_type and ("1000base" in media_type or "1g" in media_type):
-                if "baset" in media_type:
-                    return "1000base-t"  # SFP-T (медный SFP)
-                return "1000base-x-sfp"
-
-        # 2. Определяем по hardware_type (маппинг из constants.py)
-        if hardware_type and hardware_type not in ("amdp2", "ethersvi", ""):
-            for pattern, netbox_type in NETBOX_HARDWARE_TYPE_MAP.items():
-                if pattern in hardware_type:
-                    # Для 10G проверяем SFP в названии
-                    if "10g" in pattern and "sfp" in hardware_type:
-                        return "10gbase-x-sfpp"
-                    # Для 1G проверяем SFP
-                    if pattern in ("gigabit", "gige", "igbe", "1g") and "sfp" in hardware_type:
-                        return "1000base-x-sfp"
-                    return netbox_type
-
-        # 3. Fallback: по скорости и имени интерфейса
-        speed_kbps = self._parse_speed(speed_str)
-        speed_mbps = speed_kbps // 1000 if speed_kbps else None
-
-        # Определяем тип по имени интерфейса
-        is_sfp = any(x in interface_name for x in ["sfp", "xfp", "qsfp"])
-        is_tengig = any(x in interface_name for x in ["te", "tengig", "ten-gig", "xgig"])
-        is_fortygig = any(x in interface_name for x in ["fo", "forty", "qsfp"])
-        is_hundredgig = any(x in interface_name for x in ["hu", "hundred"])
-
-        # По имени интерфейса без скорости
-        if is_hundredgig:
-            return "100gbase-x-qsfp28"
-        if is_fortygig:
-            return "40gbase-x-qsfpp"
-        if is_tengig:
-            return "10gbase-x-sfpp"
-
-        # По скорости
-        if speed_mbps:
-            if speed_mbps <= 1000:
-                return "1000base-x-sfp" if is_sfp else "1000base-t"
-            elif speed_mbps <= 2500:
-                return "2.5gbase-t"
-            elif speed_mbps <= 5000:
-                return "5gbase-t"
-            elif speed_mbps <= 10000:
-                return "10gbase-x-sfpp" if (is_sfp or is_tengig) else "10gbase-t"
-            elif speed_mbps <= 25000:
-                return "25gbase-x-sfp28"
-            elif speed_mbps <= 40000:
-                return "40gbase-x-qsfpp"
-            elif speed_mbps <= 100000:
-                return "100gbase-x-qsfp28"
-
-        # Fallback: по умолчанию из конфига
-        return sync_cfg.get_default("type", "1000base-t")
-
     def _update_interface(
         self,
-        interface,
-        data: Dict[str, Any],
-    ) -> None:
-        """Обновляет интерфейс в NetBox."""
+        nb_interface,  # NetBox interface object
+        intf: Interface,  # Our Interface model
+    ) -> bool:
+        """
+        Обновляет интерфейс в NetBox.
+
+        Args:
+            nb_interface: Объект интерфейса из NetBox API
+            intf: Наша модель Interface с новыми данными
+
+        Returns:
+            bool: True если были реальные изменения, False если нет
+        """
         updates = {}
         sync_cfg = get_sync_config("interfaces")
 
         # Обновляем тип интерфейса если auto_detect_type включен
         if sync_cfg.get_option("auto_detect_type", True):
-            new_type = self._get_interface_type(data)
-            current_type = getattr(interface.type, 'value', None) if interface.type else None
+            new_type = get_netbox_interface_type(interface=intf)
+            current_type = getattr(nb_interface.type, 'value', None) if nb_interface.type else None
             if new_type and new_type != current_type:
                 updates["type"] = new_type
 
         # Проверяем что нужно обновить (согласно настройкам)
         if sync_cfg.is_field_enabled("description"):
-            if "description" in data and data["description"] != interface.description:
-                updates["description"] = data["description"]
+            if intf.description != nb_interface.description:
+                updates["description"] = intf.description
 
         if sync_cfg.is_field_enabled("enabled"):
-            if "status" in data:
-                enabled = data["status"] == "up"
-                if enabled != interface.enabled:
-                    updates["enabled"] = enabled
+            enabled = intf.status == "up"
+            if enabled != nb_interface.enabled:
+                updates["enabled"] = enabled
 
         # MAC обрабатывается отдельно через assign_mac_to_interface (NetBox 4.x)
         mac_to_assign = None
-        if sync_cfg.is_field_enabled("mac_address"):
-            if data.get("mac"):
-                new_mac = self._normalize_mac(data.get("mac", ""))
-                # Проверяем текущий MAC через client
-                current_mac = self.client.get_interface_mac(interface.id) if not self.dry_run else None
-                if new_mac and new_mac != (current_mac or ""):
+        if sync_cfg.is_field_enabled("mac_address") and intf.mac:
+            sync_mac_only_with_ip = sync_cfg.get_option("sync_mac_only_with_ip", False)
+            if not (sync_mac_only_with_ip and not intf.ip_address):
+                new_mac = normalize_mac_netbox(intf.mac)
+                current_mac = self.client.get_interface_mac(nb_interface.id) if not self.dry_run else None
+                if new_mac and new_mac.upper() != (current_mac or "").upper():
                     mac_to_assign = new_mac
 
-        if sync_cfg.is_field_enabled("mtu"):
-            if data.get("mtu"):
-                try:
-                    new_mtu = int(data.get("mtu"))
-                    if new_mtu != (interface.mtu or 0):
-                        updates["mtu"] = new_mtu
-                except (ValueError, TypeError):
-                    pass
+        if sync_cfg.is_field_enabled("mtu") and intf.mtu:
+            if intf.mtu != (nb_interface.mtu or 0):
+                updates["mtu"] = intf.mtu
 
-        if sync_cfg.is_field_enabled("speed"):
-            if data.get("speed"):
-                new_speed = self._parse_speed(data.get("speed", ""))
-                if new_speed and new_speed != (interface.speed or 0):
-                    updates["speed"] = new_speed
+        if sync_cfg.is_field_enabled("speed") and intf.speed:
+            new_speed = self._parse_speed(intf.speed)
+            if new_speed and new_speed != (nb_interface.speed or 0):
+                updates["speed"] = new_speed
 
-        if sync_cfg.is_field_enabled("duplex"):
-            if data.get("duplex"):
-                new_duplex = self._parse_duplex(data.get("duplex", ""))
-                current_duplex = getattr(interface.duplex, 'value', None) if interface.duplex else None
-                if new_duplex and new_duplex != current_duplex:
-                    updates["duplex"] = new_duplex
+        if sync_cfg.is_field_enabled("duplex") and intf.duplex:
+            new_duplex = self._parse_duplex(intf.duplex)
+            current_duplex = getattr(nb_interface.duplex, 'value', None) if nb_interface.duplex else None
+            if new_duplex and new_duplex != current_duplex:
+                updates["duplex"] = new_duplex
+
+        # 802.1Q mode
+        if sync_cfg.is_field_enabled("mode") and intf.mode:
+            current_mode = getattr(nb_interface.mode, 'value', None) if nb_interface.mode else None
+            if intf.mode != current_mode:
+                updates["mode"] = intf.mode
+
+        # Обновляем LAG привязку
+        if intf.lag:
+            device_id = getattr(nb_interface.device, 'id', None) if nb_interface.device else None
+            if device_id:
+                lag_interface = self.client.get_interface_by_name(device_id, intf.lag)
+                if lag_interface:
+                    current_lag_id = getattr(nb_interface.lag, 'id', None) if nb_interface.lag else None
+                    if lag_interface.id != current_lag_id:
+                        updates["lag"] = lag_interface.id
+                else:
+                    logger.debug(f"LAG интерфейс {intf.lag} не найден в NetBox")
 
         if not updates and not mac_to_assign:
-            return
+            logger.debug(f"  → нет изменений для интерфейса {nb_interface.name}")
+            return False
 
         if self.dry_run:
             if updates:
-                logger.info(f"[DRY-RUN] Обновление интерфейса {interface.name}: {updates}")
+                logger.info(f"[DRY-RUN] Обновление интерфейса {nb_interface.name}: {updates}")
             if mac_to_assign:
-                logger.info(f"[DRY-RUN] Назначение MAC {mac_to_assign} на {interface.name}")
-            return
+                logger.info(f"[DRY-RUN] Назначение MAC {mac_to_assign} на {nb_interface.name}")
+            return True
 
         if updates:
-            self.client.update_interface(interface.id, **updates)
+            self.client.update_interface(nb_interface.id, **updates)
 
         # Привязываем MAC-адрес (NetBox 4.x - отдельная модель)
         if mac_to_assign:
-            self.client.assign_mac_to_interface(interface.id, mac_to_assign)
+            self.client.assign_mac_to_interface(nb_interface.id, mac_to_assign)
+
+        return True
 
     # ==================== КАБЕЛИ ИЗ LLDP/CDP ====================
 
     def sync_cables_from_lldp(
         self,
-        lldp_data: List[Dict[str, Any]],
+        lldp_data: List[LLDPNeighbor],
         skip_unknown: bool = True,
+        cleanup: bool = False,
     ) -> Dict[str, int]:
         """
         Создаёт кабели в NetBox на основе LLDP/CDP данных.
@@ -472,27 +427,30 @@ class NetBoxSync:
         4. Пропустить (если neighbor_type == "unknown" и skip_unknown=True)
 
         Args:
-            lldp_data: Данные LLDP/CDP с полями:
-                - hostname: Локальное устройство
-                - local_interface: Локальный интерфейс
-                - remote_hostname: Имя соседа
-                - remote_port: Порт соседа
-                - remote_mac: MAC соседа (опционально)
-                - remote_ip: IP соседа (опционально)
-                - neighbor_type: Тип идентификации
+            lldp_data: Список LLDP/CDP соседей (LLDPNeighbor модели)
             skip_unknown: Пропускать соседей с типом "unknown"
+            cleanup: Удалять кабели из NetBox которых нет в LLDP данных
 
         Returns:
-            Dict: Статистика {created, skipped, failed, already_exists}
+            Dict: Статистика {created, deleted, skipped, failed, already_exists}
         """
-        stats = {"created": 0, "skipped": 0, "failed": 0, "already_exists": 0}
+        stats = {"created": 0, "deleted": 0, "skipped": 0, "failed": 0, "already_exists": 0}
 
-        for entry in lldp_data:
-            local_device = entry.get("hostname")
-            local_intf = entry.get("local_interface")
-            remote_hostname = entry.get("remote_hostname")
-            remote_port = entry.get("remote_port")
-            neighbor_type = entry.get("neighbor_type", "unknown")
+        # Конвертируем в модели если нужно
+        neighbors = LLDPNeighbor.ensure_list(lldp_data)
+
+        # Собираем устройства для которых есть LLDP данные (для cleanup)
+        lldp_devices = set()
+        for entry in neighbors:
+            if entry.hostname:
+                lldp_devices.add(entry.hostname)
+
+        for entry in neighbors:
+            local_device = entry.hostname
+            local_intf = entry.local_interface
+            remote_hostname = entry.remote_hostname
+            remote_port = entry.remote_port
+            neighbor_type = entry.neighbor_type or "unknown"
 
             # Пропускаем unknown если указано
             if neighbor_type == "unknown" and skip_unknown:
@@ -514,7 +472,7 @@ class NetBoxSync:
                 continue
 
             # Ищем удалённое устройство
-            remote_device_obj = self._find_neighbor_device(entry, neighbor_type)
+            remote_device_obj = self._find_neighbor_device(entry)
             if not remote_device_obj:
                 logger.warning(
                     f"Сосед не найден в NetBox: {remote_hostname} "
@@ -533,7 +491,24 @@ class NetBoxSync:
                 stats["skipped"] += 1
                 continue
 
-            # Создаём кабель
+            # Проверяем что интерфейсы не LAG (NetBox не поддерживает кабели на LAG)
+            local_intf_type = getattr(local_intf_obj.type, 'value', None) if local_intf_obj.type else None
+            remote_intf_type = getattr(remote_intf_obj.type, 'value', None) if remote_intf_obj.type else None
+
+            if local_intf_type == "lag":
+                logger.debug(
+                    f"Пропускаем LAG интерфейс: {local_device}:{local_intf} (кабели на LAG не поддерживаются)"
+                )
+                stats["skipped"] += 1
+                continue
+            if remote_intf_type == "lag":
+                logger.debug(
+                    f"Пропускаем LAG интерфейс соседа: {remote_device_obj.name}:{remote_port}"
+                )
+                stats["skipped"] += 1
+                continue
+
+            # Создаём кабель на физических интерфейсах
             result = self._create_cable(local_intf_obj, remote_intf_obj)
 
             if result == "created":
@@ -543,12 +518,89 @@ class NetBoxSync:
             else:
                 stats["failed"] += 1
 
+        # Cleanup: удаляем кабели которых нет в LLDP
+        if cleanup and lldp_devices:
+            deleted = self._cleanup_cables(neighbors, lldp_devices)
+            stats["deleted"] = deleted
+
         logger.info(
             f"Синхронизация кабелей: создано={stats['created']}, "
-            f"существует={stats['already_exists']}, "
+            f"удалено={stats['deleted']}, существует={stats['already_exists']}, "
             f"пропущено={stats['skipped']}, ошибок={stats['failed']}"
         )
         return stats
+
+    def _cleanup_cables(
+        self,
+        lldp_neighbors: List[LLDPNeighbor],
+        lldp_devices: set,
+    ) -> int:
+        """
+        Удаляет кабели из NetBox которых нет в LLDP данных.
+
+        Args:
+            lldp_neighbors: LLDP соседи
+            lldp_devices: Множество устройств с LLDP данными
+
+        Returns:
+            int: Количество удалённых кабелей
+        """
+        deleted = 0
+
+        # Собираем валидные endpoints из LLDP
+        valid_endpoints = set()
+        for entry in lldp_neighbors:
+            if entry.hostname and entry.local_interface and entry.remote_hostname and entry.remote_port:
+                # Сортируем для уникальности (A-B = B-A)
+                endpoints = tuple(sorted([
+                    f"{entry.hostname}:{entry.local_interface}",
+                    f"{entry.remote_hostname}:{entry.remote_port}",
+                ]))
+                valid_endpoints.add(endpoints)
+
+        # Получаем кабели для устройств из LLDP
+        for device_name in lldp_devices:
+            device = self._find_device(device_name)
+            if not device:
+                continue
+
+            try:
+                cables = self.client.get_cables(device_id=device.id)
+            except Exception as e:
+                logger.error(f"Ошибка получения кабелей для {device_name}: {e}")
+                continue
+
+            for cable in cables:
+                cable_endpoints = get_cable_endpoints(cable)
+                if cable_endpoints and cable_endpoints not in valid_endpoints:
+                    # Проверяем что оба устройства из нашего списка
+                    # (не удаляем кабели к устройствам вне нашего списка)
+                    endpoint_devices = set()
+                    for ep in cable_endpoints:
+                        dev = ep.split(":")[0]
+                        endpoint_devices.add(dev)
+
+                    if endpoint_devices.issubset(lldp_devices):
+                        self._delete_cable(cable)
+                        deleted += 1
+
+        return deleted
+
+    def _delete_cable(self, cable) -> None:
+        """Удаляет кабель из NetBox."""
+        if self.dry_run:
+            endpoints = get_cable_endpoints(cable)
+            endpoints_str = " <-> ".join(endpoints) if endpoints else f"cable#{cable.id}"
+            logger.info(f"[DRY-RUN] Удаление кабеля: {endpoints_str}")
+            return
+
+        try:
+            cable.delete()
+            endpoints = get_cable_endpoints(cable)
+            endpoints_str = " <-> ".join(endpoints) if endpoints else f"cable#{cable.id}"
+            logger.info(f"Удалён кабель: {endpoints_str}")
+        except Exception as e:
+            logger.error(f"Ошибка удаления кабеля: {e}")
 
     def _find_device(self, name: str) -> Optional[Any]:
         """
@@ -610,75 +662,144 @@ class NetBoxSync:
 
     def _find_neighbor_device(
         self,
-        entry: Dict[str, Any],
-        neighbor_type: str,
+        entry: LLDPNeighbor,
     ) -> Optional[Any]:
         """
         Ищет устройство соседа в NetBox.
 
-        Стратегия поиска зависит от neighbor_type:
-        - hostname: Поиск по имени
-        - mac: Поиск по MAC-адресу интерфейса
+        Стратегия поиска зависит от neighbor_type, но всегда пробует
+        несколько методов для надёжности:
+        - hostname: Поиск по имени (основной)
+        - mac: Поиск по MAC-адресу в dcim.mac_addresses
         - ip: Поиск по IP-адресу
 
         Args:
-            entry: Данные LLDP
-            neighbor_type: Тип идентификации
+            entry: LLDPNeighbor модель
 
         Returns:
             Device или None
         """
+        hostname = entry.remote_hostname or ""
+        mac = entry.remote_mac
+        ip = entry.remote_ip
+        neighbor_type = entry.neighbor_type or "unknown"
+
+        # Приоритет поиска зависит от neighbor_type
         if neighbor_type == "hostname":
-            hostname = entry.get("remote_hostname", "")
             # Убираем domain если есть (switch-01.domain.local → switch-01)
-            hostname = hostname.split(".")[0] if "." in hostname else hostname
-            return self._find_device(hostname)
+            clean_hostname = hostname.split(".")[0] if "." in hostname else hostname
+            device = self._find_device(clean_hostname)
+            if device:
+                return device
+
+            # Fallback: пробуем по IP если есть
+            if ip:
+                device = self.client.get_device_by_ip(ip)
+                if device:
+                    logger.debug(f"Устройство {hostname} найдено по IP {ip}")
+                    return device
+
+            # Fallback: пробуем по MAC если есть
+            if mac:
+                device = self._find_device_by_mac(mac)
+                if device:
+                    logger.debug(f"Устройство {hostname} найдено по MAC {mac}")
+                    return device
 
         elif neighbor_type == "mac":
-            mac = entry.get("remote_mac")
+            # Основной поиск по MAC
             if mac:
-                return self._find_device_by_mac(mac)
+                device = self._find_device_by_mac(mac)
+                if device:
+                    return device
+
+            # Fallback: пробуем по IP если есть
+            if ip:
+                device = self.client.get_device_by_ip(ip)
+                if device:
+                    logger.debug(f"Устройство (MAC {mac}) найдено по IP {ip}")
+                    return device
 
         elif neighbor_type == "ip":
-            ip = entry.get("remote_ip")
+            # Основной поиск по IP
             if ip:
-                return self.client.get_device_by_ip(ip)
+                device = self.client.get_device_by_ip(ip)
+                if device:
+                    return device
+
+            # Fallback: пробуем по MAC если есть
+            if mac:
+                device = self._find_device_by_mac(mac)
+                if device:
+                    logger.debug(f"Устройство (IP {ip}) найдено по MAC {mac}")
+                    return device
+
+        else:
+            # unknown - пробуем все методы
+            if ip:
+                device = self.client.get_device_by_ip(ip)
+                if device:
+                    return device
+            if mac:
+                device = self._find_device_by_mac(mac)
+                if device:
+                    return device
 
         return None
 
     def _find_device_by_mac(self, mac: str) -> Optional[Any]:
         """
-        Ищет устройство по MAC-адресу интерфейса.
+        Ищет устройство по MAC-адресу.
+
+        Использует таблицу dcim.mac_addresses (NetBox 4.x) и fallback
+        на поиск по MAC в интерфейсах.
 
         Args:
-            mac: MAC-адрес
+            mac: MAC-адрес в любом формате
 
         Returns:
             Device или None
         """
-        # Нормализуем MAC
+        if not mac:
+            return None
+
+        # Нормализуем MAC для кэша
         mac_normalized = mac.replace(":", "").replace("-", "").replace(".", "").lower()
 
-        # Кэш
+        # Проверяем кэш
         if mac_normalized in self._mac_cache:
             return self._mac_cache[mac_normalized]
 
-        # Ищем интерфейс с таким MAC
-        # В NetBox MAC хранится в формате 00:11:22:33:44:55
-        mac_formatted = ":".join(mac_normalized[i : i + 2] for i in range(0, 12, 2))
-
-        try:
-            interfaces = list(
-                self.client.api.dcim.interfaces.filter(mac_address=mac_formatted)
-            )
-            if interfaces and interfaces[0].device:
-                device = interfaces[0].device
-                self._mac_cache[mac_normalized] = device
-                return device
-        except Exception as e:
-            logger.debug(f"Ошибка поиска по MAC {mac}: {e}")
+        # Используем метод клиента для поиска
+        device = self.client.get_device_by_mac(mac)
+        if device:
+            self._mac_cache[mac_normalized] = device
+            return device
 
         return None
+
+    def _get_lag_or_self(self, interface) -> Any:
+        """
+        Возвращает LAG интерфейс если интерфейс является его членом,
+        иначе возвращает сам интерфейс.
+
+        Используется для создания кабелей: если физический порт входит в LAG,
+        кабель должен создаваться на LAG интерфейсе, а не на member порту.
+
+        Args:
+            interface: Интерфейс NetBox
+
+        Returns:
+            LAG интерфейс или исходный интерфейс
+        """
+        if hasattr(interface, "lag") and interface.lag:
+            lag_intf = interface.lag
+            logger.debug(
+                f"Интерфейс {interface.name} входит в LAG {lag_intf.name}, "
+                f"кабель будет на LAG"
+            )
+            return lag_intf
+        return interface
 
     def _create_cable(
         self,
@@ -734,8 +855,11 @@ class NetBoxSync:
                 f"{interface_b.device.name}:{interface_b.name}"
             )
             return "created"
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox при создании кабеля: {format_error_for_log(e)}")
+            return "error"
         except Exception as e:
-            logger.error(f"Ошибка создания кабеля: {e}")
+            logger.error(f"Неизвестная ошибка создания кабеля: {e}")
             return "error"
 
     # ==================== IP-АДРЕСА ====================
@@ -743,22 +867,25 @@ class NetBoxSync:
     def sync_ip_addresses(
         self,
         device_name: str,
-        ip_data: List[Dict[str, Any]],
+        ip_data: List[IPAddressEntry],
+        device_ip: Optional[str] = None,
+        update_existing: bool = False,
+        cleanup: bool = False,
     ) -> Dict[str, int]:
         """
         Синхронизирует IP-адреса устройства с NetBox.
 
         Args:
             device_name: Имя устройства в NetBox
-            ip_data: Список IP-адресов с полями:
-                - interface: Имя интерфейса
-                - ip_address: IP-адрес (может быть с маской или без)
-                - mask или prefix_length: Маска сети
+            ip_data: Список IP-адресов (IPAddressEntry модели)
+            device_ip: IP-адрес подключения (будет установлен как primary_ip4)
+            update_existing: Обновлять существующие IP (tenant, description)
+            cleanup: Удалять IP-адреса из NetBox которых нет на устройстве
 
         Returns:
-            Dict: Статистика {created, updated, skipped, failed}
+            Dict: Статистика {created, updated, deleted, skipped, failed}
         """
-        stats = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
+        stats = {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "failed": 0}
 
         # Получаем устройство
         device = self.client.get_device_by_name(device_name)
@@ -772,37 +899,37 @@ class NetBoxSync:
         }
 
         # Получаем существующие IP-адреса устройства
-        existing_ips = {}
-        for ip in self.client.get_ip_addresses(device_id=device.id):
-            if ip.address:
-                # Убираем маску для ключа
-                ip_only = str(ip.address).split("/")[0]
-                existing_ips[ip_only] = ip
+        existing_ips = list(self.client.get_ip_addresses(device_id=device.id))
 
-        for entry in ip_data:
-            interface_name = entry.get("interface", "")
-            ip_address = entry.get("ip_address", "")
+        # Конвертируем в модели если нужно
+        entries = IPAddressEntry.ensure_list(ip_data)
 
-            if not interface_name or not ip_address:
+        # Используем SyncComparator для определения изменений
+        comparator = SyncComparator()
+        local_data = [entry.to_dict() for entry in entries if entry.ip_address]
+        diff = comparator.compare_ip_addresses(
+            local=local_data,
+            remote=existing_ips,
+            create_missing=True,
+            update_existing=update_existing,
+            cleanup=cleanup,
+        )
+
+        # Создаём новые IP-адреса
+        for item in diff.to_create:
+            entry = next(
+                (e for e in entries if e.ip_address and e.ip_address.split("/")[0] == item.name),
+                None
+            )
+            if not entry:
                 continue
 
-            # Нормализуем IP (убираем маску если есть)
-            ip_only = ip_address.split("/")[0]
-
-            # Определяем маску
-            if "/" in ip_address:
-                ip_with_mask = ip_address
-            else:
-                mask = entry.get("mask", entry.get("prefix_length", "24"))
-                # Если маска в формате 255.255.255.0, конвертируем
-                if "." in str(mask):
-                    mask = self._mask_to_prefix(mask)
-                ip_with_mask = f"{ip_only}/{mask}"
+            interface_name = entry.interface
+            ip_with_mask = entry.with_prefix
 
             # Ищем интерфейс
             intf = self._find_interface(device.id, interface_name)
             if not intf:
-                # Попробуем найти с нормализацией
                 normalized_name = self._normalize_interface_name(interface_name)
                 for name, i in interfaces.items():
                     if self._normalize_interface_name(name) == normalized_name:
@@ -814,51 +941,134 @@ class NetBoxSync:
                 stats["failed"] += 1
                 continue
 
-            # Проверяем существует ли IP
-            if ip_only in existing_ips:
-                stats["skipped"] += 1
-                continue
-
-            # Создаём IP-адрес
             if self.dry_run:
                 logger.info(f"[DRY-RUN] Создание IP: {ip_with_mask} на {interface_name}")
                 stats["created"] += 1
                 continue
 
             try:
+                extra_params = {}
+                if hasattr(device, 'tenant') and device.tenant:
+                    extra_params['tenant'] = device.tenant.id
+                if hasattr(intf, 'description') and intf.description:
+                    extra_params['description'] = intf.description
+
                 self.client.create_ip_address(
                     address=ip_with_mask,
                     interface_id=intf.id,
                     status="active",
+                    **extra_params,
                 )
                 logger.info(f"Создан IP: {ip_with_mask} на {device_name}:{interface_name}")
                 stats["created"] += 1
-            except Exception as e:
-                logger.error(f"Ошибка создания IP {ip_with_mask}: {e}")
+            except NetBoxValidationError as e:
+                logger.error(f"Ошибка валидации IP {ip_with_mask}: {format_error_for_log(e)}")
                 stats["failed"] += 1
+            except NetBoxError as e:
+                logger.error(f"Ошибка NetBox создания IP {ip_with_mask}: {format_error_for_log(e)}")
+                stats["failed"] += 1
+            except Exception as e:
+                logger.error(f"Неизвестная ошибка создания IP {ip_with_mask}: {e}")
+                stats["failed"] += 1
+
+        # Обновляем существующие
+        for item in diff.to_update:
+            entry = next(
+                (e for e in entries if e.ip_address and e.ip_address.split("/")[0] == item.name),
+                None
+            )
+            if entry and item.remote_data:
+                intf = self._find_interface(device.id, entry.interface)
+                if intf:
+                    updated = self._update_ip_address(item.remote_data, device, intf)
+                    if updated:
+                        stats["updated"] += 1
+                    else:
+                        stats["skipped"] += 1
+
+        # Удаляем лишние IP (cleanup)
+        for item in diff.to_delete:
+            self._delete_ip_address(item.remote_data)
+            stats["deleted"] += 1
+
+        stats["skipped"] += len(diff.to_skip)
+
+        # Устанавливаем primary_ip4 если указан device_ip
+        if device_ip and not self.dry_run:
+            self._set_primary_ip(device, device_ip)
 
         logger.info(
             f"Синхронизация IP {device_name}: создано={stats['created']}, "
+            f"обновлено={stats['updated']}, удалено={stats['deleted']}, "
             f"пропущено={stats['skipped']}, ошибок={stats['failed']}"
         )
         return stats
 
-    def _mask_to_prefix(self, mask: str) -> int:
+    def _delete_ip_address(self, ip_obj) -> None:
+        """Удаляет IP-адрес из NetBox."""
+        address = str(ip_obj.address) if hasattr(ip_obj, 'address') else str(ip_obj)
+
+        if self.dry_run:
+            logger.info(f"[DRY-RUN] Удаление IP: {address}")
+            return
+
+        try:
+            ip_obj.delete()
+            logger.info(f"Удалён IP: {address}")
+        except Exception as e:
+            logger.error(f"Ошибка удаления IP {address}: {e}")
+
+    def _update_ip_address(self, ip_obj, device, interface) -> bool:
         """
-        Конвертирует маску сети в длину префикса.
+        Обновляет существующий IP-адрес (tenant, description, interface).
 
         Args:
-            mask: Маска в формате 255.255.255.0
+            ip_obj: Объект IP-адреса из NetBox
+            device: Устройство NetBox
+            interface: Интерфейс NetBox
 
         Returns:
-            int: Длина префикса (например, 24)
+            bool: True если были изменения
         """
+        updates = {}
+
+        # Обновляем tenant от устройства
+        if hasattr(device, 'tenant') and device.tenant:
+            current_tenant = getattr(ip_obj, 'tenant', None)
+            current_tenant_id = current_tenant.id if current_tenant else None
+            if current_tenant_id != device.tenant.id:
+                updates['tenant'] = device.tenant.id
+
+        # Обновляем description от интерфейса
+        if hasattr(interface, 'description') and interface.description:
+            current_desc = getattr(ip_obj, 'description', '') or ''
+            if current_desc != interface.description:
+                updates['description'] = interface.description
+
+        # Обновляем привязку к интерфейсу
+        if hasattr(interface, 'id'):
+            current_intf = getattr(ip_obj, 'assigned_object_id', None)
+            if current_intf != interface.id:
+                updates['assigned_object_type'] = 'dcim.interface'
+                updates['assigned_object_id'] = interface.id
+
+        if not updates:
+            return False
+
+        if self.dry_run:
+            logger.info(f"[DRY-RUN] Обновление IP {ip_obj.address}: {updates}")
+            return True
+
         try:
-            octets = [int(x) for x in mask.split(".")]
-            binary = "".join(format(x, "08b") for x in octets)
-            return binary.count("1")
-        except Exception:
-            return DEFAULT_PREFIX_LENGTH
+            ip_obj.update(updates)
+            logger.info(f"Обновлён IP {ip_obj.address}: {list(updates.keys())}")
+            return True
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox обновления IP {ip_obj.address}: {format_error_for_log(e)}")
+            return False
+        except Exception as e:
+            logger.error(f"Неизвестная ошибка обновления IP {ip_obj.address}: {e}")
+            return False
 
     # ==================== СОЗДАНИЕ УСТРОЙСТВ ====================
 
@@ -872,7 +1082,6 @@ class NetBoxSync:
         serial: str = "",
         status: Optional[str] = None,
         platform: str = "",
-        primary_ip: str = "",
         tenant: Optional[str] = None,
     ) -> Optional[Any]:
         """
@@ -894,8 +1103,12 @@ class NetBoxSync:
             serial: Серийный номер
             status: Статус (None = из config)
             platform: Платформа (cisco_ios, etc.)
-            primary_ip: Primary IP (без маски)
             tenant: Арендатор (None = из config)
+
+        Note:
+            Primary IP НЕ устанавливается при создании устройства.
+            Используйте sync_ip_addresses() для установки primary IP после
+            синхронизации IP адресов.
 
         Returns:
             Device или None при ошибке
@@ -982,25 +1195,29 @@ class NetBoxSync:
 
             device = self.client.api.dcim.devices.create(device_data)
             logger.info(f"Создано устройство: {name}")
-
-            # Добавляем Primary IP если указан
-            if primary_ip and device:
-                self._set_primary_ip(device, primary_ip)
-
+            # ПРИМЕЧАНИЕ: Primary IP НЕ устанавливается здесь
+            # Он будет установлен позже при синхронизации IP адресов (sync_ip_addresses)
             return device
 
+        except NetBoxValidationError as e:
+            logger.error(f"Ошибка валидации устройства {name}: {format_error_for_log(e)}")
+            return None
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox создания устройства {name}: {format_error_for_log(e)}")
+            return None
         except Exception as e:
-            logger.error(f"Ошибка создания устройства {name}: {e}")
+            logger.error(f"Неизвестная ошибка создания устройства {name}: {e}")
             return None
 
     def sync_devices_from_inventory(
         self,
-        inventory_data: List[Dict[str, Any]],
+        inventory_data: List[DeviceInfo],
         site: str = "Main",
         role: str = "switch",
         update_existing: bool = True,
         cleanup: bool = False,
         tenant: Optional[str] = None,
+        set_primary_ip: bool = False,
     ) -> Dict[str, int]:
         """
         Синхронизирует устройства в NetBox из инвентаризационных данных.
@@ -1009,37 +1226,35 @@ class NetBoxSync:
         удаляет устройства которых нет в списке.
 
         Args:
-            inventory_data: Данные от DeviceInventoryCollector с полями:
-                - name/hostname: Имя устройства
-                - model: Модель
-                - serial: Серийный номер
-                - manufacturer: Производитель
-                - ip_address: IP-адрес
-                - platform: Платформа
+            inventory_data: Список DeviceInfo от DeviceInventoryCollector
             site: Сайт по умолчанию
             role: Роль по умолчанию
             update_existing: Обновлять существующие устройства
             cleanup: Удалять устройства не из списка (для данного site и tenant)
             tenant: Арендатор - ОБЯЗАТЕЛЕН для cleanup, фильтрует какие устройства удалять
+            set_primary_ip: Устанавливать primary IP (только при --ip-addresses)
 
         Returns:
             Dict: Статистика {created, updated, skipped, deleted, failed}
         """
         stats = {"created": 0, "updated": 0, "skipped": 0, "deleted": 0, "failed": 0}
 
+        # Конвертируем в модели если нужно
+        devices = DeviceInfo.ensure_list(inventory_data)
+
         # Собираем имена устройств из инвентаризации
         inventory_names = set()
 
-        for entry in inventory_data:
-            name = entry.get("name", entry.get("hostname", ""))
-            model = entry.get("model") or "Unknown"
-            serial = entry.get("serial", "")
-            manufacturer = entry.get("manufacturer") or "Cisco"
-            ip_address = entry.get("ip_address", "")
-            platform = entry.get("platform", "")
+        for entry in devices:
+            name = entry.name or entry.hostname
+            model = entry.model or "Unknown"
+            serial = entry.serial or ""
+            manufacturer = entry.manufacturer or "Cisco"
+            ip_address = entry.ip_address or ""
+            platform = entry.platform or ""
             # Параметры CLI имеют приоритет над значениями из inventory_data
             # site и role из CLI передаются в функцию, используем их
-            # entry.get("site") используется только если site не передан в функцию
+            # entry.role используется как fallback если role не передан
 
             if not name:
                 logger.warning("Пропущена запись без имени устройства")
@@ -1053,6 +1268,7 @@ class NetBoxSync:
             if existing:
                 if update_existing:
                     # Обновляем существующее устройство (включая tenant, site, role)
+                    # primary_ip передаём только если set_primary_ip=True (--ip-addresses)
                     updated = self._update_device(
                         existing,
                         model=model,
@@ -1062,6 +1278,7 @@ class NetBoxSync:
                         tenant=tenant,
                         site=site,
                         role=role,
+                        primary_ip=ip_address if set_primary_ip else "",
                     )
                     if updated:
                         stats["updated"] += 1
@@ -1082,9 +1299,9 @@ class NetBoxSync:
                 manufacturer=manufacturer,
                 serial=serial,
                 platform=platform,
-                primary_ip=ip_address,
                 tenant=tenant,
             )
+            # Primary IP будет установлен позже при sync_ip_addresses()
 
             if result:
                 stats["created"] += 1
@@ -1116,6 +1333,7 @@ class NetBoxSync:
         tenant: Optional[str] = None,
         site: Optional[str] = None,
         role: Optional[str] = None,
+        primary_ip: str = "",
     ) -> bool:
         """
         Обновляет существующее устройство в NetBox.
@@ -1129,19 +1347,47 @@ class NetBoxSync:
             tenant: Арендатор
             site: Сайт
             role: Роль
+            primary_ip: Primary IP адрес
 
         Returns:
             bool: True если были изменения
         """
         updates = {}
 
+        # Нормализуем входные данные (убираем лишние пробелы)
+        serial = (serial or "").strip()
+        model = (model or "").strip()
+        platform = (platform or "").strip()
+        tenant = (tenant or "").strip() if tenant else None
+        site = (site or "").strip() if site else None
+        role = (role or "").strip() if role else None
+        primary_ip = (primary_ip or "").strip()
+
+        # Получаем текущие значения из устройства
+        current_serial = (device.serial or "").strip()
+        current_model = (device.device_type.model if device.device_type else "").strip()
+        current_platform = (device.platform.name if device.platform else "").strip()
+        current_tenant = (device.tenant.name if device.tenant else "").strip()
+        current_site = (device.site.name if device.site else "").strip()
+        current_role = (device.role.name if device.role else "").strip()
+
+        # Debug логирование для сравнения значений
+        logger.debug(
+            f"Сравнение устройства {device.name}: "
+            f"serial=[{serial!r}] vs [{current_serial!r}], "
+            f"model=[{model!r}→{normalize_device_model(model)!r}] vs [{current_model!r}], "
+            f"platform=[{platform!r}] vs [{current_platform!r}], "
+            f"site=[{site!r}] vs [{current_site!r}], "
+            f"role=[{role!r}] vs [{current_role!r}]"
+        )
+
         # Проверяем серийный номер
-        if serial and serial != device.serial:
+        if serial and serial != current_serial:
             updates["serial"] = serial
+            logger.debug(f"  → serial изменится: {current_serial!r} → {serial!r}")
 
         # Проверяем device_type (модель)
         if model and model != "Unknown":
-            current_model = device.device_type.model if device.device_type else ""
             normalized_model = normalize_device_model(model)
             # Сравниваем нормализованные значения
             if normalized_model != current_model:
@@ -1151,52 +1397,73 @@ class NetBoxSync:
                     dtype = self._get_or_create_device_type(model, mfr.id)
                     if dtype:
                         updates["device_type"] = dtype.id
+                        logger.debug(f"  → model изменится: {current_model!r} → {normalized_model!r}")
 
         # Проверяем платформу
-        if platform:
-            current_platform = device.platform.name if device.platform else ""
-            if platform != current_platform:
-                platform_obj = self._get_or_create_platform(platform)
-                if platform_obj:
-                    updates["platform"] = platform_obj.id
+        if platform and platform != current_platform:
+            platform_obj = self._get_or_create_platform(platform)
+            if platform_obj:
+                updates["platform"] = platform_obj.id
+                logger.debug(f"  → platform изменится: {current_platform!r} → {platform!r}")
 
         # Проверяем tenant
-        if tenant:
-            current_tenant = device.tenant.name if device.tenant else ""
-            if tenant != current_tenant:
-                tenant_obj = self._get_or_create_tenant(tenant)
-                if tenant_obj:
-                    updates["tenant"] = tenant_obj.id
+        if tenant and tenant != current_tenant:
+            tenant_obj = self._get_or_create_tenant(tenant)
+            if tenant_obj:
+                updates["tenant"] = tenant_obj.id
+                logger.debug(f"  → tenant изменится: {current_tenant!r} → {tenant!r}")
 
         # Проверяем site
-        if site:
-            current_site = device.site.name if device.site else ""
-            if site != current_site:
-                site_obj = self._get_or_create_site(site)
-                if site_obj:
-                    updates["site"] = site_obj.id
+        if site and site != current_site:
+            site_obj = self._get_or_create_site(site)
+            if site_obj:
+                updates["site"] = site_obj.id
+                logger.debug(f"  → site изменится: {current_site!r} → {site!r}")
 
         # Проверяем role
-        if role:
-            current_role = device.role.name if device.role else ""
-            if role != current_role:
-                role_obj = self._get_or_create_role(role)
-                if role_obj:
-                    updates["role"] = role_obj.id
+        if role and role != current_role:
+            role_obj = self._get_or_create_role(role)
+            if role_obj:
+                updates["role"] = role_obj.id
+                logger.debug(f"  → role изменится: {current_role!r} → {role!r}")
 
-        if not updates:
+        # Проверяем primary_ip (обрабатывается отдельно через _set_primary_ip)
+        need_primary_ip = False
+        if primary_ip:
+            primary_ip_only = primary_ip.split("/")[0]
+            current_primary = ""
+            if device.primary_ip4:
+                current_primary = str(device.primary_ip4.address).split("/")[0]
+            if primary_ip_only != current_primary:
+                need_primary_ip = True
+                logger.debug(f"  → primary_ip изменится: {current_primary!r} → {primary_ip_only!r}")
+
+        if not updates and not need_primary_ip:
+            logger.debug(f"  → нет изменений для {device.name}")
             return False
 
         if self.dry_run:
-            logger.info(f"[DRY-RUN] Обновление устройства {device.name}: {updates}")
+            if updates:
+                logger.info(f"[DRY-RUN] Обновление устройства {device.name}: {updates}")
+            if need_primary_ip:
+                logger.info(f"[DRY-RUN] Установка primary IP {primary_ip} для {device.name}")
             return True
 
         try:
-            device.update(updates)
-            logger.info(f"Обновлено устройство: {device.name}")
+            if updates:
+                device.update(updates)
+                logger.info(f"Обновлено устройство: {device.name}")
+
+            # Устанавливаем primary IP (отдельная операция)
+            if need_primary_ip:
+                self._set_primary_ip(device, primary_ip)
+
             return True
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox обновления устройства {device.name}: {format_error_for_log(e)}")
+            return False
         except Exception as e:
-            logger.error(f"Ошибка обновления устройства {device.name}: {e}")
+            logger.error(f"Неизвестная ошибка обновления устройства {device.name}: {e}")
             return False
 
     def _cleanup_devices(
@@ -1233,8 +1500,14 @@ class NetBoxSync:
                 f"Найдено {len(netbox_devices)} устройств для проверки "
                 f"(site={site_slug}, tenant={tenant_slug})"
             )
+        except NetBoxConnectionError as e:
+            logger.error(f"Ошибка подключения к NetBox: {format_error_for_log(e)}")
+            return 0
+        except NetBoxError as e:
+            logger.error(f"Ошибка NetBox получения устройств: {format_error_for_log(e)}")
+            return 0
         except Exception as e:
-            logger.error(f"Ошибка получения устройств из NetBox: {e}")
+            logger.error(f"Неизвестная ошибка получения устройств: {e}")
             return 0
 
         for device in netbox_devices:
@@ -1255,174 +1528,225 @@ class NetBoxSync:
                         device.delete()
                         logger.info(f"Удалено устройство: {device.name}")
                         deleted += 1
+                    except NetBoxError as e:
+                        logger.error(f"Ошибка NetBox удаления устройства {device.name}: {format_error_for_log(e)}")
                     except Exception as e:
-                        logger.error(f"Ошибка удаления устройства {device.name}: {e}")
+                        logger.error(f"Неизвестная ошибка удаления устройства {device.name}: {e}")
 
         return deleted
 
-    def create_devices_from_inventory(
-        self,
-        inventory_data: List[Dict[str, Any]],
-        site: str = "Main",
-        role: str = "switch",
-    ) -> Dict[str, int]:
-        """
-        Создаёт устройства в NetBox из инвентаризационных данных.
+    # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
 
-        DEPRECATED: Используйте sync_devices_from_inventory для полной синхронизации.
+    def _get_or_create(
+        self,
+        endpoint,
+        name: str,
+        extra_data: Optional[Dict[str, Any]] = None,
+        get_field: str = "name",
+        use_transliterate: bool = False,
+        log_level: str = "error",
+    ) -> Optional[Any]:
+        """
+        Generic get-or-create для NetBox объектов.
 
         Args:
-            inventory_data: Данные от DeviceInventoryCollector
-            site: Сайт по умолчанию
-            role: Роль по умолчанию
+            endpoint: NetBox API endpoint (e.g., self.client.api.dcim.sites)
+            name: Значение для поиска/создания
+            extra_data: Дополнительные поля для создания (status, color, etc.)
+            get_field: Поле для поиска (по умолчанию "name")
+            use_transliterate: Использовать транслитерацию для slug (для кириллицы)
+            log_level: Уровень логирования ошибок ("error" или "debug")
 
         Returns:
-            Dict: Статистика {created, skipped, failed}
+            Найденный или созданный объект, либо None при ошибке
         """
-        # Вызываем новый метод без обновления и cleanup
-        result = self.sync_devices_from_inventory(
-            inventory_data,
-            site=site,
-            role=role,
-            update_existing=False,
-            cleanup=False,
-        )
-        # Возвращаем в старом формате для совместимости
-        return {
-            "created": result["created"],
-            "skipped": result["skipped"] + result["updated"],
-            "failed": result["failed"],
-        }
+        try:
+            # Ищем существующий
+            obj = endpoint.get(**{get_field: name})
+            if obj:
+                return obj
 
-    # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
+            # Создаём новый
+            slug = transliterate_to_slug(name) if use_transliterate else slugify(name)
+            create_data = {get_field: name, "slug": slug}
+            if extra_data:
+                create_data.update(extra_data)
+
+            return endpoint.create(create_data)
+
+        except NetBoxError as e:
+            log_fn = logger.debug if log_level == "debug" else logger.error
+            log_fn(f"Ошибка NetBox ({get_field}={name}): {format_error_for_log(e)}")
+            return None
+        except Exception as e:
+            log_fn = logger.debug if log_level == "debug" else logger.error
+            log_fn(f"Неизвестная ошибка ({get_field}={name}): {e}")
+            return None
 
     def _get_or_create_manufacturer(self, name: str) -> Optional[Any]:
         """Получает или создаёт производителя."""
-        try:
-            mfr = self.client.api.dcim.manufacturers.get(name=name)
-            if mfr:
-                return mfr
-
-            # Создаём
-            slug = name.lower().replace(" ", "-")
-            return self.client.api.dcim.manufacturers.create(
-                {"name": name, "slug": slug}
-            )
-        except Exception as e:
-            logger.error(f"Ошибка работы с производителем {name}: {e}")
-            return None
+        return self._get_or_create(self.client.api.dcim.manufacturers, name)
 
     def _get_or_create_device_type(
         self,
         model: str,
         manufacturer_id: int,
     ) -> Optional[Any]:
-        """Получает или создаёт тип устройства.
-
-        Нормализует модель перед поиском/созданием:
-        - WS-C2960C-8TC-L → C2960C-8TC
-        """
-        try:
-            # Нормализуем модель (убираем WS- и лицензии)
-            normalized_model = normalize_device_model(model)
-
-            dtype = self.client.api.dcim.device_types.get(model=normalized_model)
-            if dtype:
-                return dtype
-
-            # Создаём
-            slug = normalized_model.lower().replace(" ", "-").replace("/", "-")
-            return self.client.api.dcim.device_types.create({
-                "model": normalized_model,
-                "slug": slug,
-                "manufacturer": manufacturer_id,
-            })
-        except Exception as e:
-            logger.error(f"Ошибка работы с типом устройства {model} → {normalize_device_model(model)}: {e}")
-            return None
+        """Получает или создаёт тип устройства."""
+        normalized = normalize_device_model(model)
+        return self._get_or_create(
+            self.client.api.dcim.device_types,
+            normalized,
+            extra_data={"manufacturer": manufacturer_id},
+            get_field="model",
+        )
 
     def _get_or_create_site(self, name: str) -> Optional[Any]:
         """Получает или создаёт сайт."""
-        try:
-            site = self.client.api.dcim.sites.get(name=name)
-            if site:
-                return site
-
-            # Создаём
-            slug = name.lower().replace(" ", "-")
-            return self.client.api.dcim.sites.create(
-                {"name": name, "slug": slug, "status": "active"}
-            )
-        except Exception as e:
-            logger.error(f"Ошибка работы с сайтом {name}: {e}")
-            return None
+        return self._get_or_create(
+            self.client.api.dcim.sites,
+            name,
+            extra_data={"status": "active"},
+        )
 
     def _get_or_create_role(self, name: str) -> Optional[Any]:
         """Получает или создаёт роль устройства."""
-        try:
-            role = self.client.api.dcim.device_roles.get(name=name)
-            if role:
-                return role
-
-            # Создаём
-            slug = name.lower().replace(" ", "-")
-            return self.client.api.dcim.device_roles.create(
-                {"name": name, "slug": slug, "color": "9e9e9e"}
-            )
-        except Exception as e:
-            logger.error(f"Ошибка работы с ролью {name}: {e}")
-            return None
+        return self._get_or_create(
+            self.client.api.dcim.device_roles,
+            name,
+            extra_data={"color": "9e9e9e"},
+        )
 
     def _get_or_create_platform(self, name: str) -> Optional[Any]:
         """Получает или создаёт платформу."""
-        try:
-            platform = self.client.api.dcim.platforms.get(name=name)
-            if platform:
-                return platform
-
-            # Создаём
-            slug = name.lower().replace(" ", "-").replace("_", "-")
-            return self.client.api.dcim.platforms.create(
-                {"name": name, "slug": slug}
-            )
-        except Exception as e:
-            logger.debug(f"Ошибка работы с платформой {name}: {e}")
-            return None
+        return self._get_or_create(
+            self.client.api.dcim.platforms,
+            name,
+            log_level="debug",
+        )
 
     def _get_or_create_tenant(self, name: str) -> Optional[Any]:
         """Получает или создаёт арендатора (tenant)."""
-        try:
-            tenant = self.client.api.tenancy.tenants.get(name=name)
-            if tenant:
-                return tenant
-
-            # Создаём (транслитерируем кириллицу для slug)
-            slug = transliterate_to_slug(name)
-            return self.client.api.tenancy.tenants.create(
-                {"name": name, "slug": slug}
-            )
-        except Exception as e:
-            logger.error(f"Ошибка работы с tenant {name}: {e}")
-            return None
+        return self._get_or_create(
+            self.client.api.tenancy.tenants,
+            name,
+            use_transliterate=True,
+        )
 
     def _set_primary_ip(self, device, ip_address: str) -> None:
-        """Устанавливает primary IP для устройства."""
+        """
+        Устанавливает primary IP для устройства.
+
+        Если IP не существует в NetBox, создаёт его и привязывает
+        к management интерфейсу устройства (если есть) или без интерфейса.
+        """
+        if not ip_address:
+            return
+
+        # Нормализуем IP - убираем маску если есть
+        ip_only = ip_address.split("/")[0]
+
+        # Проверяем: уже установлен?
+        if device.primary_ip4:
+            current_ip = str(device.primary_ip4.address).split("/")[0]
+            if current_ip == ip_only:
+                logger.debug(f"Primary IP уже установлен: {ip_only}")
+                return
+
+        # Добавляем маску если её нет (по умолчанию /32 для management IP)
+        if "/" in ip_address:
+            ip_with_mask = ip_address
+        else:
+            ip_with_mask = f"{ip_only}/32"
+
         try:
-            # Ищем IP в NetBox
-            ip_obj = self.client.api.ipam.ip_addresses.get(address=ip_address)
-            if ip_obj:
+            # Ищем IP в NetBox (без маски - get() может принять любой формат)
+            ip_obj = self.client.api.ipam.ip_addresses.get(address=ip_only)
+
+            if not ip_obj:
+                # IP не найден - создаём его
+                if self.dry_run:
+                    logger.info(f"[DRY-RUN] Создание IP {ip_with_mask} для {device.name}")
+                else:
+                    # Ищем management интерфейс для привязки IP
+                    mgmt_interface = self._find_management_interface(device.id, ip_only)
+
+                    ip_data = {"address": ip_with_mask}
+
+                    if mgmt_interface:
+                        # Привязываем к management интерфейсу
+                        ip_data["assigned_object_type"] = "dcim.interface"
+                        ip_data["assigned_object_id"] = mgmt_interface.id
+                        logger.debug(f"Привязка IP {ip_with_mask} к интерфейсу {mgmt_interface.name}")
+                    else:
+                        logger.debug(f"Management интерфейс не найден, IP {ip_with_mask} без привязки")
+
+                    ip_obj = self.client.api.ipam.ip_addresses.create(ip_data)
+                    logger.info(f"Создан IP {ip_with_mask} для устройства {device.name}")
+
+            if ip_obj and not self.dry_run:
+                # Устанавливаем как primary
                 device.primary_ip4 = ip_obj.id
                 device.save()
-                logger.debug(f"Установлен primary IP: {ip_address}")
+                logger.info(f"Установлен primary IP {ip_only} для {device.name}")
+            elif self.dry_run:
+                logger.info(f"[DRY-RUN] Установка primary IP {ip_only} для {device.name}")
+
+        except NetBoxError as e:
+            logger.warning(f"Ошибка NetBox установки primary IP {ip_address} для {device.name}: {format_error_for_log(e)}")
         except Exception as e:
-            logger.debug(f"Не удалось установить primary IP: {e}")
+            logger.warning(f"Неизвестная ошибка установки primary IP {ip_address} для {device.name}: {e}")
+
+    def _find_management_interface(self, device_id: int, target_ip: str = "") -> Optional[Any]:
+        """
+        Ищет management интерфейс устройства для привязки IP.
+
+        Приоритет поиска:
+        1. Интерфейс с указанным IP (если передан target_ip)
+        2. Management1, Management0, Mgmt0
+        3. Loopback0
+        4. SVI интерфейсы (Vlan*, но не Vlan1)
+
+        Args:
+            device_id: ID устройства в NetBox
+            target_ip: IP адрес для поиска (опционально)
+        """
+        interfaces = self.client.get_interfaces(device_id=device_id)
+        interfaces_by_name = {intf.name.lower(): intf for intf in interfaces}
+
+        # 1. Ищем интерфейс с указанным IP
+        if target_ip:
+            ip_only = target_ip.split("/")[0]
+            for intf in interfaces:
+                # Проверяем есть ли уже IP на интерфейсе
+                intf_ips = self.client.get_ip_addresses(interface_id=intf.id)
+                for ip in intf_ips:
+                    if str(ip.address).split("/")[0] == ip_only:
+                        return intf
+
+        # 2. Стандартные management интерфейсы
+        mgmt_names = [
+            "Management1", "Management0", "Mgmt0", "mgmt0",
+        ]
+
+        for name in mgmt_names:
+            if name.lower() in interfaces_by_name:
+                return interfaces_by_name[name.lower()]
+
+        # 3. SVI интерфейсы (Vlan*, но не Vlan1 - это по умолчанию везде)
+        for intf in interfaces:
+            name_lower = intf.name.lower()
+            if name_lower.startswith("vlan") and name_lower != "vlan1":
+                return intf
+
+        return None
 
     # ==================== VLAN ====================
 
     def sync_vlans_from_interfaces(
         self,
         device_name: str,
-        interfaces: List[Dict[str, Any]],
+        interfaces: List[Interface],
         site: Optional[str] = None,
     ) -> Dict[str, int]:
         """
@@ -1436,7 +1760,7 @@ class NetBoxSync:
 
         Args:
             device_name: Имя устройства в NetBox
-            interfaces: Данные интерфейсов от InterfaceCollector
+            interfaces: Список интерфейсов (Interface модели)
             site: Сайт для создания VLAN (опционально)
 
         Returns:
@@ -1446,23 +1770,23 @@ class NetBoxSync:
             # Интерфейс Vlan10 с description "Management"
             # → Создаёт VLAN 10 с именем "Management"
         """
-        import re
-
         stats = {"created": 0, "skipped": 0, "failed": 0}
 
         # Паттерн для извлечения номера VLAN из имени интерфейса
         vlan_pattern = re.compile(r"^[Vv]lan(\d+)$")
 
+        # Конвертируем в модели если нужно
+        interface_models = Interface.ensure_list(interfaces)
+
         # Собираем уникальные VLAN
         vlans_to_create = {}  # {vid: name}
 
-        for intf in interfaces:
-            intf_name = intf.get("interface", "")
-            match = vlan_pattern.match(intf_name)
+        for intf in interface_models:
+            match = vlan_pattern.match(intf.name)
             if match:
                 vid = int(match.group(1))
                 # Имя VLAN = description интерфейса или "VLAN <N>"
-                description = intf.get("description", "").strip()
+                description = intf.description.strip() if intf.description else ""
                 vlan_name = description if description else f"VLAN {vid}"
                 vlans_to_create[vid] = vlan_name
 
@@ -1494,8 +1818,14 @@ class NetBoxSync:
                     status="active",
                 )
                 stats["created"] += 1
+            except NetBoxValidationError as e:
+                logger.error(f"Ошибка валидации VLAN {vid}: {format_error_for_log(e)}")
+                stats["failed"] += 1
+            except NetBoxError as e:
+                logger.error(f"Ошибка NetBox создания VLAN {vid}: {format_error_for_log(e)}")
+                stats["failed"] += 1
             except Exception as e:
-                logger.error(f"Ошибка создания VLAN {vid}: {e}")
+                logger.error(f"Неизвестная ошибка создания VLAN {vid}: {e}")
                 stats["failed"] += 1
 
         logger.info(
@@ -1510,29 +1840,25 @@ class NetBoxSync:
     def sync_inventory(
         self,
         device_name: str,
-        inventory_data: List[Dict[str, Any]],
+        inventory_data: List[InventoryItem],
     ) -> Dict[str, int]:
         """
         Синхронизирует inventory items (модули, SFP, PSU) в NetBox.
 
         Args:
             device_name: Имя устройства в NetBox
-            inventory_data: Данные от InventoryCollector:
-                - name: Имя компонента
-                - pid: Product ID (модель)
-                - serial: Серийный номер
-                - description: Описание
-                - vid: Version ID (опционально)
+            inventory_data: Данные (InventoryItem модели)
 
         Returns:
             Dict: Статистика {created, updated, skipped, failed}
 
         Example:
-            inventory_data = [
-                {"name": "Chassis", "pid": "WS-C3750X", "serial": "FDO123"},
-                {"name": "GigabitEthernet0/1", "pid": "SFP-1G-SX", "serial": "ABC"},
+            from network_collector.core import InventoryItem
+            items = [
+                InventoryItem(name="Chassis", pid="WS-C3750X", serial="FDO123"),
+                InventoryItem(name="GigabitEthernet0/1", pid="SFP-1G-SX", serial="ABC"),
             ]
-            sync.sync_inventory("switch1", inventory_data)
+            sync.sync_inventory("switch1", items)
         """
         stats = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
 
@@ -1546,16 +1872,19 @@ class NetBoxSync:
             logger.error(f"Устройство не найдено в NetBox: {device_name}")
             return stats
 
-        logger.info(f"Синхронизация inventory для {device_name}: {len(inventory_data)} компонентов")
+        # Конвертируем в модели если нужно
+        items = InventoryItem.ensure_list(inventory_data)
 
-        sync_cfg = config.sync.inventory
+        logger.info(f"Синхронизация inventory для {device_name}: {len(items)} компонентов")
 
-        for item in inventory_data:
-            name = item.get("name", "").strip()
-            pid = item.get("pid", "").strip()
-            serial = item.get("serial", "").strip()
-            description = item.get("description", "").strip()
-            manufacturer = item.get("manufacturer", "").strip()
+        sync_cfg = get_sync_config("inventory")
+
+        for item in items:
+            name = item.name.strip() if item.name else ""
+            pid = item.pid.strip() if item.pid else ""
+            serial = item.serial.strip() if item.serial else ""
+            description = item.description.strip() if item.description else ""
+            manufacturer = item.manufacturer.strip() if item.manufacturer else ""
 
             if not name:
                 continue
@@ -1574,13 +1903,13 @@ class NetBoxSync:
                 needs_update = False
                 updates = {}
 
-                if sync_cfg.sync_part_id and pid and existing.part_id != pid:
+                if sync_cfg.is_field_enabled("part_id") and pid and existing.part_id != pid:
                     updates["part_id"] = pid
                     needs_update = True
-                if sync_cfg.sync_serial and serial and existing.serial != serial:
+                if sync_cfg.is_field_enabled("serial") and serial and existing.serial != serial:
                     updates["serial"] = serial
                     needs_update = True
-                if sync_cfg.sync_description and description and existing.description != description:
+                if sync_cfg.is_field_enabled("description") and description and existing.description != description:
                     updates["description"] = description
                     needs_update = True
 
@@ -1592,8 +1921,11 @@ class NetBoxSync:
                         try:
                             self.client.update_inventory_item(existing.id, **updates)
                             stats["updated"] += 1
+                        except NetBoxError as e:
+                            logger.error(f"Ошибка NetBox обновления {name}: {format_error_for_log(e)}")
+                            stats["failed"] += 1
                         except Exception as e:
-                            logger.error(f"Ошибка обновления {name}: {e}")
+                            logger.error(f"Неизвестная ошибка обновления {name}: {e}")
                             stats["failed"] += 1
                 else:
                     stats["skipped"] += 1
@@ -1608,13 +1940,13 @@ class NetBoxSync:
             try:
                 # Формируем данные согласно настройкам
                 kwargs = {}
-                if sync_cfg.sync_part_id and pid:
+                if sync_cfg.is_field_enabled("part_id") and pid:
                     kwargs["part_id"] = pid
-                if sync_cfg.sync_serial and serial:
+                if sync_cfg.is_field_enabled("serial") and serial:
                     kwargs["serial"] = serial
-                if sync_cfg.sync_description and description:
+                if sync_cfg.is_field_enabled("description") and description:
                     kwargs["description"] = description
-                if sync_cfg.sync_manufacturer and manufacturer:
+                if sync_cfg.is_field_enabled("manufacturer") and manufacturer:
                     kwargs["manufacturer"] = manufacturer
 
                 self.client.create_inventory_item(
@@ -1623,8 +1955,14 @@ class NetBoxSync:
                     **kwargs,
                 )
                 stats["created"] += 1
+            except NetBoxValidationError as e:
+                logger.error(f"Ошибка валидации inventory {name}: {format_error_for_log(e)}")
+                stats["failed"] += 1
+            except NetBoxError as e:
+                logger.error(f"Ошибка NetBox создания inventory {name}: {format_error_for_log(e)}")
+                stats["failed"] += 1
             except Exception as e:
-                logger.error(f"Ошибка создания inventory {name}: {e}")
+                logger.error(f"Неизвестная ошибка создания inventory {name}: {e}")
                 stats["failed"] += 1
 
         logger.info(
