@@ -8,10 +8,13 @@
 2. [Конфигурация](#2-конфигурация)
 3. [Команды CLI](#3-команды-cli)
 4. [Синхронизация с NetBox](#4-синхронизация-с-netbox)
-5. [Фильтры и исключения](#5-фильтры-и-исключения)
-6. [Безопасность](#6-безопасность)
-7. [Примеры использования](#7-примеры-использования)
-8. [Устранение неполадок](#8-устранение-неполадок)
+5. [Pipeline (конвейеры)](#5-pipeline-конвейеры)
+6. [Web интерфейс](#6-web-интерфейс)
+7. [REST API](#7-rest-api)
+8. [Фильтры и исключения](#8-фильтры-и-исключения)
+9. [Безопасность](#9-безопасность)
+10. [Примеры использования](#10-примеры-использования)
+11. [Устранение неполадок](#11-устранение-неполадок)
 
 ---
 
@@ -104,7 +107,7 @@ netbox:
 # Вывод
 output:
   output_folder: "reports"      # Папка для отчётов
-  default_format: "excel"       # excel, csv, json
+  default_format: "excel"       # excel, csv, json, raw
   mac_format: "ieee"            # ieee, cisco, netbox, raw
 
 # SSH подключение
@@ -211,13 +214,34 @@ python -m network_collector [команда] [опции]
   --transport {ssh2,system}  SSH транспорт (default: system)
 ```
 
+**Форматы вывода (`--format`):**
+
+| Формат | Описание | Вывод |
+|--------|----------|-------|
+| `excel` | Excel файл с форматированием | `reports/имя.xlsx` |
+| `csv` | CSV файл | `reports/имя.csv` |
+| `json` | JSON с метаданными | `reports/имя.json` |
+| `raw` | JSON в stdout (для pipeline) | stdout |
+
+**Пример использования raw:**
+```bash
+# JSON в консоль (без сохранения в файл)
+python -m network_collector devices --format raw
+
+# Pipeline с jq
+python -m network_collector devices --format raw | jq '.[].hostname'
+
+# Сохранить raw JSON в файл
+python -m network_collector mac --format raw > mac_data.json
+```
+
 ### 3.2 devices — Инвентаризация устройств
 
 ```bash
 python -m network_collector devices [опции]
 
 Опции:
-  --format {excel,csv,json}  Формат вывода (default: excel)
+  --format {excel,csv,json,raw}  Формат вывода (default: excel)
 
 Собирает:
   - hostname, model, serial, version, uptime
@@ -239,7 +263,7 @@ python -m network_collector devices --format csv -o devices.csv
 python -m network_collector mac [опции]
 
 Опции:
-  --format {excel,csv,json}  Формат вывода (default: excel)
+  --format {excel,csv,json,raw}  Формат вывода (default: excel)
   --with-descriptions        Собрать описания интерфейсов
   --with-port-security       Собрать sticky MAC (offline устройства)
   --include-trunk            Включить trunk порты (по умолчанию исключены)
@@ -268,7 +292,7 @@ python -m network_collector mac --with-port-security
 python -m network_collector lldp [опции]
 
 Опции:
-  --format {excel,csv,json}    Формат вывода
+  --format {excel,csv,json,raw}    Формат вывода
   --protocol {lldp,cdp,both}   Протокол (default: lldp)
 
 Собирает:
@@ -300,7 +324,7 @@ python -m network_collector lldp --protocol both
 python -m network_collector interfaces [опции]
 
 Опции:
-  --format {excel,csv,json}  Формат вывода
+  --format {excel,csv,json,raw}  Формат вывода
 
 Собирает:
   - hostname, interface, status, description, ip_address, mac,
@@ -313,7 +337,7 @@ python -m network_collector interfaces [опции]
 python -m network_collector inventory [опции]
 
 Опции:
-  --format {excel,csv,json}  Формат вывода
+  --format {excel,csv,json,raw}  Формат вывода
 
 Собирает:
   - hostname, name, pid, serial, description, slot
@@ -424,6 +448,12 @@ python -m network_collector sync-netbox [опции]
   --inventory                Синхронизировать модули/SFP
   --cleanup                  Удалить устройства не из списка
 
+# Флаги удаления (cleanup):
+  --cleanup-interfaces       Удалить интерфейсы которых нет на устройстве
+  --cleanup-ips              Удалить IP-адреса которых нет на устройстве
+  --cleanup-cables           Удалить кабели которых нет в LLDP/CDP
+  --update-ips               Обновить существующие IP-адреса
+
 # Параметры:
   --site SITE                Сайт для создаваемых устройств
   --role ROLE                Роль для создаваемых устройств
@@ -441,10 +471,10 @@ python -m network_collector sync-netbox [опции]
 
 | Сущность | CREATE | READ | UPDATE | DELETE |
 |----------|--------|------|--------|--------|
-| **Device** | `--create-devices` | Всегда | `--update-devices` | `--cleanup` |
-| **Interface** | `--interfaces` | Всегда | `--interfaces` | ❌ Нет |
-| **IP Address** | `--ip-addresses` | Всегда | `--update-devices` + `--ip-addresses` | ❌ Нет |
-| **Cable** | `--cables` | Проверка наличия | ❌ Нет | ❌ Нет |
+| **Device** | `--create-devices` | Всегда | `--update-devices` | `--cleanup --tenant` |
+| **Interface** | `--interfaces` | Всегда | `--interfaces` | `--cleanup-interfaces` |
+| **IP Address** | `--ip-addresses` | Всегда | `--update-ips` | `--cleanup-ips` |
+| **Cable** | `--cables` | Проверка наличия | ❌ Нет | `--cleanup-cables` |
 | **VLAN** | `--vlans` | Проверка наличия | ❌ Нет | ❌ Нет |
 | **Inventory** | `--inventory` | Всегда | `--inventory` (автоматически) | ❌ Нет |
 
@@ -474,7 +504,7 @@ sync-netbox --create-devices --update-devices --site Office
 |----------|---------|------|
 | **CREATE** | Интерфейс не существует | name, type, enabled, description, mode, mtu, speed, lag |
 | **UPDATE** | Интерфейс существует + `update_existing: true` в fields.yaml | description, enabled, type, mode, mtu, speed, lag |
-| **DELETE** | ❌ Не реализовано | — |
+| **DELETE** | `--cleanup-interfaces` | Удаляет интерфейсы которых нет на устройстве |
 
 **Что обновляется (fields.yaml):**
 ```yaml
@@ -498,8 +528,8 @@ sync:
 | Операция | Флаг | Что делает |
 |----------|------|------------|
 | **CREATE** | `--ip-addresses` | Создаёт новые IP, привязывает к интерфейсу |
-| **UPDATE** | `--ip-addresses --update-devices` | Обновляет tenant, description, привязку |
-| **DELETE** | ❌ Не реализовано | — |
+| **UPDATE** | `--update-ips` | Обновляет tenant, description, привязку |
+| **DELETE** | `--cleanup-ips` | Удаляет IP которых нет на устройстве |
 
 ```bash
 # Только CREATE
@@ -507,8 +537,12 @@ sync-netbox --ip-addresses
 # Новые IP → CREATE, существующие → SKIP
 
 # CREATE + UPDATE
-sync-netbox --ip-addresses --update-devices
+sync-netbox --ip-addresses --update-ips
 # Новые IP → CREATE, существующие → UPDATE (tenant, description)
+
+# CREATE + UPDATE + DELETE
+sync-netbox --ip-addresses --update-ips --cleanup-ips
+# Удаляет IP которых нет на устройстве
 ```
 
 **При CREATE IP-адреса:**
@@ -522,7 +556,7 @@ sync-netbox --ip-addresses --update-devices
 |----------|---------|-----------|
 | **CREATE** | Оба интерфейса без кабеля | Создаётся кабель |
 | **UPDATE** | ❌ Не реализовано | — |
-| **DELETE** | ❌ Не реализовано | — |
+| **DELETE** | `--cleanup-cables` | Удаляет кабели которых нет в LLDP/CDP |
 | **SKIP** | Интерфейс уже имеет кабель | Пропуск |
 | **SKIP** | LAG интерфейс | Пропуск (кабели на LAG не поддерживаются) |
 
@@ -530,6 +564,9 @@ sync-netbox --ip-addresses --update-devices
 sync-netbox --cables --protocol both  # LLDP + CDP
 sync-netbox --cables --protocol lldp  # Только LLDP
 sync-netbox --cables --protocol cdp   # Только CDP
+
+# С удалением устаревших кабелей
+sync-netbox --cables --cleanup-cables --dry-run
 ```
 
 ##### VLAN
@@ -633,14 +670,17 @@ sync-netbox --ip-addresses
 
 | Функция | Статус | Описание |
 |---------|--------|----------|
-| DELETE интерфейсов | ❌ | Удаление интерфейсов которых нет на устройстве |
-| DELETE IP-адресов | ❌ | Удаление IP которых нет на устройстве |
-| DELETE кабелей | ❌ | Удаление кабелей при изменении топологии |
 | UPDATE кабелей | ❌ | Обновление типа кабеля |
 | UPDATE VLAN | ❌ | Обновление имени VLAN |
 | DELETE VLAN | ❌ | Удаление неиспользуемых VLAN |
-| CLEANUP интерфейсов | ❌ | Удаление старых интерфейсов (аналог --cleanup для devices) |
+| DELETE Inventory | ❌ | Удаление модулей которых нет на устройстве |
 | Sync untagged/tagged VLANs | ❌ | Привязка VLAN к интерфейсам |
+
+**Реализовано:**
+- ✅ `--cleanup-interfaces` — удаление интерфейсов которых нет на устройстве
+- ✅ `--cleanup-ips` — удаление IP-адресов которых нет на устройстве
+- ✅ `--cleanup-cables` — удаление кабелей при изменении топологии
+- ✅ `--update-ips` — обновление существующих IP-адресов
 
 ### 4.8 Порядок выполнения --sync-all
 
@@ -680,6 +720,14 @@ python -m network_collector sync-netbox --cables --protocol both
 
 # Удаление устаревших устройств (требует --tenant)
 python -m network_collector sync-netbox --cleanup --tenant "MyTenant" --dry-run
+
+# ПОЛНАЯ СИНХРОНИЗАЦИЯ с очисткой (UPDATE + DELETE)
+python -m network_collector sync-netbox \
+    --create-devices --update-devices \
+    --interfaces --cleanup-interfaces \
+    --ip-addresses --update-ips --cleanup-ips \
+    --cables --cleanup-cables \
+    --site "Office" --dry-run
 ```
 
 ### 4.10 DiffCalculator — предпросмотр изменений
@@ -750,9 +798,404 @@ for change in diff.updates:
 
 ---
 
-## 5. Фильтры и исключения
+## 5. Pipeline (конвейеры)
 
-### 5.1 MAC export — config.yaml
+Pipeline позволяет создавать настраиваемые конвейеры для автоматизации сбора и синхронизации данных.
+
+### 5.1 Что такое Pipeline
+
+Pipeline — это последовательность шагов (steps), где каждый шаг выполняет определённую операцию:
+
+| Тип шага | Описание | Примеры target |
+|----------|----------|----------------|
+| `collect` | Сбор данных с устройств | devices, interfaces, mac, lldp, cdp, inventory, backup |
+| `sync` | Синхронизация с NetBox | devices, interfaces, cables, inventory, vlans |
+| `export` | Экспорт в файл | devices, interfaces, mac (любой собранный) |
+
+### 5.2 YAML формат Pipeline
+
+Pipelines хранятся в `pipelines/*.yaml`:
+
+```yaml
+# pipelines/full_sync.yaml
+id: full_sync
+name: "Full Sync"
+description: "Полная синхронизация с NetBox"
+enabled: true
+
+steps:
+  # Шаг 1: Сбор устройств
+  - id: collect_devices
+    type: collect
+    target: devices
+    enabled: true
+    options: {}
+
+  # Шаг 2: Синхронизация устройств
+  - id: sync_devices
+    type: sync
+    target: devices
+    enabled: true
+    depends_on:
+      - collect_devices
+    options:
+      site: "Office"
+      role: "switch"
+
+  # Шаг 3: Сбор интерфейсов
+  - id: collect_interfaces
+    type: collect
+    target: interfaces
+    enabled: true
+    depends_on:
+      - sync_devices
+
+  # Шаг 4: Синхронизация интерфейсов
+  - id: sync_interfaces
+    type: sync
+    target: interfaces
+    enabled: true
+    depends_on:
+      - collect_interfaces
+
+  # Шаг 5: Сбор LLDP/CDP
+  - id: collect_lldp
+    type: collect
+    target: lldp
+    enabled: true
+    depends_on:
+      - sync_interfaces
+    options:
+      protocol: both
+
+  # Шаг 6: Синхронизация кабелей
+  - id: sync_cables
+    type: sync
+    target: cables
+    enabled: true
+    depends_on:
+      - collect_lldp
+```
+
+### 5.3 Зависимости между шагами
+
+Шаги выполняются последовательно. Опция `depends_on` указывает какие шаги должны завершиться успешно:
+
+```yaml
+- id: sync_interfaces
+  type: sync
+  target: interfaces
+  depends_on:
+    - sync_devices        # Сначала устройства
+    - collect_interfaces  # И интерфейсы собраны
+```
+
+**Правила зависимостей:**
+
+| Sync target | Требует |
+|-------------|---------|
+| interfaces | sync_devices + collect_interfaces |
+| cables | sync_interfaces + collect_lldp |
+| inventory | sync_devices + collect_inventory |
+| vlans | sync_devices |
+
+### 5.4 Доступные опции шагов
+
+**Collect шаги:**
+
+```yaml
+# collect lldp
+options:
+  protocol: both  # lldp, cdp, both
+
+# collect backup
+options:
+  output_dir: "backups"
+```
+
+**Sync шаги:**
+
+```yaml
+# sync devices
+options:
+  site: "Office"
+  role: "switch"
+  create: true
+  update: true
+
+# sync interfaces
+options:
+  sync_mac: true
+  sync_mode: true  # 802.1Q mode
+```
+
+**Export шаги:**
+
+```yaml
+# export
+options:
+  format: excel  # excel, csv, json
+  output_dir: "reports"
+```
+
+### 5.5 Использование Pipeline через Web UI
+
+1. Открыть http://localhost:8080 (API) и http://localhost:5173 (Frontend)
+2. Перейти в раздел "Pipelines"
+3. Создать/редактировать pipeline через UI
+4. Нажать "Run Pipeline"
+5. Выбрать устройства и режим (dry-run / real)
+
+### 5.6 Использование Pipeline через API
+
+```bash
+# Список pipelines
+curl http://localhost:8080/api/pipelines
+
+# Получить pipeline
+curl http://localhost:8080/api/pipelines/full_sync
+
+# Запустить pipeline
+curl -X POST http://localhost:8080/api/pipelines/full_sync/run \
+  -H "Content-Type: application/json" \
+  -H "X-SSH-Username: admin" \
+  -H "X-SSH-Password: admin" \
+  -H "X-NetBox-URL: http://netbox:8000" \
+  -H "X-NetBox-Token: your-token" \
+  -d '{
+    "devices": [
+      {"host": "10.0.0.1", "platform": "cisco_ios"},
+      {"host": "10.0.0.2", "platform": "cisco_ios"}
+    ],
+    "dry_run": true
+  }'
+
+# Валидировать pipeline
+curl -X POST http://localhost:8080/api/pipelines/full_sync/validate
+
+# Создать pipeline
+curl -X POST http://localhost:8080/api/pipelines \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Pipeline",
+    "description": "Custom pipeline",
+    "steps": [
+      {"id": "collect", "type": "collect", "target": "devices", "enabled": true}
+    ]
+  }'
+```
+
+### 5.7 Результат выполнения Pipeline
+
+```json
+{
+  "pipeline_id": "full_sync",
+  "status": "completed",
+  "steps": [
+    {"step_id": "collect_devices", "status": "completed", "duration_ms": 5230},
+    {"step_id": "sync_devices", "status": "completed", "duration_ms": 1250},
+    {"step_id": "collect_interfaces", "status": "completed", "duration_ms": 8100},
+    {"step_id": "sync_interfaces", "status": "completed", "duration_ms": 3400}
+  ],
+  "total_duration_ms": 17980
+}
+```
+
+**Статусы шагов:**
+
+| Статус | Описание |
+|--------|----------|
+| `pending` | Ожидает выполнения |
+| `running` | Выполняется |
+| `completed` | Успешно завершён |
+| `failed` | Ошибка выполнения |
+| `skipped` | Пропущен (зависимости не выполнены или disabled) |
+
+---
+
+## 6. Web интерфейс
+
+Network Collector имеет Web интерфейс для удобного управления.
+
+### 6.1 Архитектура
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Frontend   │────▶│   Backend   │────▶│   Devices   │
+│  (Vue.js)   │     │  (FastAPI)  │     │   NetBox    │
+│  :5173      │     │   :8080     │     │             │
+└─────────────┘     └─────────────┘     └─────────────┘
+```
+
+### 6.2 Запуск Web интерфейса
+
+**Backend (FastAPI):**
+
+```bash
+cd /home/sa/project
+source network_collector/myenv/bin/activate
+
+# Запуск с hot-reload (для разработки)
+uvicorn network_collector.api.main:app --reload --host 0.0.0.0 --port 8080
+
+# Запуск для продакшена
+uvicorn network_collector.api.main:app --host 0.0.0.0 --port 8080 --workers 4
+```
+
+**Frontend (Vue.js):**
+
+```bash
+cd /home/sa/project/network_collector/frontend
+
+# Установка зависимостей (первый раз)
+npm install
+
+# Запуск dev server
+npm run dev
+# http://localhost:5173
+
+# Production build
+npm run build
+# Результат в dist/
+```
+
+### 6.3 Страницы Web UI
+
+| Страница | URL | Описание |
+|----------|-----|----------|
+| Home | `/` | Главная страница |
+| Credentials | `/credentials` | Настройка учётных данных SSH и NetBox |
+| Devices | `/devices` | Сбор инвентаризации устройств |
+| MAC Table | `/mac` | Сбор MAC-адресов |
+| LLDP/CDP | `/lldp` | Сбор соседей |
+| Interfaces | `/interfaces` | Сбор интерфейсов |
+| Inventory | `/inventory` | Сбор модулей/SFP |
+| Backup | `/backup` | Резервное копирование конфигураций |
+| Sync NetBox | `/sync` | Синхронизация с NetBox |
+| Pipelines | `/pipelines` | Управление конвейерами |
+
+### 6.4 Настройка Credentials
+
+1. Перейти в `/credentials`
+2. Ввести SSH credentials (username/password)
+3. Ввести NetBox URL и Token (для синхронизации)
+4. Нажать "Save"
+
+Credentials хранятся в сессии и передаются в каждый запрос через headers.
+
+### 6.5 Использование Pipelines через UI
+
+**Создание Pipeline:**
+1. Перейти в `/pipelines`
+2. Нажать "+ Создать Pipeline"
+3. Задать имя и описание
+4. Добавить шаги (+ Добавить шаг)
+5. Для каждого шага выбрать: ID, Type, Target, Enabled
+6. Сохранить
+
+**Запуск Pipeline:**
+1. Найти нужный pipeline в списке
+2. Нажать "Run Pipeline"
+3. Ввести IP устройств через запятую
+4. Выбрать dry-run (preview) или реальное выполнение
+5. Нажать Run
+
+**Результаты:**
+- Статус каждого шага (completed/failed/skipped)
+- Время выполнения
+- Ошибки (если есть)
+
+---
+
+## 7. REST API
+
+Полная документация API доступна по адресам:
+- Swagger UI: http://localhost:8080/docs
+- ReDoc: http://localhost:8080/redoc
+
+### 7.1 Аутентификация
+
+Credentials передаются через HTTP headers:
+
+```
+X-SSH-Username: admin
+X-SSH-Password: admin
+X-NetBox-URL: http://netbox:8000
+X-NetBox-Token: your-token
+```
+
+### 7.2 Endpoints
+
+| Method | Endpoint | Описание |
+|--------|----------|----------|
+| GET | `/health` | Проверка состояния API |
+| POST | `/api/auth/credentials` | Установить credentials |
+| GET | `/api/auth/credentials/status` | Проверить credentials |
+| POST | `/api/devices` | Сбор инвентаризации |
+| POST | `/api/mac` | Сбор MAC-адресов |
+| POST | `/api/lldp` | Сбор LLDP/CDP |
+| POST | `/api/interfaces` | Сбор интерфейсов |
+| POST | `/api/inventory` | Сбор модулей |
+| POST | `/api/backup` | Резервное копирование |
+| POST | `/api/sync` | Синхронизация с NetBox |
+| POST | `/api/match` | Сопоставление MAC |
+| POST | `/api/push` | Push описаний |
+| GET | `/api/pipelines` | Список pipelines |
+| GET | `/api/pipelines/{id}` | Получить pipeline |
+| POST | `/api/pipelines` | Создать pipeline |
+| PUT | `/api/pipelines/{id}` | Обновить pipeline |
+| DELETE | `/api/pipelines/{id}` | Удалить pipeline |
+| POST | `/api/pipelines/{id}/run` | Запустить pipeline |
+| POST | `/api/pipelines/{id}/validate` | Валидировать pipeline |
+
+### 7.3 Примеры запросов
+
+**Сбор устройств:**
+
+```bash
+curl -X POST http://localhost:8080/api/devices \
+  -H "Content-Type: application/json" \
+  -H "X-SSH-Username: admin" \
+  -H "X-SSH-Password: admin" \
+  -d '{
+    "devices": ["10.0.0.1", "10.0.0.2"]
+  }'
+```
+
+**Синхронизация с NetBox:**
+
+```bash
+curl -X POST http://localhost:8080/api/sync \
+  -H "Content-Type: application/json" \
+  -H "X-SSH-Username: admin" \
+  -H "X-SSH-Password: admin" \
+  -H "X-NetBox-URL: http://netbox:8000" \
+  -H "X-NetBox-Token: your-token" \
+  -d '{
+    "devices": ["10.0.0.1"],
+    "sync_all": true,
+    "dry_run": true,
+    "site": "Office"
+  }'
+```
+
+### 7.4 Коды ответов
+
+| Код | Описание |
+|-----|----------|
+| 200 | Успех |
+| 201 | Создано |
+| 204 | Удалено (no content) |
+| 400 | Ошибка валидации |
+| 401 | Не авторизован |
+| 404 | Не найдено |
+| 500 | Внутренняя ошибка |
+
+---
+
+## 8. Фильтры и исключения
+
+### 8.1 MAC export — config.yaml
 
 ```yaml
 # config.yaml
@@ -767,7 +1210,7 @@ filters:
 
 **Применяется в:** `MACCollector`
 
-### 5.2 NetBox sync — fields.yaml
+### 8.2 NetBox sync — fields.yaml
 
 ```yaml
 # fields.yaml
@@ -781,7 +1224,7 @@ sync:
 
 **Применяется в:** `sync_interfaces()`
 
-### 5.3 Почему разные конфиги?
+### 8.3 Почему разные конфиги?
 
 | Функция | Конфиг | Назначение |
 |---------|--------|------------|
@@ -792,9 +1235,9 @@ sync:
 
 ---
 
-## 6. Безопасность
+## 9. Безопасность
 
-### 6.1 Хранение токенов
+### 9.1 Хранение токенов
 
 **Приоритет источников:**
 
@@ -804,7 +1247,7 @@ sync:
 3. config.yaml                              — fallback
 ```
 
-### 6.2 Windows Credential Manager
+### 9.2 Windows Credential Manager
 
 ```bash
 # Добавить токен
@@ -814,7 +1257,7 @@ Win+R → "Credential Manager" → Generic Credentials → Add
   Password:         <ваш токен>
 ```
 
-### 6.3 Переменные окружения
+### 9.3 Переменные окружения
 
 ```bash
 # Windows CMD
@@ -829,7 +1272,7 @@ $env:NETBOX_TOKEN="your-token"
 export NETBOX_TOKEN=your-token
 ```
 
-### 6.4 SSL сертификаты
+### 9.4 SSL сертификаты
 
 Для корпоративных CA:
 
@@ -841,9 +1284,9 @@ Network Collector автоматически использует Windows Certif
 
 ---
 
-## 7. Примеры использования
+## 10. Примеры использования
 
-### 7.1 Полный аудит оборудования
+### 10.1 Полный аудит оборудования
 
 ```bash
 # Сбор всех данных
@@ -853,7 +1296,7 @@ python -m network_collector lldp --protocol both --format excel -o neighbors.xls
 python -m network_collector interfaces --format excel -o interfaces.xlsx
 ```
 
-### 7.2 Первичная синхронизация с NetBox
+### 10.2 Первичная синхронизация с NetBox
 
 ```bash
 # 1. Проверяем доступность
@@ -868,7 +1311,7 @@ python -m network_collector sync-netbox --sync-all \
     --site "Office" --role "switch"
 ```
 
-### 7.3 MAC → Описания портов
+### 10.3 MAC → Описания портов
 
 ```bash
 # 1. Сбор MAC с описаниями
@@ -887,7 +1330,7 @@ python -m network_collector push-descriptions --matched-file matched.xlsx
 python -m network_collector push-descriptions --matched-file matched.xlsx --apply
 ```
 
-### 7.4 Обновление существующих устройств
+### 10.4 Обновление существующих устройств
 
 ```bash
 # Обновить serial, model на существующих
@@ -897,7 +1340,7 @@ python -m network_collector sync-netbox --create-devices --update-devices
 python -m network_collector sync-netbox --interfaces --update-devices
 ```
 
-### 7.5 Резервное копирование
+### 10.5 Резервное копирование
 
 ```bash
 # Бэкап конфигураций
@@ -906,9 +1349,9 @@ python -m network_collector backup --output ./backups/$(date +%Y-%m-%d)
 
 ---
 
-## 8. Устранение неполадок
+## 11. Устранение неполадок
 
-### 8.1 Ошибка подключения SSH
+### 11.1 Ошибка подключения SSH
 
 ```
 ConnectionError: Unable to connect to device
@@ -920,7 +1363,7 @@ ConnectionError: Unable to connect to device
 3. Проверьте учётные данные (`NET_USERNAME`, `NET_PASSWORD`)
 4. Проверьте `platform` в devices_ips.py
 
-### 8.2 Ошибка парсинга NTC Templates
+### 11.2 Ошибка парсинга NTC Templates
 
 ```
 NTC Template not found for command
@@ -931,7 +1374,7 @@ NTC Template not found for command
 - Используйте `--format raw` для просмотра сырого вывода
 - Добавьте кастомный шаблон в `templates/`
 
-### 8.3 Ошибка NetBox API
+### 11.3 Ошибка NetBox API
 
 ```
 RequestError: 400 Bad Request
@@ -942,7 +1385,7 @@ RequestError: 400 Bad Request
 2. Убедитесь что токен имеет права на запись
 3. Проверьте версию NetBox (требуется 4.x)
 
-### 8.4 Устройство не найдено в NetBox
+### 11.4 Устройство не найдено в NetBox
 
 ```
 Device 'switch1' not found in NetBox
@@ -952,7 +1395,7 @@ Device 'switch1' not found in NetBox
 - Сначала создайте устройство: `--create-devices`
 - Убедитесь что hostname совпадает
 
-### 8.5 Включить debug логирование
+### 11.5 Включить debug логирование
 
 ```bash
 # Через CLI
@@ -963,7 +1406,7 @@ logging:
   level: "DEBUG"
 ```
 
-### 8.6 Проверить данные на каждом этапе
+### 11.6 Проверить данные на каждом этапе
 
 ```bash
 # Сырые данные (JSON)

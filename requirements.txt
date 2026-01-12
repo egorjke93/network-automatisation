@@ -18,3 +18,12 @@ python-certifi-win32>=1.6.0 # SSL сертификаты из Windows Certificat
 
 # Для scrapli ssh2 транспорта (рекомендуется)
 ssh2-python>=1.0.0          # SSH2 транспорт для Scrapli (быстрее paramiko)
+
+# Web API (опционально - для веб-интерфейса)
+fastapi>=0.104.0            # REST API framework
+uvicorn[standard]>=0.24.0   # ASGI сервер для FastAPI
+
+# Тестирование
+pytest>=8.0.0               # Фреймворк тестирования
+pytest-mock>=3.12.0         # Моки для pytest
+httpx>=0.25.0               # HTTP клиент для тестов FastAPI

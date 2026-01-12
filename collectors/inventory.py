@@ -21,7 +21,8 @@ from typing import List, Dict, Any
 from .base import BaseCollector
 from ..core.device import Device
 from ..core.models import InventoryItem
-from ..core.constants import get_vendor_by_platform
+from ..core.domain.inventory import InventoryNormalizer
+from ..core.constants import COLLECTOR_COMMANDS
 from ..core.logging import get_logger
 from ..core.exceptions import (
     ConnectionError,
@@ -50,13 +51,8 @@ class InventoryCollector(BaseCollector):
     # Типизированная модель
     model_class = InventoryItem
 
-    # Команды для разных платформ
-    platform_commands = {
-        "cisco_ios": "show inventory",
-        "cisco_iosxe": "show inventory",
-        "cisco_nxos": "show inventory",
-        "arista_eos": "show inventory",
-    }
+    # Команды для разных платформ (из централизованного хранилища)
+    platform_commands = COLLECTOR_COMMANDS.get("inventory", {})
 
     # Команды для получения трансиверов
     # NX-OS: show inventory не содержит SFP/QSFP, они в show interface transceiver
@@ -78,6 +74,7 @@ class InventoryCollector(BaseCollector):
         """
         super().__init__(**kwargs)
         self.collect_transceivers = collect_transceivers
+        self._normalizer = InventoryNormalizer()
 
     def _parse_output(
         self,
@@ -87,26 +84,23 @@ class InventoryCollector(BaseCollector):
         """
         Парсит вывод команды show inventory.
 
+        Возвращает сырые данные, нормализация в _collect_from_device.
+
         Args:
             output: Сырой вывод команды
             device: Устройство
 
         Returns:
-            List[Dict]: Список компонентов
+            List[Dict]: Сырые данные компонентов
         """
         # Пробуем NTC Templates
         if self.use_ntc:
             data = self._parse_with_textfsm(output, device)
             if data:
-                return self._normalize_data(data, device)
+                return data  # Raw data, normalization in _collect_from_device
 
         # Fallback на regex
-        items = self._parse_with_regex(output)
-        # Добавляем manufacturer
-        manufacturer = self._detect_manufacturer(device)
-        for item in items:
-            item["manufacturer"] = self._detect_manufacturer_by_pid(item.get("pid", "")) or manufacturer
-        return items
+        return self._parse_with_regex(output)
 
     def _parse_with_regex(self, output: str) -> List[Dict[str, Any]]:
         """
@@ -142,90 +136,6 @@ class InventoryCollector(BaseCollector):
 
         return items
 
-    def _normalize_data(
-        self,
-        data: List[Dict[str, Any]],
-        device: Device = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        Нормализует данные инвентаризации.
-
-        Args:
-            data: Сырые данные
-            device: Устройство (для определения manufacturer)
-
-        Returns:
-            List[Dict]: Нормализованные данные
-        """
-        normalized = []
-
-        # Определяем manufacturer по платформе устройства
-        manufacturer = self._detect_manufacturer(device)
-
-        for row in data:
-            pid = row.get("pid", "")
-            item = {
-                "name": row.get("name", ""),
-                "description": row.get("descr", row.get("description", "")),
-                "pid": pid,
-                "vid": row.get("vid", ""),
-                "serial": row.get("sn", row.get("serial", "")),
-                "manufacturer": self._detect_manufacturer_by_pid(pid) or manufacturer,
-            }
-            normalized.append(item)
-
-        return normalized
-
-    def _detect_manufacturer(self, device: Device = None) -> str:
-        """
-        Определяет производителя по платформе устройства.
-
-        Использует централизованный маппинг из core/constants.py.
-
-        Args:
-            device: Устройство
-
-        Returns:
-            str: Название производителя (Cisco, Arista, Juniper, etc.)
-        """
-        if not device or not device.platform:
-            return ""
-
-        # Используем централизованный маппинг
-        vendor = get_vendor_by_platform(device.platform)
-
-        # Capitalize для NetBox (cisco -> Cisco)
-        return vendor.capitalize() if vendor and vendor != "unknown" else ""
-
-    def _detect_manufacturer_by_pid(self, pid: str) -> str:
-        """
-        Определяет производителя по PID (Product ID).
-
-        Args:
-            pid: Product ID
-
-        Returns:
-            str: Название производителя или пустая строка
-        """
-        if not pid:
-            return ""
-
-        pid_upper = pid.upper()
-
-        # Cisco PIDs
-        if any(x in pid_upper for x in ["WS-", "C9", "N9K", "N7K", "N5K", "ISR", "ASR", "SFP-", "GLC-", "XENPAK"]):
-            return "Cisco"
-
-        # Arista
-        if pid_upper.startswith("DCS-") or "ARISTA" in pid_upper:
-            return "Arista"
-
-        # Juniper
-        if pid_upper.startswith("EX") or pid_upper.startswith("QFX") or pid_upper.startswith("MX"):
-            return "Juniper"
-
-        return ""
-
     def _collect_from_device(self, device: Device) -> List[Dict[str, Any]]:
         """
         Собирает данные инвентаризации с устройства.
@@ -240,6 +150,7 @@ class InventoryCollector(BaseCollector):
         """
         from ..core.connection import get_ntc_platform
         from ..core.device import DeviceStatus
+        from ntc_templates.parse import parse_output
 
         command = self._get_command(device)
         if not command:
@@ -253,35 +164,51 @@ class InventoryCollector(BaseCollector):
                 device.metadata["hostname"] = hostname
                 device.status = DeviceStatus.ONLINE
 
-                # Основная команда show inventory
+                # 1. Парсим сырые данные show inventory
                 response = conn.send_command(command)
-                data = self._parse_output(response.result, device)
+                raw_data = self._parse_output(response.result, device)
 
-                # Собираем трансиверы если включено
+                # 2. Domain Layer: нормализация
+                data = self._normalizer.normalize_dicts(
+                    raw_data,
+                    platform=device.platform,
+                    hostname=hostname,
+                    device_ip=device.host,
+                )
+
+                # 3. Собираем трансиверы если включено
                 transceiver_items = []
                 if self.collect_transceivers:
                     tr_cmd = self.transceiver_commands.get(device.platform)
                     if tr_cmd:
                         try:
                             tr_response = conn.send_command(tr_cmd)
-                            transceiver_items = self._parse_transceivers(
-                                tr_response.result,
-                                get_ntc_platform(device.platform),
-                                tr_cmd,
-                                device,
+                            # Парсим через NTC
+                            parsed = parse_output(
+                                platform=get_ntc_platform(device.platform),
+                                command=tr_cmd,
+                                data=tr_response.result,
                             )
+                            # Domain Layer: нормализация трансиверов
+                            transceiver_items = self._normalizer.normalize_transceivers(
+                                parsed,
+                                platform=device.platform,
+                            )
+                            # Добавляем hostname/device_ip
+                            for item in transceiver_items:
+                                item["hostname"] = hostname
+                                item["device_ip"] = device.host
                         except Exception as e:
                             logger.debug(f"Ошибка получения transceivers: {e}")
 
-                # Объединяем inventory + transceivers
-                all_items = data + transceiver_items
+                # 4. Domain Layer: merge inventory + transceivers
+                all_items = self._normalizer.merge_with_transceivers(data, transceiver_items)
 
-                # Добавляем hostname ко всем записям
-                for row in all_items:
-                    row["hostname"] = hostname
-                    row["device_ip"] = device.host
-
-                logger.info(f"{hostname}: собрано {len(all_items)} компонентов inventory (из них {len(transceiver_items)} трансиверов)")
+                # Лог: показываем трансиверы только для NX-OS (где они отдельной командой)
+                if transceiver_items:
+                    logger.info(f"{hostname}: собрано {len(all_items)} компонентов inventory (+{len(transceiver_items)} трансиверов из show interface transceiver)")
+                else:
+                    logger.info(f"{hostname}: собрано {len(all_items)} компонентов inventory")
                 return all_items
 
         except (ConnectionError, AuthenticationError, TimeoutError) as e:
@@ -292,80 +219,3 @@ class InventoryCollector(BaseCollector):
             device.status = DeviceStatus.ERROR
             logger.error(f"Неизвестная ошибка с {device.host}: {e}")
             return []
-
-    def _parse_transceivers(
-        self,
-        output: str,
-        ntc_platform: str,
-        command: str,
-        device: Device,
-    ) -> List[Dict[str, Any]]:
-        """
-        Парсит show interface transceiver для получения SFP/QSFP.
-
-        Конвертирует данные в формат inventory:
-        - name: "Transceiver Ethernet1/1"
-        - pid: part_number (SFP+ LR)
-        - serial: serial_number
-        - description: type (10Gbase-LR)
-        - manufacturer: name (OEM, CISCO, etc.)
-
-        Args:
-            output: Вывод команды
-            ntc_platform: Платформа для NTC
-            command: Команда для NTC парсера
-            device: Устройство
-
-        Returns:
-            List[Dict]: Трансиверы в формате inventory
-        """
-        from ntc_templates.parse import parse_output
-
-        items = []
-        manufacturer = self._detect_manufacturer(device)
-
-        try:
-            parsed = parse_output(
-                platform=ntc_platform,
-                command=command,
-                data=output
-            )
-
-            for row in parsed:
-                # Пропускаем интерфейсы без трансиверов
-                transceiver_type = row.get("type", "")
-                if not transceiver_type or "not present" in str(transceiver_type).lower():
-                    continue
-
-                interface = row.get("interface", "")
-                part_number = row.get("part_number", "")
-                # NTC шаблон возвращает "serial", не "serial_number"
-                serial_number = row.get("serial", row.get("serial_number", ""))
-                name = row.get("name", "")  # OEM, CISCO-FINISAR, etc.
-
-                # Определяем manufacturer по name или PID
-                item_manufacturer = ""
-                if name:
-                    name_upper = name.upper()
-                    if "CISCO" in name_upper:
-                        item_manufacturer = "Cisco"
-                    elif "FINISAR" in name_upper:
-                        item_manufacturer = "Finisar"
-                    elif "OEM" in name_upper:
-                        item_manufacturer = manufacturer  # Используем vendor устройства
-
-                if not item_manufacturer:
-                    item_manufacturer = self._detect_manufacturer_by_pid(part_number) or manufacturer
-
-                items.append({
-                    "name": f"Transceiver {interface}",
-                    "description": transceiver_type,
-                    "pid": part_number,
-                    "serial": serial_number,
-                    "manufacturer": item_manufacturer,
-                })
-
-        except Exception as e:
-            logger.debug(f"Ошибка парсинга transceivers через NTC: {e}")
-
-        return items

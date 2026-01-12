@@ -94,7 +94,7 @@ def setup_parser() -> argparse.ArgumentParser:
     devices_parser.add_argument(
         "--format",
         "-f",
-        choices=["excel", "csv", "json"],
+        choices=["excel", "csv", "json", "raw"],
         default="csv",
         help="Формат вывода",
     )
@@ -124,7 +124,7 @@ def setup_parser() -> argparse.ArgumentParser:
     mac_parser.add_argument(
         "--format",
         "-f",
-        choices=["excel", "csv", "json"],
+        choices=["excel", "csv", "json", "raw"],
         default="excel",
         help="Формат вывода",
     )
@@ -183,7 +183,7 @@ def setup_parser() -> argparse.ArgumentParser:
     lldp_parser.add_argument(
         "--format",
         "-f",
-        choices=["excel", "csv", "json"],
+        choices=["excel", "csv", "json", "raw"],
         default="excel",
         help="Формат вывода",
     )
@@ -210,7 +210,7 @@ def setup_parser() -> argparse.ArgumentParser:
     intf_parser.add_argument(
         "--format",
         "-f",
-        choices=["excel", "csv", "json"],
+        choices=["excel", "csv", "json", "raw"],
         default="excel",
         help="Формат вывода",
     )
@@ -231,7 +231,7 @@ def setup_parser() -> argparse.ArgumentParser:
     inv_parser.add_argument(
         "--format",
         "-f",
-        choices=["excel", "csv", "json"],
+        choices=["excel", "csv", "json", "raw"],
         default="json",
         help="Формат вывода",
     )
@@ -403,7 +403,27 @@ def setup_parser() -> argparse.ArgumentParser:
     netbox_parser.add_argument(
         "--cleanup",
         action="store_true",
-        help="Удалять устройства из NetBox которых нет в списке",
+        help="Удалять устройства из NetBox которых нет в списке (требует --tenant)",
+    )
+    netbox_parser.add_argument(
+        "--cleanup-interfaces",
+        action="store_true",
+        help="Удалять интерфейсы из NetBox которых нет на устройстве",
+    )
+    netbox_parser.add_argument(
+        "--cleanup-ips",
+        action="store_true",
+        help="Удалять IP-адреса из NetBox которых нет на устройстве",
+    )
+    netbox_parser.add_argument(
+        "--cleanup-cables",
+        action="store_true",
+        help="Удалять кабели из NetBox которых нет в LLDP/CDP данных",
+    )
+    netbox_parser.add_argument(
+        "--update-ips",
+        action="store_true",
+        help="Обновлять существующие IP-адреса (description, tenant)",
     )
     netbox_parser.add_argument(
         "--tenant",
@@ -437,6 +457,29 @@ def setup_parser() -> argparse.ArgumentParser:
         "-o",
         default="backups",
         help="Папка для сохранения конфигураций (default: backups)",
+    )
+
+    # === Validate Fields (валидация fields.yaml) ===
+    validate_parser = subparsers.add_parser(
+        "validate-fields",
+        help="Валидация fields.yaml против моделей"
+    )
+    validate_parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Подробный вывод",
+    )
+    validate_parser.add_argument(
+        "--show-registry",
+        action="store_true",
+        help="Показать реестр полей",
+    )
+    validate_parser.add_argument(
+        "--type",
+        "-t",
+        choices=["lldp", "mac", "interfaces", "devices", "inventory"],
+        help="Показать только указанный тип данных",
     )
 
     return parser
@@ -542,19 +585,21 @@ def get_exporter(format_type: str, output_folder: str, delimiter: str = ","):
     Возвращает экспортер по типу формата.
 
     Args:
-        format_type: Тип формата (excel, csv, json)
+        format_type: Тип формата (excel, csv, json, raw)
         output_folder: Папка для вывода
         delimiter: Разделитель для CSV
 
     Returns:
         BaseExporter: Экспортер
     """
-    from .exporters import CSVExporter, JSONExporter, ExcelExporter
+    from .exporters import CSVExporter, JSONExporter, ExcelExporter, RawExporter
 
     if format_type == "csv":
         return CSVExporter(output_folder=output_folder, delimiter=delimiter)
     elif format_type == "json":
         return JSONExporter(output_folder=output_folder)
+    elif format_type == "raw":
+        return RawExporter()
     else:
         return ExcelExporter(output_folder=output_folder)
 
@@ -845,12 +890,19 @@ def cmd_run(args, ctx=None) -> None:
     """Обработчик команды run (произвольная команда)."""
     from .core.connection import ConnectionManager, get_ntc_platform
     from .parsers.textfsm_parser import NTCParser, NTC_AVAILABLE
+    from .config import config
 
     devices, credentials = prepare_collection(args)
 
     fields = args.fields.split(",") if args.fields else None
 
-    conn_manager = ConnectionManager(transport=args.transport)
+    # Получаем retry настройки из конфига
+    conn_config = config.get("connection", {})
+    conn_manager = ConnectionManager(
+        transport=args.transport,
+        max_retries=conn_config.get("max_retries", 2),
+        retry_delay=conn_config.get("retry_delay", 5),
+    )
     all_data = []
 
     for device in devices:
@@ -1108,6 +1160,17 @@ def cmd_sync_netbox(args, ctx=None) -> None:
     # Загружаем устройства и учётные данные
     devices, credentials = prepare_collection(args)
 
+    # Статистика для сводки в конце
+    # Ключи должны соответствовать тому что возвращают sync функции
+    summary = {
+        "devices": {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "failed": 0},
+        "interfaces": {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "failed": 0},
+        "ip_addresses": {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "failed": 0},
+        "vlans": {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "failed": 0},
+        "cables": {"created": 0, "deleted": 0, "skipped": 0, "failed": 0, "already_exists": 0},
+        "inventory": {"created": 0, "updated": 0, "skipped": 0, "failed": 0},
+    }
+
     # Создание/обновление устройств в NetBox из инвентаризации
     # ВАЖНО: Должно идти первым, чтобы устройства существовали для интерфейсов/IP/кабелей
     if getattr(args, "create_devices", False):
@@ -1161,7 +1224,7 @@ def cmd_sync_netbox(args, ctx=None) -> None:
                 else:
                     logger.info("Устройства: нет изменений")
 
-            sync.sync_devices_from_inventory(
+            stats = sync.sync_devices_from_inventory(
                 device_infos,
                 site=getattr(args, "site", "Main"),
                 role=getattr(args, "role", "switch"),
@@ -1171,11 +1234,14 @@ def cmd_sync_netbox(args, ctx=None) -> None:
                 # Primary IP устанавливается только при --ip-addresses
                 set_primary_ip=getattr(args, "ip_addresses", False),
             )
+            for key in stats:
+                summary["devices"][key] += stats.get(key, 0)
         else:
             logger.warning("Нет данных инвентаризации")
 
     # Синхронизация интерфейсов
     if args.interfaces:
+        cleanup_interfaces = getattr(args, "cleanup_interfaces", False)
         logger.info("Сбор интерфейсов с устройств...")
         collector = InterfaceCollector(
             credentials=credentials,
@@ -1201,11 +1267,14 @@ def cmd_sync_netbox(args, ctx=None) -> None:
                     else:
                         logger.info(f"Интерфейсы {hostname}: нет изменений")
 
-                sync.sync_interfaces(hostname, data)
+                stats = sync.sync_interfaces(hostname, data, cleanup=cleanup_interfaces)
+                for key in stats:
+                    summary["interfaces"][key] += stats.get(key, 0)
 
     # Синхронизация кабелей из LLDP/CDP
     if getattr(args, "cables", False):
         protocol = getattr(args, "protocol", "both")
+        cleanup_cables = getattr(args, "cleanup_cables", False)
         logger.info(f"Сбор {protocol.upper()} данных с устройств...")
         collector = LLDPCollector(
             credentials=credentials,
@@ -1221,10 +1290,13 @@ def cmd_sync_netbox(args, ctx=None) -> None:
 
         if all_lldp_data:
             logger.info(f"Найдено {len(all_lldp_data)} соседей, создаём кабели...")
-            sync.sync_cables_from_lldp(
+            stats = sync.sync_cables_from_lldp(
                 all_lldp_data,
                 skip_unknown=getattr(args, "skip_unknown", True),
+                cleanup=cleanup_cables,
             )
+            for key in stats:
+                summary["cables"][key] += stats.get(key, 0)
         else:
             logger.warning("LLDP/CDP данные не найдены")
 
@@ -1232,6 +1304,8 @@ def cmd_sync_netbox(args, ctx=None) -> None:
     if getattr(args, "ip_addresses", False):
         from .core.models import IPAddressEntry
 
+        update_ips = getattr(args, "update_ips", False)
+        cleanup_ips = getattr(args, "cleanup_ips", False)
         logger.info("Сбор IP-адресов с устройств...")
         collector = InterfaceCollector(
             credentials=credentials,
@@ -1268,12 +1342,15 @@ def cmd_sync_netbox(args, ctx=None) -> None:
                         else:
                             logger.info(f"IP-адреса {hostname}: нет изменений")
 
-                    sync.sync_ip_addresses(
+                    stats = sync.sync_ip_addresses(
                         hostname,
                         ip_entries,
                         device_ip=device.host,
-                        update_existing=getattr(args, "update_devices", False),
+                        update_existing=update_ips,
+                        cleanup=cleanup_ips,
                     )
+                    for key in stats:
+                        summary["ip_addresses"][key] += stats.get(key, 0)
 
     # Синхронизация VLAN из SVI интерфейсов
     if getattr(args, "vlans", False):
@@ -1287,11 +1364,13 @@ def cmd_sync_netbox(args, ctx=None) -> None:
             interfaces = collector.collect([device])
             if interfaces:
                 hostname = interfaces[0].hostname or device.host
-                sync.sync_vlans_from_interfaces(
+                stats = sync.sync_vlans_from_interfaces(
                     hostname,
                     interfaces,
                     site=getattr(args, "site", None),
                 )
+                for key in stats:
+                    summary["vlans"][key] += stats.get(key, 0)
 
     # Синхронизация inventory (модули, SFP, PSU)
     if getattr(args, "inventory", False):
@@ -1307,7 +1386,92 @@ def cmd_sync_netbox(args, ctx=None) -> None:
             items = collector.collect([device])
             if items:
                 hostname = items[0].hostname or device.host
-                sync.sync_inventory(hostname, items)
+                stats = sync.sync_inventory(hostname, items)
+                for key in stats:
+                    summary["inventory"][key] += stats.get(key, 0)
+
+    # === СВОДКА В КОНЦЕ ===
+    _print_sync_summary(summary, args)
+
+
+def _print_sync_summary(summary: dict, args) -> None:
+    """Выводит сводку синхронизации в конце."""
+    import json
+
+    # Подсчёт общих изменений (используем .get() для безопасности)
+    total_created = sum(s.get("created", 0) for s in summary.values())
+    total_updated = sum(s.get("updated", 0) for s in summary.values())
+    total_deleted = sum(s.get("deleted", 0) for s in summary.values())
+    total_skipped = sum(s.get("skipped", 0) for s in summary.values())
+    total_failed = sum(s.get("failed", 0) for s in summary.values())
+    has_changes = total_created > 0 or total_updated > 0 or total_deleted > 0
+
+    # JSON формат
+    if getattr(args, "format", None) == "json":
+        result = {
+            "dry_run": getattr(args, "dry_run", False),
+            "has_changes": has_changes,
+            "summary": summary,
+            "totals": {
+                "created": total_created,
+                "updated": total_updated,
+                "deleted": total_deleted,
+                "skipped": total_skipped,
+                "failed": total_failed,
+            },
+        }
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+
+    # Консольный вывод
+    mode = "[DRY-RUN] " if getattr(args, "dry_run", False) else ""
+    print(f"\n{'='*60}")
+    print(f"{mode}СВОДКА СИНХРОНИЗАЦИИ NetBox")
+    print(f"{'='*60}")
+
+    # Названия категорий на русском
+    category_names = {
+        "devices": "Устройства",
+        "interfaces": "Интерфейсы",
+        "ip_addresses": "IP-адреса",
+        "vlans": "VLANs",
+        "cables": "Кабели",
+        "inventory": "Inventory",
+    }
+
+    for category, stats in summary.items():
+        if any(v > 0 for v in stats.values()):
+            name = category_names.get(category, category)
+            parts = []
+            if stats.get("created", 0) > 0:
+                parts.append(f"+{stats['created']} создано")
+            if stats.get("updated", 0) > 0:
+                parts.append(f"~{stats['updated']} обновлено")
+            if stats.get("deleted", 0) > 0:
+                parts.append(f"-{stats['deleted']} удалено")
+            if stats.get("skipped", 0) > 0:
+                parts.append(f"={stats['skipped']} пропущено")
+            if stats.get("already_exists", 0) > 0:
+                parts.append(f"✓{stats['already_exists']} существует")
+            if stats.get("failed", 0) > 0:
+                parts.append(f"✗{stats['failed']} ошибок")
+            print(f"  {name}: {', '.join(parts)}")
+
+    print(f"{'-'*60}")
+    if has_changes or total_failed > 0:
+        parts = []
+        if total_created > 0:
+            parts.append(f"+{total_created} создано")
+        if total_updated > 0:
+            parts.append(f"~{total_updated} обновлено")
+        if total_deleted > 0:
+            parts.append(f"-{total_deleted} удалено")
+        if total_failed > 0:
+            parts.append(f"✗{total_failed} ошибок")
+        print(f"  ИТОГО: {', '.join(parts) if parts else 'нет изменений'}")
+    else:
+        print("  Изменений нет")
+    print(f"{'='*60}\n")
 
 
 def cmd_backup(args, ctx=None) -> None:
@@ -1337,6 +1501,48 @@ def cmd_backup(args, ctx=None) -> None:
     for r in results:
         if not r.success:
             logger.error(f"  {r.hostname}: {r.error}")
+
+
+def cmd_validate_fields(args, ctx=None) -> None:
+    """
+    Валидация fields.yaml против моделей.
+
+    Проверяет что все поля в конфигурации существуют в моделях.
+    """
+    from .core.field_registry import (
+        validate_fields_config,
+        print_field_registry,
+        FIELD_REGISTRY,
+    )
+
+    # Показать реестр полей
+    if args.show_registry:
+        print_field_registry(args.type)
+        return
+
+    print("Validating fields.yaml against models...\n")
+
+    # Валидация
+    errors = validate_fields_config()
+
+    if errors:
+        print(f"Found {len(errors)} issue(s):\n")
+        for err in errors:
+            print(f"  ✗ {err}")
+        print()
+        sys.exit(1)
+    else:
+        print("✓ All fields are valid!\n")
+
+    # Статистика
+    if args.verbose:
+        print("Field Registry Statistics:")
+        for data_type, fields in FIELD_REGISTRY.items():
+            enabled_count = len([f for f in fields.values() if f.aliases])
+            print(f"  {data_type}: {len(fields)} fields ({enabled_count} with aliases)")
+
+        print("\n  Use --show-registry to see all fields")
+        print("  Use --type <type> to filter by data type")
 
 
 def main() -> None:
@@ -1421,6 +1627,8 @@ def main() -> None:
         cmd_sync_netbox(args, ctx)
     elif args.command == "backup":
         cmd_backup(args, ctx)
+    elif args.command == "validate-fields":
+        cmd_validate_fields(args, ctx)
     else:
         parser.print_help()
         return
