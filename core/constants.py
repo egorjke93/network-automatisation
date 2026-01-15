@@ -96,6 +96,37 @@ NETMIKO_PLATFORM_MAP: Dict[str, str] = {
     "qtech_qsw": "cisco_ios",
 }
 
+# Маппинг NetBox platform slug → Scrapli platform
+# Используется при импорте устройств из NetBox
+NETBOX_TO_SCRAPLI_PLATFORM: Dict[str, str] = {
+    # Cisco (с дефисами - стандартные NetBox slugs)
+    "cisco-ios": "cisco_ios",
+    "cisco-ios-xe": "cisco_ios",
+    "cisco-iosxe": "cisco_ios",
+    "cisco-nxos": "cisco_nxos",
+    "cisco-nx-os": "cisco_nxos",
+    "cisco-iosxr": "cisco_iosxr",
+    "cisco-ios-xr": "cisco_iosxr",
+    # Cisco (с underscore - альтернативные варианты)
+    "cisco_ios": "cisco_ios",
+    "cisco_iosxe": "cisco_ios",
+    "cisco_nxos": "cisco_nxos",
+    "cisco_iosxr": "cisco_iosxr",
+    # Arista
+    "arista-eos": "arista_eos",
+    "arista_eos": "arista_eos",
+    # Juniper
+    "juniper-junos": "juniper_junos",
+    "juniper_junos": "juniper_junos",
+    "junos": "juniper_junos",
+    # QTech
+    "qtech": "cisco_ios",
+    "qtech-qsw": "cisco_ios",
+    "qtech_qsw": "cisco_ios",
+    # Generic
+    "linux": "linux",
+}
+
 # Маппинг вендоров по типу устройства
 VENDOR_MAP: Dict[str, List[str]] = {
     "cisco": [
@@ -966,6 +997,178 @@ def normalize_device_model(model: str) -> str:
             break
 
     return result
+
+
+# =============================================================================
+# КОМАНДЫ КОЛЛЕКТОРОВ (централизованные)
+# =============================================================================
+# Все платформо-зависимые команды для коллекторов.
+# Коллекторы импортируют отсюда вместо дублирования.
+# =============================================================================
+
+COLLECTOR_COMMANDS: Dict[str, Dict[str, str]] = {
+    # MAC-адреса
+    "mac": {
+        "cisco_ios": "show mac address-table",
+        "cisco_iosxe": "show mac address-table",
+        "cisco_nxos": "show mac address-table",
+        "arista_eos": "show mac address-table",
+        "juniper_junos": "show ethernet-switching table",
+        "juniper": "show ethernet-switching table",
+        "qtech": "show mac address-table",
+        "qtech_qsw": "show mac address-table",
+    },
+    # Интерфейсы
+    "interfaces": {
+        "cisco_ios": "show interfaces",
+        "cisco_iosxe": "show interfaces",
+        "cisco_nxos": "show interface",
+        "arista_eos": "show interfaces",
+        "juniper_junos": "show interfaces extensive",
+        "juniper": "show interfaces extensive",
+        "qtech": "show interfaces",
+        "qtech_qsw": "show interfaces",
+    },
+    # Inventory
+    "inventory": {
+        "cisco_ios": "show inventory",
+        "cisco_iosxe": "show inventory",
+        "cisco_nxos": "show inventory",
+        "arista_eos": "show inventory",
+        "juniper_junos": "show chassis hardware",
+        "juniper": "show chassis hardware",
+        "qtech": "show inventory",
+        "qtech_qsw": "show inventory",
+    },
+    # LLDP
+    "lldp": {
+        "cisco_ios": "show lldp neighbors detail",
+        "cisco_iosxe": "show lldp neighbors detail",
+        "cisco_nxos": "show lldp neighbors detail",
+        "arista_eos": "show lldp neighbors detail",
+        "juniper_junos": "show lldp neighbors",
+        "juniper": "show lldp neighbors",
+        "qtech": "show lldp neighbors detail",
+        "qtech_qsw": "show lldp neighbors detail",
+    },
+    # CDP
+    "cdp": {
+        "cisco_ios": "show cdp neighbors detail",
+        "cisco_iosxe": "show cdp neighbors detail",
+        "cisco_nxos": "show cdp neighbors detail",
+        "arista_eos": "show lldp neighbors detail",  # Arista: CDP → LLDP
+        "qtech": "show cdp neighbors detail",
+        "qtech_qsw": "show cdp neighbors detail",
+    },
+    # Devices (show version)
+    "devices": {
+        "cisco_ios": "show version",
+        "cisco_iosxe": "show version",
+        "cisco_nxos": "show version",
+        "arista_eos": "show version",
+        "juniper_junos": "show version",
+        "juniper": "show version",
+        "qtech": "show version",
+        "qtech_qsw": "show version",
+    },
+}
+
+
+def get_collector_command(collector: str, platform: str) -> str:
+    """
+    Возвращает команду для коллектора и платформы.
+
+    Args:
+        collector: Тип коллектора (mac, interfaces, lldp, cdp, inventory, devices)
+        platform: Платформа устройства (cisco_ios, arista_eos, etc.)
+
+    Returns:
+        str: Команда для выполнения или пустая строка
+
+    Examples:
+        >>> get_collector_command("mac", "cisco_ios")
+        'show mac address-table'
+        >>> get_collector_command("lldp", "arista_eos")
+        'show lldp neighbors detail'
+    """
+    commands = COLLECTOR_COMMANDS.get(collector, {})
+    return commands.get(platform, "")
+
+
+# =============================================================================
+# ИНТЕРФЕЙСНЫЕ АЛИАСЫ
+# =============================================================================
+
+
+def get_interface_aliases(interface: str) -> List[str]:
+    """
+    Возвращает все возможные варианты написания интерфейса.
+
+    Используется для маппинга статусов интерфейсов, где разные команды
+    могут возвращать разные форматы имён.
+
+    Args:
+        interface: Имя интерфейса в любом формате
+
+    Returns:
+        List[str]: Все варианты написания (включая исходный)
+
+    Examples:
+        >>> get_interface_aliases("GigabitEthernet0/1")
+        ['GigabitEthernet0/1', 'Gi0/1', 'Gig0/1']
+        >>> get_interface_aliases("Te1/0/1")
+        ['Te1/0/1', 'TenGigabitEthernet1/0/1', 'Ten1/0/1']
+    """
+    if not interface:
+        return []
+
+    aliases = {interface}  # Используем set для уникальности
+    clean = interface.replace(" ", "")
+    aliases.add(clean)
+
+    # Добавляем короткую форму
+    short = normalize_interface_short(clean)
+    if short != clean:
+        aliases.add(short)
+
+    # Добавляем полную форму
+    full = normalize_interface_full(clean)
+    if full != clean:
+        aliases.add(full)
+
+    # Дополнительные альтернативные сокращения
+    clean_lower = clean.lower()
+
+    # Маппинг дополнительных форм
+    EXTRA_ALIASES = {
+        "gigabitethernet": ["Gig"],
+        "tengigabitethernet": ["Ten"],
+        "ethernet": ["Et", "Eth"],
+    }
+
+    for prefix, extras in EXTRA_ALIASES.items():
+        if clean_lower.startswith(prefix):
+            suffix = clean[len(prefix):]
+            for extra in extras:
+                aliases.add(f"{extra}{suffix}")
+
+    # Обратные маппинги для коротких форм
+    SHORT_TO_EXTRA = {
+        "gi": ["Gig"],
+        "te": ["Ten"],
+        "eth": ["Et"],
+        "et": ["Eth"],
+    }
+
+    for short_prefix, extras in SHORT_TO_EXTRA.items():
+        if clean_lower.startswith(short_prefix) and len(clean) > len(short_prefix):
+            next_char = clean[len(short_prefix)]
+            if next_char.isdigit():
+                suffix = clean[len(short_prefix):]
+                for extra in extras:
+                    aliases.add(f"{extra}{suffix}")
+
+    return list(aliases)
 
 
 # =============================================================================

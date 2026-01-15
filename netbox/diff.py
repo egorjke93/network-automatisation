@@ -21,9 +21,12 @@ Diff — показ изменений перед применением в NetB
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 from enum import Enum
+
+from .sync.base import get_sync_config
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +223,10 @@ class DiffCalculator:
         """
         result = DiffResult(object_type="interfaces", target=device_name)
 
+        # Загружаем exclude_interfaces из конфига
+        sync_cfg = get_sync_config("interfaces")
+        exclude_patterns = sync_cfg.get_option("exclude_interfaces", [])
+
         # Получаем устройство
         device = self.client.get_device_by_name(device_name)
         if not device:
@@ -235,6 +242,15 @@ class DiffCalculator:
         for intf_data in interfaces:
             intf_name = intf_data.get("interface", intf_data.get("name", ""))
             if not intf_name:
+                continue
+
+            # Проверяем exclude patterns
+            if self._is_excluded(intf_name, exclude_patterns):
+                result.skips.append(ObjectChange(
+                    name=intf_name,
+                    change_type=ChangeType.SKIP,
+                    reason="excluded by pattern",
+                ))
                 continue
 
             if intf_name in existing:
@@ -275,6 +291,13 @@ class DiffCalculator:
 
         return result
 
+    def _is_excluded(self, name: str, patterns: List[str]) -> bool:
+        """Проверяет исключён ли интерфейс по паттернам."""
+        for pattern in patterns:
+            if re.match(pattern, name, re.IGNORECASE):
+                return True
+        return False
+
     def _compare_interface(
         self,
         existing,
@@ -293,9 +316,11 @@ class DiffCalculator:
             ))
 
         # Enabled/Status
+        # disabled = administratively down, error = err-disabled
+        # up/down = порт включён (down = нет линка, но порт активен)
         new_status = new_data.get("status", "")
         if new_status:
-            new_enabled = new_status.lower() == "up"
+            new_enabled = new_status.lower() not in ("disabled", "error")
             if new_enabled != existing.enabled:
                 changes.append(FieldChange(
                     field="enabled",

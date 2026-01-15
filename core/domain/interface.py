@@ -20,6 +20,7 @@ STATUS_MAP: Dict[str, str] = {
     "down": "down",
     "disabled": "disabled",
     "err-disabled": "error",
+    "errdisabled": "error",  # вариант без дефиса
     "administratively down": "disabled",
     "admin down": "disabled",
 }
