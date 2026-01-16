@@ -2,13 +2,15 @@
 Domain logic для инвентаризации.
 
 Нормализация данных inventory (модули, SFP, PSU).
-Определение manufacturer по платформе и PID.
+Определение manufacturer по PID.
+
+Примечание: manufacturer определяется ТОЛЬКО по PID, не по платформе устройства,
+т.к. трансиверы и модули могут быть от разных производителей.
 """
 
 from typing import List, Dict, Any, Optional
 
 from ..models import InventoryItem
-from ..constants import get_vendor_by_platform
 
 
 # Паттерны PID для определения manufacturer
@@ -68,19 +70,16 @@ class InventoryNormalizer:
 
         Args:
             data: Сырые данные от парсера
-            platform: Платформа устройства
+            platform: Платформа устройства (не используется для manufacturer)
             hostname: Hostname устройства
             device_ip: IP устройства
 
         Returns:
             List[Dict]: Нормализованные словари
         """
-        # Определяем default manufacturer по платформе
-        default_manufacturer = self.detect_manufacturer_by_platform(platform)
-
         result = []
         for row in data:
-            normalized = self._normalize_row(row, default_manufacturer)
+            normalized = self._normalize_row(row)
             if hostname:
                 normalized["hostname"] = hostname
             if device_ip:
@@ -91,14 +90,15 @@ class InventoryNormalizer:
     def _normalize_row(
         self,
         row: Dict[str, Any],
-        default_manufacturer: str = "",
     ) -> Dict[str, Any]:
         """
         Нормализует одну запись inventory.
 
+        Manufacturer определяется ТОЛЬКО по PID (Product ID).
+        Если PID не распознан — manufacturer остаётся пустым.
+
         Args:
             row: Сырые данные
-            default_manufacturer: Manufacturer по умолчанию
 
         Returns:
             Dict: Нормализованные данные
@@ -112,28 +112,10 @@ class InventoryNormalizer:
             "pid": pid,
             "vid": row.get("vid", ""),
             "serial": row.get("sn", row.get("serial", "")),
-            "manufacturer": self.detect_manufacturer_by_pid(pid) or default_manufacturer,
+            "manufacturer": self.detect_manufacturer_by_pid(pid),
         }
 
         return result
-
-    def detect_manufacturer_by_platform(self, platform: str) -> str:
-        """
-        Определяет manufacturer по платформе устройства.
-
-        Args:
-            platform: Платформа (cisco_ios, arista_eos, etc.)
-
-        Returns:
-            str: Manufacturer (Cisco, Arista, etc.) или пустая строка
-        """
-        if not platform:
-            return ""
-
-        vendor = get_vendor_by_platform(platform)
-        if vendor and vendor != "unknown":
-            return vendor.capitalize()
-        return ""
 
     def detect_manufacturer_by_pid(self, pid: str) -> str:
         """
@@ -165,14 +147,16 @@ class InventoryNormalizer:
         """
         Конвертирует данные show interface transceiver в формат inventory.
 
+        Manufacturer определяется по имени трансивера или PID.
+        Если не распознан — остаётся пустым.
+
         Args:
             data: Данные от NTC парсера (show interface transceiver)
-            platform: Платформа устройства
+            platform: Платформа устройства (не используется для manufacturer)
 
         Returns:
             List[Dict]: Трансиверы в формате inventory
         """
-        default_manufacturer = self.detect_manufacturer_by_platform(platform)
         items = []
 
         for row in data:
@@ -187,9 +171,7 @@ class InventoryNormalizer:
             name = row.get("name", "")  # OEM, CISCO-FINISAR, etc.
 
             # Определяем manufacturer по name или PID
-            item_manufacturer = self._detect_transceiver_manufacturer(
-                name, part_number, default_manufacturer
-            )
+            item_manufacturer = self._detect_transceiver_manufacturer(name, part_number)
 
             items.append({
                 "name": f"Transceiver {interface}",
@@ -205,18 +187,19 @@ class InventoryNormalizer:
         self,
         name: str,
         part_number: str,
-        default: str,
     ) -> str:
         """
         Определяет manufacturer трансивера.
 
+        Определяется по имени (CISCO-FINISAR) или по PID.
+        OEM трансиверы и неизвестные — пустой manufacturer.
+
         Args:
             name: Имя из show interface transceiver (OEM, CISCO-FINISAR)
             part_number: Part number
-            default: Manufacturer по умолчанию
 
         Returns:
-            str: Manufacturer
+            str: Manufacturer или пустая строка
         """
         if name:
             name_upper = name.upper()
@@ -224,10 +207,11 @@ class InventoryNormalizer:
                 return "Cisco"
             if "FINISAR" in name_upper:
                 return "Finisar"
+            # OEM трансиверы — производитель неизвестен
             if "OEM" in name_upper:
-                return default
+                return ""
 
-        return self.detect_manufacturer_by_pid(part_number) or default
+        return self.detect_manufacturer_by_pid(part_number)
 
     def merge_with_transceivers(
         self,

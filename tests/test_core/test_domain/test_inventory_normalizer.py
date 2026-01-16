@@ -3,7 +3,7 @@ Tests for InventoryNormalizer.
 
 Проверяет нормализацию inventory:
 - Унификация полей (descr → description, sn → serial)
-- Определение manufacturer по платформе и PID
+- Определение manufacturer ТОЛЬКО по PID (не по платформе устройства)
 - Нормализация трансиверов
 """
 
@@ -57,25 +57,14 @@ class TestInventoryNormalizerBasic:
 
 @pytest.mark.unit
 class TestInventoryNormalizerManufacturer:
-    """Тесты определения manufacturer."""
+    """Тесты определения manufacturer.
+
+    ВАЖНО: manufacturer определяется ТОЛЬКО по PID, не по платформе устройства.
+    Это сделано потому что трансиверы и модули могут быть от разных производителей.
+    """
 
     def setup_method(self):
         self.normalizer = InventoryNormalizer()
-
-    @pytest.mark.parametrize("platform, expected", [
-        ("cisco_ios", "Cisco"),
-        ("cisco_iosxe", "Cisco"),
-        ("cisco_nxos", "Cisco"),
-        ("arista_eos", "Arista"),
-        ("juniper_junos", "Juniper"),
-        ("qtech", "Qtech"),
-        ("unknown_platform", ""),
-        ("", ""),
-    ])
-    def test_detect_manufacturer_by_platform(self, platform, expected):
-        """Тест определения manufacturer по платформе."""
-        result = self.normalizer.detect_manufacturer_by_platform(platform)
-        assert result == expected
 
     @pytest.mark.parametrize("pid, expected", [
         ("WS-C3750X-48P-S", "Cisco"),
@@ -88,7 +77,7 @@ class TestInventoryNormalizerManufacturer:
         ("QFX5100-48S", "Juniper"),
         ("MX204", "Juniper"),
         ("FINISAR-FTLX1471", "Finisar"),
-        ("UNKNOWN-123", ""),
+        ("UNKNOWN-123", ""),  # Неизвестный PID — пустой manufacturer
         ("", ""),
     ])
     def test_detect_manufacturer_by_pid(self, pid, expected):
@@ -96,20 +85,28 @@ class TestInventoryNormalizerManufacturer:
         result = self.normalizer.detect_manufacturer_by_pid(pid)
         assert result == expected
 
-    def test_manufacturer_from_platform(self):
-        """Manufacturer берётся из платформы если PID не распознан."""
+    def test_unknown_pid_empty_manufacturer(self):
+        """Неизвестный PID — manufacturer остаётся пустым (не берётся из платформы)."""
         raw_data = [{"name": "Module", "pid": "UNKNOWN-123", "sn": "ABC"}]
+        # Даже если платформа arista_eos, manufacturer должен быть пустым
         result = self.normalizer.normalize_dicts(raw_data, platform="arista_eos")
 
-        assert result[0]["manufacturer"] == "Arista"
+        assert result[0]["manufacturer"] == ""
 
-    def test_manufacturer_from_pid_priority(self):
-        """PID имеет приоритет над платформой."""
+    def test_manufacturer_from_pid(self):
+        """Manufacturer определяется по PID."""
         raw_data = [{"name": "SFP", "pid": "GLC-SX-MMD", "sn": "ABC"}]
-        # Даже если платформа Arista, Cisco PID даёт Cisco
         result = self.normalizer.normalize_dicts(raw_data, platform="arista_eos")
 
+        # Cisco PID даёт Cisco manufacturer
         assert result[0]["manufacturer"] == "Cisco"
+
+    def test_empty_pid_empty_manufacturer(self):
+        """Пустой PID — manufacturer пустой."""
+        raw_data = [{"name": "Module", "pid": "", "sn": "ABC"}]
+        result = self.normalizer.normalize_dicts(raw_data, platform="cisco_ios")
+
+        assert result[0]["manufacturer"] == ""
 
 
 @pytest.mark.unit
@@ -152,13 +149,14 @@ class TestInventoryNormalizerTransceivers:
         assert result[0]["name"] == "Transceiver Ethernet1/1"
 
     def test_transceiver_manufacturer_oem(self):
-        """OEM трансиверы получают manufacturer устройства."""
+        """OEM трансиверы — manufacturer пустой (производитель неизвестен)."""
         raw_data = [
             {"interface": "Eth1/1", "type": "10G", "part_number": "OEM-123", "name": "OEM"},
         ]
         result = self.normalizer.normalize_transceivers(raw_data, platform="cisco_nxos")
 
-        assert result[0]["manufacturer"] == "Cisco"
+        # OEM = неизвестный производитель, manufacturer пустой
+        assert result[0]["manufacturer"] == ""
 
     def test_transceiver_manufacturer_finisar(self):
         """Finisar трансиверы."""
