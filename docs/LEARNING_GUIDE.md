@@ -1,1717 +1,1702 @@
-# Network Collector — Полный учебный гайд
+# Python для понимания проекта — Полный учебник
 
-Этот документ объясняет проект от и до: от ввода команды до экспорта/синхронизации с NetBox.
-Каждый раздел содержит примеры кода из проекта с объяснениями Python-концепций.
+Этот документ — учебник по Python, написанный на примерах из проекта Network Collector.
+Цель: объяснить все конструкции языка, которые встречаются в коде, чтобы вы могли
+понимать и модифицировать проект, даже если только начинаете изучать Python.
+
+---
 
 ## Содержание
 
-1. [Основы Python в проекте](#1-основы-python-в-проекте)
-2. [Точка входа: CLI](#2-точка-входа-cli)
-3. [Загрузка конфигурации](#3-загрузка-конфигурации)
-4. [Подключение к устройствам](#4-подключение-к-устройствам)
-5. [Сбор данных (Collectors)](#5-сбор-данных-collectors)
-6. [Парсинг вывода (TextFSM/NTC)](#6-парсинг-вывода-textfsm-ntc)
-7. [Нормализация данных](#7-нормализация-данных)
-8. [Domain Layer (бизнес-логика)](#8-domain-layer-бизнес-логика)
-9. [Экспорт данных](#9-экспорт-данных)
-10. [Синхронизация с NetBox](#10-синхронизация-с-netbox)
-11. [Полный путь данных](#11-полный-путь-данных)
+1. [Основы Python](#1-основы-python)
+   - [Переменные и типы данных](#11-переменные-и-типы-данных)
+   - [Списки, словари, множества](#12-списки-словари-множества)
+   - [Условия и циклы](#13-условия-и-циклы)
+   - [Функции](#14-функции)
+2. [Модули и пакеты](#2-модули-и-пакеты)
+   - [Импорты](#21-импорты)
+   - [Структура пакета](#22-структура-пакета)
+   - [\_\_init\_\_.py](#23-__init__py)
+3. [Объектно-ориентированное программирование](#3-объектно-ориентированное-программирование)
+   - [Классы и объекты](#31-классы-и-объекты)
+   - [Конструктор \_\_init\_\_](#32-конструктор-__init__)
+   - [Методы и self](#33-методы-и-self)
+   - [Наследование](#34-наследование)
+   - [Множественное наследование и Mixin](#35-множественное-наследование-и-mixin)
+4. [Специальные методы (dunder)](#4-специальные-методы-dunder)
+5. [Декораторы](#5-декораторы)
+   - [@property](#51-property)
+   - [@staticmethod и @classmethod](#52-staticmethod-и-classmethod)
+   - [@dataclass](#53-dataclass)
+6. [Type Hints (аннотации типов)](#6-type-hints-аннотации-типов)
+7. [Enum — перечисления](#7-enum--перечисления)
+8. [Dataclasses](#8-dataclasses)
+9. [Pydantic — валидация данных](#9-pydantic--валидация-данных)
+10. [Исключения](#10-исключения)
+11. [Контекстные менеджеры (with)](#11-контекстные-менеджеры-with)
+12. [Генераторы и comprehensions](#12-генераторы-и-comprehensions)
+13. [Асинхронное программирование](#13-асинхронное-программирование)
+14. [Многопоточность](#14-многопоточность)
+15. [Полезные паттерны из проекта](#15-полезные-паттерны-из-проекта)
 
 ---
 
-## 1. Основы Python в проекте
+## 1. Основы Python
 
-### 1.1 Структура проекта
+### 1.1 Переменные и типы данных
 
-```
-network_collector/
-├── __init__.py          # Делает папку Python-пакетом
-├── __main__.py          # Точка входа: python -m network_collector
-├── cli/                 # CLI модуль (модульная структура)
-│   ├── __init__.py      # main(), setup_parser()
-│   ├── utils.py         # load_devices, get_exporter
-│   └── commands/        # Обработчики команд
-├── config.py            # Загрузка конфигурации
-│
-├── core/                # Ядро: модели, подключения
-│   ├── models.py        # Dataclass-ы (Device, Interface, etc.)
-│   ├── connection.py    # SSH подключения
-│   ├── constants.py     # Константы (команды, маппинги)
-│   └── domain/          # Бизнес-логика (нормализация)
-│
-├── collectors/          # Сборщики данных
-│   ├── base.py          # Базовый класс
-│   ├── device.py        # show version
-│   ├── mac.py           # MAC-адреса
-│   ├── lldp.py          # LLDP/CDP
-│   └── ...
-│
-├── exporters/           # Экспорт (Excel, CSV, JSON)
-│   ├── base.py
-│   ├── excel.py
-│   └── ...
-│
-└── netbox/              # Интеграция с NetBox
-    ├── client.py        # API клиент
-    └── sync/            # Синхронизация (модули)
-        ├── main.py      # NetBoxSync
-        └── *.py         # Mixins
-```
-
-### 1.2 Ключевые концепции Python
-
-#### Импорты
+В Python переменные создаются при присваивании. Тип определяется автоматически.
 
 ```python
-# Стандартные библиотеки (встроены в Python)
-import json
-import logging
-from pathlib import Path
-from typing import List, Dict, Any, Optional
+# Числа
+port = 22                    # int (целое число)
+timeout = 30.5               # float (дробное число)
 
-# Сторонние библиотеки (pip install)
-from scrapli import Scrapli
-import pandas as pd
+# Строки
+hostname = "switch-01"       # str (строка)
+command = 'show version'     # str (одинарные кавычки тоже работают)
 
-# Локальные импорты (из нашего проекта)
-from .core.models import Device
-from ..collectors import MACCollector
+# Многострочная строка
+description = """
+Это многострочная
+строка описания
+"""
+
+# Логический тип
+is_enabled = True            # bool: True или False
+dry_run = False
+
+# None — специальное значение "ничего"
+result = None                # Пока нет результата
 ```
 
-**Что значит `.` и `..`:**
-- `.core` — подпапка текущего пакета
-- `..collectors` — папка на уровень выше
-
-#### Dataclasses (модели данных)
-
+**Из проекта (`core/models.py`):**
 ```python
-# core/models.py
-from dataclasses import dataclass, field
-from typing import Optional, List
-
-@dataclass
-class Device:
-    """Устройство для подключения."""
-    host: str                           # Обязательное поле
-    platform: str = "cisco_ios"         # Значение по умолчанию
-    port: int = 22
-    status: str = "unknown"
-
-    def __post_init__(self):
-        """Вызывается после создания объекта."""
-        # Валидация или преобразование
-        if not self.host:
-            raise ValueError("host не может быть пустым")
+class Interface:
+    def __init__(self):
+        self.name: str = ""           # Строка
+        self.status: str = "unknown"  # Строка со значением по умолчанию
+        self.speed: int = 0           # Целое число
+        self.mtu: Optional[int] = None  # Может быть int или None
 ```
 
-**Использование:**
+### 1.2 Списки, словари, множества
+
+#### Список (list) — упорядоченная коллекция
+
 ```python
-device = Device(host="10.0.0.1", platform="cisco_iosxe")
-print(device.host)      # 10.0.0.1
-print(device.platform)  # cisco_iosxe
+# Создание списка
+devices = ["192.168.1.1", "192.168.1.2", "192.168.1.3"]
+
+# Доступ по индексу (начинается с 0)
+first = devices[0]      # "192.168.1.1"
+last = devices[-1]      # "192.168.1.3" (с конца)
+
+# Добавление элементов
+devices.append("192.168.1.4")        # В конец
+devices.insert(0, "192.168.1.0")     # В начало
+
+# Удаление
+devices.remove("192.168.1.2")        # По значению
+del devices[0]                        # По индексу
+popped = devices.pop()               # Удалить и вернуть последний
+
+# Длина списка
+count = len(devices)    # 3
+
+# Проверка наличия
+if "192.168.1.1" in devices:
+    print("Устройство в списке")
+
+# Итерация
+for device in devices:
+    print(device)
+
+# Итерация с индексом
+for i, device in enumerate(devices):
+    print(f"{i}: {device}")
 ```
 
-#### Type Hints (типизация)
-
+**Из проекта (`collectors/base.py`):**
 ```python
-def collect_data(
-    devices: List[Device],              # Список объектов Device
-    credentials: Credentials,           # Объект Credentials
-    timeout: int = 30,                  # int с дефолтом
-) -> List[Dict[str, Any]]:             # Возвращает список словарей
-    """
-    Собирает данные с устройств.
+def collect(self, devices: List[Device]) -> List[Any]:
+    """Собирает данные с устройств."""
+    results = []  # Пустой список для результатов
 
-    Args:
-        devices: Список устройств
-        credentials: Учётные данные
-        timeout: Таймаут в секундах
-
-    Returns:
-        Список словарей с данными
-    """
-    results = []
     for device in devices:
-        data = process(device)
-        results.append(data)
+        result = self._collect_one(device)
+        if result is not None:
+            results.append(result)  # Добавляем результат
+
     return results
 ```
 
-**Типы которые используются:**
-- `str`, `int`, `bool`, `float` — простые типы
-- `List[str]` — список строк
-- `Dict[str, Any]` — словарь с ключами-строками и любыми значениями
-- `Optional[str]` — строка или None
-- `Tuple[str, int]` — кортеж (строка, число)
-
-#### Классы и наследование
+#### Словарь (dict) — пары ключ-значение
 
 ```python
-# collectors/base.py
-class BaseCollector:
-    """Базовый класс для всех коллекторов."""
-
-    def __init__(self, credentials: Credentials, transport: str = "ssh2"):
-        self.credentials = credentials
-        self.transport = transport
-        self._logger = logging.getLogger(self.__class__.__name__)
-
-    def collect(self, devices: List[Device]) -> List[Dict]:
-        """Шаблонный метод — определяет общий алгоритм."""
-        results = []
-        for device in devices:
-            data = self._collect_from_device(device)  # Вызывает метод потомка
-            results.extend(data)
-        return results
-
-    def _collect_from_device(self, device: Device) -> List[Dict]:
-        """Абстрактный метод — должен быть переопределён."""
-        raise NotImplementedError("Переопредели в наследнике")
-
-
-# collectors/mac.py
-class MACCollector(BaseCollector):
-    """Коллектор MAC-адресов. Наследует BaseCollector."""
-
-    def _collect_from_device(self, device: Device) -> List[Dict]:
-        """Реализация для MAC."""
-        # Здесь логика сбора MAC
-        return [{"mac": "aa:bb:cc:dd:ee:ff", "interface": "Gi0/1"}]
-```
-
-#### Context Managers (with)
-
-```python
-# Автоматическое закрытие ресурсов
-with open("file.txt", "r") as f:
-    content = f.read()
-# Файл автоматически закрыт после выхода из with
-
-# В проекте — для SSH подключений
-with connection_manager.connect(device, credentials) as conn:
-    response = conn.send_command("show version")
-# Соединение автоматически закрыто
-```
-
-**Как это работает:**
-```python
-class ConnectionManager:
-    def connect(self, device, credentials):
-        return ConnectionContext(device, credentials)
-
-class ConnectionContext:
-    def __enter__(self):
-        """Вызывается при входе в with."""
-        self.conn = self._open_connection()
-        return self.conn
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Вызывается при выходе из with (даже при ошибке)."""
-        self.conn.close()
-```
-
-#### Декораторы
-
-```python
-# Простой декоратор — добавляет функциональность
-def log_call(func):
-    """Логирует вызов функции."""
-    def wrapper(*args, **kwargs):
-        print(f"Вызов {func.__name__}")
-        result = func(*args, **kwargs)
-        print(f"Результат: {result}")
-        return result
-    return wrapper
-
-@log_call
-def add(a, b):
-    return a + b
-
-add(2, 3)
-# Вывод:
-# Вызов add
-# Результат: 5
-```
-
-**В проекте используются:**
-- `@dataclass` — автоматическое создание __init__, __repr__
-- `@property` — метод как свойство
-- `@staticmethod` — метод без self
-
-#### Исключения (Exceptions)
-
-```python
-try:
-    with conn_manager.connect(device, credentials) as conn:
-        response = conn.send_command(command)
-
-except ConnectionError as e:
-    # Ошибка подключения
-    logger.error(f"Не удалось подключиться: {e}")
-
-except TimeoutError as e:
-    # Таймаут
-    logger.error(f"Таймаут: {e}")
-
-except Exception as e:
-    # Любая другая ошибка
-    logger.error(f"Неизвестная ошибка: {e}")
-
-finally:
-    # Выполнится в любом случае
-    cleanup()
-```
-
-#### Словари (Dict) — основная структура данных
-
-```python
-# Создание
-device_data = {
-    "hostname": "switch1",
-    "ip": "10.0.0.1",
-    "interfaces": ["Gi0/1", "Gi0/2"]
+# Создание словаря
+device = {
+    "host": "192.168.1.1",
+    "platform": "cisco_ios",
+    "port": 22,
 }
 
-# Доступ
-hostname = device_data["hostname"]           # Ошибка если нет ключа
-hostname = device_data.get("hostname")       # None если нет ключа
-hostname = device_data.get("hostname", "")   # "" если нет ключа
+# Доступ по ключу
+host = device["host"]              # "192.168.1.1"
+host = device.get("host")          # То же самое, но безопаснее
+port = device.get("port", 22)      # 22, если ключа нет — вернёт 22
+
+# Изменение
+device["port"] = 2222
+device["timeout"] = 30             # Добавление нового ключа
+
+# Удаление
+del device["timeout"]
+port = device.pop("port", None)    # Удалить и вернуть
 
 # Проверка наличия ключа
-if "hostname" in device_data:
-    print(device_data["hostname"])
+if "host" in device:
+    print("Ключ есть")
 
 # Итерация
-for key, value in device_data.items():
-    print(f"{key}: {value}")
+for key in device:
+    print(key)
 
-# Обновление
-device_data["status"] = "online"
-device_data.update({"vendor": "Cisco", "model": "C9200"})
+for key, value in device.items():
+    print(f"{key} = {value}")
+
+for value in device.values():
+    print(value)
+```
+
+**Из проекта (`api/services/sync_service.py`):**
+```python
+stats = {
+    "devices": {"created": 0, "updated": 0, "skipped": 0},
+    "interfaces": {"created": 0, "updated": 0, "skipped": 0},
+}
+
+# Обновление вложенного словаря
+stats["devices"]["created"] += 1
+stats["interfaces"]["updated"] += result.get("updated", 0)
+```
+
+#### Множество (set) — уникальные элементы
+
+```python
+# Создание множества
+vlans = {10, 20, 30, 10}    # {10, 20, 30} — дубликаты удаляются
+
+# Добавление
+vlans.add(40)
+
+# Операции над множествами
+vlans_a = {10, 20, 30}
+vlans_b = {20, 30, 40}
+
+union = vlans_a | vlans_b           # {10, 20, 30, 40} — объединение
+intersection = vlans_a & vlans_b    # {20, 30} — пересечение
+difference = vlans_a - vlans_b      # {10} — разность
+```
+
+**Из проекта (`core/pipeline/executor.py`):**
+```python
+def _check_dependencies(self, step, results):
+    """Проверяет что все зависимости выполнены."""
+    # Множество завершённых шагов
+    completed_steps = {r.step_id for r in results if r.status == StepStatus.COMPLETED}
+
+    for dep_id in step.depends_on:
+        if dep_id not in completed_steps:  # Быстрая проверка O(1)
+            return False
+    return True
+```
+
+### 1.3 Условия и циклы
+
+#### if/elif/else
+
+```python
+status = "up"
+
+if status == "up":
+    print("Интерфейс активен")
+elif status == "down":
+    print("Интерфейс выключен")
+else:
+    print("Неизвестный статус")
+
+# Сокращённая форма (тернарный оператор)
+message = "active" if status == "up" else "inactive"
+
+# Проверка на None
+result = get_result()
+if result is None:
+    print("Нет результата")
+
+# Проверка на пустоту
+devices = []
+if not devices:  # Пустой список = False
+    print("Список пуст")
+
+if devices:  # Непустой список = True
+    print(f"Есть {len(devices)} устройств")
+```
+
+**Из проекта (`netbox/sync/interfaces.py`):**
+```python
+def _update_interface(self, nb_interface, intf):
+    updates = {}
+
+    # Проверяем каждое поле
+    if sync_cfg.is_field_enabled("description"):
+        if intf.description != nb_interface.description:
+            updates["description"] = intf.description
+
+    if sync_cfg.is_field_enabled("enabled"):
+        enabled = intf.status not in ("disabled", "error")
+        if enabled != nb_interface.enabled:
+            updates["enabled"] = enabled
+
+    # Если нет изменений — выходим
+    if not updates:
+        return False
+
+    # Применяем изменения
+    self.client.update_interface(nb_interface.id, **updates)
+    return True
+```
+
+#### for — цикл по коллекции
+
+```python
+# Простой цикл
+for device in devices:
+    print(device.host)
+
+# range() — последовательность чисел
+for i in range(5):          # 0, 1, 2, 3, 4
+    print(i)
+
+for i in range(1, 6):       # 1, 2, 3, 4, 5
+    print(i)
+
+for i in range(0, 10, 2):   # 0, 2, 4, 6, 8 (шаг 2)
+    print(i)
+
+# enumerate() — индекс + элемент
+for index, device in enumerate(devices):
+    print(f"{index}: {device}")
+
+# zip() — параллельная итерация
+names = ["eth0", "eth1"]
+statuses = ["up", "down"]
+for name, status in zip(names, statuses):
+    print(f"{name}: {status}")
+
+# break — прервать цикл
+for device in devices:
+    if device.host == target:
+        print("Найдено!")
+        break
+
+# continue — перейти к следующей итерации
+for device in devices:
+    if not device.enabled:
+        continue  # Пропустить отключённые
+    process(device)
+```
+
+#### while — цикл с условием
+
+```python
+# Повторять пока условие истинно
+retries = 3
+while retries > 0:
+    try:
+        connect()
+        break  # Успех — выходим
+    except ConnectionError:
+        retries -= 1
+        time.sleep(1)
+```
+
+**Из проекта (`core/connection.py`):**
+```python
+def connect_with_retry(self, max_retries=3):
+    """Подключение с повторами."""
+    attempt = 0
+    while attempt < max_retries:
+        try:
+            self._connect()
+            return True
+        except Exception as e:
+            attempt += 1
+            if attempt >= max_retries:
+                raise
+            time.sleep(2 ** attempt)  # Экспоненциальная задержка
+```
+
+### 1.4 Функции
+
+```python
+# Простая функция
+def greet(name):
+    """Приветствует пользователя."""  # Docstring — документация
+    return f"Привет, {name}!"
+
+message = greet("Мир")  # "Привет, Мир!"
+
+# Параметры по умолчанию
+def connect(host, port=22, timeout=30):
+    """Подключается к хосту."""
+    print(f"Connecting to {host}:{port} (timeout={timeout})")
+
+connect("192.168.1.1")                    # port=22, timeout=30
+connect("192.168.1.1", 2222)              # port=2222, timeout=30
+connect("192.168.1.1", timeout=60)        # port=22, timeout=60
+
+# *args — произвольное число позиционных аргументов
+def log(*messages):
+    """Логирует сообщения."""
+    for msg in messages:
+        print(msg)
+
+log("Ошибка", "Подробности", "Стек")
+
+# **kwargs — произвольное число именованных аргументов
+def create_device(**kwargs):
+    """Создаёт устройство из параметров."""
+    print(kwargs)  # {'host': '192.168.1.1', 'platform': 'cisco_ios'}
+
+create_device(host="192.168.1.1", platform="cisco_ios")
+```
+
+**Из проекта (`netbox/client.py`):**
+```python
+def create_interface(
+    self,
+    device_id: int,
+    name: str,
+    interface_type: str = "other",
+    **kwargs,  # Дополнительные поля: description, mtu, enabled...
+):
+    """Создаёт интерфейс в NetBox."""
+    data = {
+        "device": device_id,
+        "name": name,
+        "type": interface_type,
+        **kwargs,  # Распаковка словаря
+    }
+    return self.api.dcim.interfaces.create(data)
+
+# Вызов
+create_interface(
+    device_id=42,
+    name="Gi0/1",
+    interface_type="1000base-t",
+    description="Uplink",  # Пойдёт в kwargs
+    mtu=9000,              # Пойдёт в kwargs
+)
 ```
 
 ---
 
-## 2. Точка входа: CLI
+## 2. Модули и пакеты
 
-### 2.1 Как запускается программа
-
-```bash
-python -m network_collector devices --format excel
-```
-
-**Что происходит:**
-
-1. Python видит `-m network_collector` и ищет папку `network_collector/`
-2. Находит `__main__.py` и выполняет его
-3. `__main__.py` вызывает `cli.main()`
+### 2.1 Импорты
 
 ```python
-# __main__.py
-"""Точка входа при запуске python -m network_collector."""
-from .cli import main
+# Импорт всего модуля
+import os
+print(os.path.exists("/tmp"))
 
-if __name__ == "__main__":
-    main()
-```
+# Импорт с псевдонимом
+import numpy as np
+arr = np.array([1, 2, 3])
 
-### 2.2 Разбор аргументов (argparse)
-
-```python
-# cli.py
-import argparse
-
-def build_parser() -> argparse.ArgumentParser:
-    """Создаёт парсер аргументов командной строки."""
-
-    # Главный парсер
-    parser = argparse.ArgumentParser(
-        prog="network_collector",
-        description="Утилита для сбора данных с сетевых устройств",
-    )
-
-    # Общие аргументы (для всех команд)
-    parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",      # Флаг: True если указан
-        help="Подробный вывод (DEBUG)",
-    )
-    parser.add_argument(
-        "-d", "--devices",
-        default="devices_ips.py",
-        help="Файл со списком устройств",
-    )
-
-    # Подкоманды (devices, mac, lldp, etc.)
-    subparsers = parser.add_subparsers(dest="command", help="Команды")
-
-    # Подкоманда: devices
-    devices_parser = subparsers.add_parser("devices", help="Сбор инвентаризации")
-    devices_parser.add_argument(
-        "--format", "-f",
-        choices=["excel", "csv", "json", "raw"],
-        default="excel",
-        help="Формат вывода",
-    )
-
-    # Подкоманда: mac
-    mac_parser = subparsers.add_parser("mac", help="Сбор MAC-адресов")
-    mac_parser.add_argument(
-        "--format", "-f",
-        choices=["excel", "csv", "json", "raw"],
-        default="excel",
-    )
-    mac_parser.add_argument(
-        "--with-descriptions",
-        action="store_true",
-        help="Собирать описания интерфейсов",
-    )
-
-    return parser
-
-
-def main():
-    """Главная функция CLI."""
-    parser = build_parser()
-    args = parser.parse_args()  # Парсит sys.argv
-
-    # args.command = "devices", "mac", "lldp", etc.
-    # args.format = "excel", "csv", etc.
-    # args.verbose = True/False
-
-    # Маршрутизация на обработчик команды
-    if args.command == "devices":
-        cmd_devices(args)
-    elif args.command == "mac":
-        cmd_mac(args)
-    elif args.command == "lldp":
-        cmd_lldp(args)
-    # ...
-```
-
-### 2.3 Обработчик команды
-
-```python
-# cli.py
-def cmd_mac(args, ctx=None) -> None:
-    """Обработчик команды mac."""
-
-    # 1. Загружаем устройства и credentials
-    devices, credentials = prepare_collection(args)
-
-    # 2. Создаём коллектор
-    collector = MACCollector(
-        credentials=credentials,
-        transport=args.transport,
-        collect_descriptions=getattr(args, "with_descriptions", False),
-    )
-
-    # 3. Собираем данные
-    data = collector.collect(devices)
-
-    # 4. Применяем фильтр полей из fields.yaml
-    data = apply_fields_config(data, "mac")
-
-    # 5. Экспортируем
-    exporter = get_exporter(args.format, args.output, args.delimiter)
-    file_path = exporter.export(data, "mac_addresses")
-
-    if file_path:
-        logger.info(f"Отчёт сохранён: {file_path}")
-```
-
----
-
-## 3. Загрузка конфигурации
-
-### 3.1 YAML файлы
-
-```yaml
-# config.yaml
-output:
-  output_folder: "reports"
-  default_format: "excel"
-
-connection:
-  conn_timeout: 10
-  read_timeout: 30
-  max_workers: 5
-
-netbox:
-  url: "https://netbox.example.com/"
-  token: "your-token"
-```
-
-### 3.2 Чтение YAML в Python
-
-```python
-# config.py
-import yaml
+# Импорт конкретных объектов
 from pathlib import Path
+p = Path("/home/user")
 
-def load_config(config_path: str = "config.yaml") -> dict:
-    """Загружает конфигурацию из YAML файла."""
+# Импорт нескольких объектов
+from typing import List, Dict, Optional
 
-    path = Path(config_path)
-
-    if not path.exists():
-        return {}  # Пустой конфиг если файла нет
-
-    with open(path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)  # Парсит YAML → dict
-
-    return config or {}
-
-
-# Использование
-config = load_config()
-timeout = config.get("connection", {}).get("conn_timeout", 10)
-#                    ↑ секция          ↑ параметр      ↑ дефолт
+# Относительный импорт (внутри пакета)
+from . import utils           # Из текущего пакета
+from .. import config         # Из родительского пакета
+from .models import Device    # Из текущего пакета, модуль models
+from ...core import logging   # На 3 уровня вверх
 ```
 
-### 3.3 Загрузка устройств
+**Из проекта (`cli/commands/sync.py`):**
+```python
+# Стандартная библиотека
+import logging
+import time
+
+# Относительные импорты
+from ..utils import load_devices, get_credentials
+from ...netbox import NetBoxClient, NetBoxSync
+from ...collectors import InterfaceCollector, LLDPCollector
+from ...config import config
+```
+
+### 2.2 Структура пакета
+
+```
+network_collector/           # Корневой пакет
+├── __init__.py             # Делает папку пакетом
+├── __main__.py             # python -m network_collector
+├── config.py
+├── cli/                    # Подпакет
+│   ├── __init__.py
+│   ├── utils.py
+│   └── commands/           # Под-подпакет
+│       ├── __init__.py
+│       ├── collect.py
+│       └── sync.py
+├── core/
+│   ├── __init__.py
+│   ├── models.py
+│   └── pipeline/
+│       ├── __init__.py
+│       ├── models.py
+│       └── executor.py
+└── netbox/
+    ├── __init__.py
+    ├── client.py
+    └── sync/
+        ├── __init__.py
+        ├── base.py
+        └── main.py
+```
+
+### 2.3 \_\_init\_\_.py
+
+`__init__.py` выполняется при импорте пакета. Используется для:
+1. Обозначения папки как пакета
+2. Экспорта публичного API
+3. Инициализации пакета
 
 ```python
-# devices_ips.py (файл пользователя)
-devices_list = [
-    {"host": "10.0.0.1", "platform": "cisco_iosxe"},
-    {"host": "10.0.0.2", "platform": "cisco_nxos"},
-    {"host": "10.0.0.3", "platform": "arista_eos"},
+# collectors/__init__.py
+
+"""
+Collectors — сбор данных с устройств.
+
+Экспортируем классы для удобного импорта:
+    from network_collector.collectors import DeviceCollector
+вместо:
+    from network_collector.collectors.device import DeviceCollector
+"""
+
+from .device import DeviceCollector
+from .mac import MACCollector
+from .lldp import LLDPCollector
+from .interfaces import InterfaceCollector
+from .inventory import InventoryCollector
+
+# __all__ определяет что экспортируется при "from package import *"
+__all__ = [
+    "DeviceCollector",
+    "MACCollector",
+    "LLDPCollector",
+    "InterfaceCollector",
+    "InventoryCollector",
 ]
 ```
 
-```python
-# cli.py
-def load_devices(devices_file: str) -> List[Device]:
-    """Загружает устройства из Python файла."""
-
-    import importlib.util
-
-    # Динамически импортируем Python файл
-    spec = importlib.util.spec_from_file_location("devices", devices_file)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    # Получаем список devices_list из модуля
-    devices_data = getattr(module, "devices_list", [])
-
-    # Конвертируем dict → Device объекты
-    devices = []
-    for d in devices_data:
-        device = Device(
-            host=d["host"],
-            platform=d.get("platform", "cisco_ios"),
-            port=d.get("port", 22),
-        )
-        devices.append(device)
-
-    return devices
-```
-
 ---
 
-## 4. Подключение к устройствам
+## 3. Объектно-ориентированное программирование
 
-### 4.1 SSH через Scrapli
+### 3.1 Классы и объекты
+
+**Класс** — это шаблон (чертёж) для создания объектов.
+**Объект** (экземпляр) — конкретная реализация класса.
 
 ```python
-# core/connection.py
-from scrapli import Scrapli
+# Определение класса
+class Device:
+    """Представляет сетевое устройство."""
+    pass  # Пустой класс
 
-class ConnectionManager:
-    """Управляет SSH подключениями."""
+# Создание объекта (экземпляра)
+device = Device()
+```
+
+### 3.2 Конструктор \_\_init\_\_
+
+`__init__` — специальный метод, вызывается при создании объекта.
+
+```python
+class Device:
+    """Сетевое устройство."""
+
+    def __init__(self, host, platform="cisco_ios"):
+        """
+        Конструктор.
+
+        Args:
+            host: IP адрес устройства
+            platform: Платформа (по умолчанию cisco_ios)
+        """
+        # self — ссылка на создаваемый объект
+        # self.xxx — атрибуты объекта
+        self.host = host
+        self.platform = platform
+        self.connected = False
+
+# Создание объекта — вызывается __init__
+device = Device("192.168.1.1")
+print(device.host)       # "192.168.1.1"
+print(device.platform)   # "cisco_ios"
+print(device.connected)  # False
+
+device2 = Device("192.168.1.2", platform="cisco_nxos")
+print(device2.platform)  # "cisco_nxos"
+```
+
+**Из проекта (`core/device.py`):**
+```python
+class Device:
+    """
+    Модель сетевого устройства.
+
+    Содержит информацию для подключения и идентификации.
+    """
 
     def __init__(
         self,
-        transport: str = "ssh2",
-        max_retries: int = 2,
-        retry_delay: int = 5,
+        host: str,
+        platform: Optional[str] = None,
+        device_type: Optional[str] = None,
+        port: int = 22,
+        role: Optional[str] = None,
     ):
-        self.transport = transport
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
+        self.host = host
+        self.platform = platform
+        self.device_type = device_type or self._detect_device_type()
+        self.port = port
+        self.role = role
 
-    def connect(self, device: Device, credentials: Credentials):
-        """Создаёт подключение к устройству."""
-
-        # Параметры для Scrapli
-        conn_params = {
-            "host": device.host,
-            "port": device.port,
-            "auth_username": credentials.username,
-            "auth_password": credentials.password,
-            "platform": device.platform,
-            "transport": self.transport,
-        }
-
-        # Создаём и возвращаем объект соединения
-        conn = Scrapli(**conn_params)
-        conn.open()
-        return conn
+    def _detect_device_type(self) -> str:
+        """Определяет тип устройства из platform."""
+        if self.platform:
+            return PLATFORM_TO_DEVICE_TYPE.get(self.platform, "cisco_ios")
+        return "cisco_ios"
 ```
 
-### 4.2 Отправка команд
+### 3.3 Методы и self
+
+**Метод** — функция внутри класса.
+**self** — первый параметр метода, ссылка на объект.
 
 ```python
-# Простая отправка команды
-response = conn.send_command("show version")
-print(response.result)  # Текстовый вывод
+class Device:
+    def __init__(self, host):
+        self.host = host
+        self.connected = False
 
-# Несколько команд
-responses = conn.send_commands([
-    "show version",
-    "show interfaces",
-    "show mac address-table",
-])
-for resp in responses:
-    print(resp.result)
+    def connect(self):
+        """Подключается к устройству."""
+        print(f"Connecting to {self.host}...")
+        self.connected = True  # Изменяем атрибут объекта
+
+    def disconnect(self):
+        """Отключается от устройства."""
+        if self.connected:
+            print(f"Disconnecting from {self.host}")
+            self.connected = False
+
+    def send_command(self, command):
+        """Отправляет команду."""
+        if not self.connected:
+            raise RuntimeError("Not connected")
+        print(f"Sending: {command}")
+        return f"Output of {command}"
+
+# Использование
+device = Device("192.168.1.1")
+device.connect()                    # self = device
+output = device.send_command("show version")  # self = device
+device.disconnect()
 ```
 
-### 4.3 Retry логика
+### 3.4 Наследование
+
+**Наследование** — создание нового класса на основе существующего.
+Дочерний класс получает все атрибуты и методы родителя.
 
 ```python
-def connect_with_retry(self, device: Device, credentials: Credentials):
-    """Подключение с повторными попытками."""
-
-    last_error = None
-
-    for attempt in range(self.max_retries + 1):
-        try:
-            conn = self.connect(device, credentials)
-            return conn  # Успех — возвращаем соединение
-
-        except Exception as e:
-            last_error = e
-
-            if attempt < self.max_retries:
-                logger.warning(
-                    f"Попытка {attempt + 1} не удалась: {e}. "
-                    f"Повтор через {self.retry_delay} сек..."
-                )
-                time.sleep(self.retry_delay)
-
-    # Все попытки исчерпаны
-    raise ConnectionError(f"Не удалось подключиться: {last_error}")
-```
-
----
-
-## 5. Сбор данных (Collectors)
-
-### 5.1 Базовый класс
-
-```python
-# collectors/base.py
+# Родительский класс (базовый)
 class BaseCollector:
-    """Базовый класс для всех коллекторов."""
+    """Базовый сборщик данных."""
 
-    # Команды для разных платформ
-    platform_commands = {}  # Переопределяется в наследниках
+    def __init__(self, credentials):
+        self.credentials = credentials
+
+    def collect(self, devices):
+        """Собирает данные со всех устройств."""
+        results = []
+        for device in devices:
+            result = self._collect_one(device)
+            if result:
+                results.append(result)
+        return results
+
+    def _collect_one(self, device):
+        """Собирает с одного устройства. Переопределяется в дочерних."""
+        raise NotImplementedError("Subclass must implement _collect_one")
+
+
+# Дочерний класс
+class MACCollector(BaseCollector):
+    """Сборщик MAC-адресов."""
+
+    def __init__(self, credentials, mac_format="ieee"):
+        # Вызываем конструктор родителя
+        super().__init__(credentials)
+        # Добавляем свои атрибуты
+        self.mac_format = mac_format
+
+    def _collect_one(self, device):
+        """Переопределяем метод родителя."""
+        # Собираем MAC-адреса с устройства
+        output = self._send_command(device, "show mac address-table")
+        return self._parse_mac_table(output)
+
+
+# Использование
+collector = MACCollector(credentials, mac_format="cisco")
+# collect() — из родителя BaseCollector
+# _collect_one() — переопределён в MACCollector
+results = collector.collect(devices)
+```
+
+**Из проекта (`collectors/mac.py`):**
+```python
+class MACCollector(BaseCollector):
+    """Сборщик MAC-адресов."""
 
     def __init__(
         self,
         credentials: Credentials = None,
+        mac_format: str = "ieee",
+        collect_descriptions: bool = True,
         transport: str = "ssh2",
     ):
-        self.credentials = credentials
-        self.transport = transport
-        self._conn_manager = ConnectionManager(transport=transport)
-
-    def collect(self, devices: List[Device]) -> List[Dict[str, Any]]:
-        """Собирает данные со всех устройств."""
-        all_data = []
-
-        for device in devices:
-            try:
-                data = self._collect_from_device(device)
-                all_data.extend(data)
-            except Exception as e:
-                logger.error(f"Ошибка на {device.host}: {e}")
-
-        return all_data
-
-    def _collect_from_device(self, device: Device) -> List[Dict]:
-        """Собирает данные с одного устройства."""
-        raise NotImplementedError
-
-    def _get_command(self, device: Device) -> str:
-        """Возвращает команду для платформы."""
-        return self.platform_commands.get(device.platform, "")
-```
-
-### 5.2 Конкретный коллектор (MAC)
-
-```python
-# collectors/mac.py
-from .base import BaseCollector
-from ..core.constants import COLLECTOR_COMMANDS
-
-class MACCollector(BaseCollector):
-    """Коллектор MAC-адресов."""
-
-    platform_commands = COLLECTOR_COMMANDS.get("mac", {})
-    # {
-    #     "cisco_ios": "show mac address-table",
-    #     "cisco_nxos": "show mac address-table",
-    #     "arista_eos": "show mac address-table",
-    # }
-
-    def __init__(
-        self,
-        collect_descriptions: bool = False,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
+        # Вызов конструктора родителя
+        super().__init__(credentials=credentials, transport=transport)
+        # Свои атрибуты
+        self.mac_format = mac_format
         self.collect_descriptions = collect_descriptions
-        self._normalizer = MACNormalizer()
 
-    def _collect_from_device(self, device: Device) -> List[Dict]:
-        """Собирает MAC-таблицу с устройства."""
+    def _collect_one(self, device: Device) -> List[MACEntry]:
+        """Переопределение метода сбора."""
+        # Реализация для MAC-адресов
+        ...
+```
 
-        command = self._get_command(device)
-        if not command:
-            logger.warning(f"Нет команды для {device.platform}")
-            return []
+### 3.5 Множественное наследование и Mixin
 
-        with self._conn_manager.connect(device, self.credentials) as conn:
-            # 1. Получаем hostname
-            hostname = self._get_hostname(conn)
+Python поддерживает наследование от нескольких классов.
+**Mixin** — класс, добавляющий функциональность, не предназначен для использования отдельно.
 
-            # 2. Отправляем команду
-            response = conn.send_command(command)
+```python
+# Базовый класс
+class SyncBase:
+    """Базовая функциональность синхронизации."""
 
-            # 3. Парсим вывод
-            raw_data = self._parse_output(response.result, device)
+    def __init__(self, client, dry_run=False):
+        self.client = client
+        self.dry_run = dry_run
 
-            # 4. Нормализуем
-            data = self._normalizer.normalize_dicts(
-                raw_data,
-                hostname=hostname,
-                device_ip=device.host,
-            )
+    def _find_device(self, name):
+        """Находит устройство в NetBox."""
+        return self.client.get_device_by_name(name)
 
-            # 5. Собираем описания (опционально)
-            if self.collect_descriptions:
-                descriptions = self._get_descriptions(conn)
-                data = self._enrich_descriptions(data, descriptions)
 
-            return data
+# Mixin для интерфейсов
+class InterfacesSyncMixin:
+    """Добавляет методы синхронизации интерфейсов."""
+
+    def sync_interfaces(self, device_name, interfaces):
+        """Синхронизирует интерфейсы."""
+        device = self._find_device(device_name)  # Метод из SyncBase
+        # ...реализация...
+        return {"created": 5, "updated": 3}
+
+
+# Mixin для кабелей
+class CablesSyncMixin:
+    """Добавляет методы синхронизации кабелей."""
+
+    def sync_cables_from_lldp(self, lldp_data):
+        """Создаёт кабели из LLDP данных."""
+        # ...реализация...
+        return {"created": 10}
+
+
+# Главный класс — наследует всё
+class NetBoxSync(
+    InterfacesSyncMixin,  # sync_interfaces()
+    CablesSyncMixin,      # sync_cables_from_lldp()
+    SyncBase,             # _find_device(), client, dry_run
+):
+    """
+    Синхронизация с NetBox.
+
+    Объединяет функциональность всех Mixin.
+    """
+    pass  # Всё уже унаследовано!
+
+
+# Использование
+sync = NetBoxSync(client, dry_run=True)
+sync.sync_interfaces("switch-01", interfaces)   # Из InterfacesSyncMixin
+sync.sync_cables_from_lldp(lldp_data)           # Из CablesSyncMixin
+device = sync._find_device("switch-01")          # Из SyncBase
+```
+
+**Порядок наследования важен!** Python ищет методы слева направо (MRO — Method Resolution Order).
+
+```python
+# Порядок поиска метода:
+# NetBoxSync → InterfacesSyncMixin → CablesSyncMixin → SyncBase → object
+
+# Посмотреть MRO:
+print(NetBoxSync.__mro__)
 ```
 
 ---
 
-## 6. Парсинг вывода (TextFSM/NTC)
+## 4. Специальные методы (dunder)
 
-### 6.1 Что такое TextFSM
+**Dunder** (double underscore) — методы вида `__name__`.
+Они определяют поведение объекта в различных ситуациях.
 
-TextFSM — библиотека для парсинга текста по шаблонам.
-NTC Templates — готовые шаблоны для сетевых команд.
-
-**Сырой вывод устройства:**
-```
-switch1#show mac address-table
-          Mac Address Table
--------------------------------------------
-
-Vlan    Mac Address       Type        Ports
-----    -----------       --------    -----
-   1    0011.2233.4455    DYNAMIC     Gi0/1
-  10    aabb.ccdd.eeff    DYNAMIC     Gi0/2
-```
-
-**После парсинга NTC:**
-```python
-[
-    {"vlan": "1", "mac": "0011.2233.4455", "type": "DYNAMIC", "ports": "Gi0/1"},
-    {"vlan": "10", "mac": "aabb.ccdd.eeff", "type": "DYNAMIC", "ports": "Gi0/2"},
-]
-```
-
-### 6.2 Использование в проекте
+### \_\_str\_\_ и \_\_repr\_\_
 
 ```python
-from ntc_templates.parse import parse_output
+class Device:
+    def __init__(self, host, platform):
+        self.host = host
+        self.platform = platform
 
-def _parse_output(self, output: str, device: Device) -> List[Dict]:
-    """Парсит вывод команды через NTC Templates."""
+    def __str__(self):
+        """Человекочитаемое представление (для print)."""
+        return f"Device({self.host})"
 
-    # Определяем платформу для NTC
-    ntc_platform = get_ntc_platform(device.platform)
-    # cisco_iosxe → cisco_ios (NTC использует свои названия)
+    def __repr__(self):
+        """Техническое представление (для отладки)."""
+        return f"Device(host={self.host!r}, platform={self.platform!r})"
 
-    command = self._get_command(device)
 
-    try:
-        # NTC парсит текст → список словарей
-        parsed = parse_output(
-            platform=ntc_platform,
-            command=command,
-            data=output,
-        )
-        return parsed
-
-    except Exception as e:
-        logger.warning(f"NTC парсинг не удался: {e}")
-        return []
+device = Device("192.168.1.1", "cisco_ios")
+print(device)        # Device(192.168.1.1)     — вызывает __str__
+print(repr(device))  # Device(host='192.168.1.1', platform='cisco_ios')
+print([device])      # [Device(host='192.168.1.1', ...)]  — __repr__ в списках
 ```
 
-### 6.3 Маппинг платформ
+### \_\_eq\_\_, \_\_hash\_\_
 
 ```python
-# core/constants.py
-NTC_PLATFORM_MAP = {
-    "cisco_iosxe": "cisco_ios",    # IOS-XE → cisco_ios в NTC
-    "cisco_ios": "cisco_ios",
-    "cisco_nxos": "cisco_nxos",
-    "arista_eos": "arista_eos",
-    "juniper_junos": "juniper_junos",
-}
+class Device:
+    def __init__(self, host):
+        self.host = host
 
-def get_ntc_platform(scrapli_platform: str) -> str:
-    """Конвертирует Scrapli платформу в NTC."""
-    return NTC_PLATFORM_MAP.get(scrapli_platform, scrapli_platform)
+    def __eq__(self, other):
+        """Сравнение на равенство (==)."""
+        if not isinstance(other, Device):
+            return False
+        return self.host == other.host
+
+    def __hash__(self):
+        """Хеш для использования в set и dict."""
+        return hash(self.host)
+
+
+d1 = Device("192.168.1.1")
+d2 = Device("192.168.1.1")
+d3 = Device("192.168.1.2")
+
+print(d1 == d2)  # True
+print(d1 == d3)  # False
+
+# Можно использовать в set
+devices = {d1, d2, d3}  # {d1, d3} — d2 дубликат d1
 ```
 
----
-
-## 7. Нормализация данных
-
-### 7.1 Зачем нужна нормализация
-
-**Проблема:** разные платформы возвращают разные имена полей.
+### \_\_enter\_\_, \_\_exit\_\_ (контекстные менеджеры)
 
 ```python
-# Cisco IOS (от NTC)
-{"destination_address": "0011.2233.4455", "destination_port": "Gi0/1"}
+class Connection:
+    """SSH подключение с автоматическим закрытием."""
 
-# Cisco NX-OS (от NTC)
-{"mac_address": "0011.2233.4455", "port": "Eth1/1"}
+    def __init__(self, host):
+        self.host = host
+        self.connected = False
 
-# Arista (от NTC)
-{"mac": "00:11:22:33:44:55", "interface": "Et1"}
+    def __enter__(self):
+        """Вызывается при входе в with."""
+        print(f"Connecting to {self.host}")
+        self.connected = True
+        return self  # Возвращается в as
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Вызывается при выходе из with (даже при ошибке)."""
+        print(f"Disconnecting from {self.host}")
+        self.connected = False
+        return False  # Не подавляем исключения
+
+    def send_command(self, cmd):
+        return f"Output of {cmd}"
+
+
+# Использование
+with Connection("192.168.1.1") as conn:
+    # __enter__ вызван, conn — результат __enter__
+    output = conn.send_command("show version")
+    print(output)
+# __exit__ вызван автоматически
 ```
 
-**Решение:** нормализатор приводит к единому формату.
-
+**Из проекта (`core/connection.py`):**
 ```python
-# После нормализации — единый формат для всех
-{
-    "hostname": "switch1",
-    "device_ip": "10.0.0.1",
-    "mac_address": "00:11:22:33:44:55",  # Единое имя
-    "interface": "GigabitEthernet0/1",   # Полное имя
-    "vlan": 10,
-}
-```
-
-### 7.2 Класс нормализатора
-
-```python
-# core/domain/mac.py
-class MACNormalizer:
-    """Нормализатор MAC-таблицы."""
-
-    # Маппинг имён полей: NTC → наши
-    KEY_MAPPING = {
-        "destination_address": "mac_address",
-        "mac_address": "mac_address",
-        "mac": "mac_address",
-        "destination_port": "interface",
-        "port": "interface",
-        "ports": "interface",
-        "vlan_id": "vlan",
-        "vlan": "vlan",
-    }
-
-    def normalize_dicts(
-        self,
-        data: List[Dict],
-        hostname: str = "",
-        device_ip: str = "",
-    ) -> List[Dict]:
-        """Нормализует список словарей."""
-
-        result = []
-
-        for row in data:
-            normalized = self._normalize_row(row)
-
-            # Добавляем контекст
-            normalized["hostname"] = hostname
-            normalized["device_ip"] = device_ip
-
-            result.append(normalized)
-
-        return result
-
-    def _normalize_row(self, row: Dict) -> Dict:
-        """Нормализует одну запись."""
-
-        result = {}
-
-        for key, value in row.items():
-            # Переименовываем ключ если есть маппинг
-            new_key = self.KEY_MAPPING.get(key.lower(), key)
-            result[new_key] = value
-
-        # Нормализуем MAC формат
-        if "mac_address" in result:
-            result["mac_address"] = self._normalize_mac(result["mac_address"])
-
-        # Нормализуем имя интерфейса
-        if "interface" in result:
-            result["interface"] = self._normalize_interface(result["interface"])
-
-        return result
-
-    def _normalize_mac(self, mac: str) -> str:
-        """Приводит MAC к формату AA:BB:CC:DD:EE:FF."""
-        # Убираем разделители
-        mac_clean = mac.replace(".", "").replace(":", "").replace("-", "")
-        # Форматируем
-        return ":".join(mac_clean[i:i+2].upper() for i in range(0, 12, 2))
-
-    def _normalize_interface(self, interface: str) -> str:
-        """Разворачивает сокращение интерфейса."""
-        expansions = {
-            "Gi": "GigabitEthernet",
-            "Fa": "FastEthernet",
-            "Te": "TenGigabitEthernet",
-            "Eth": "Ethernet",
-            "Po": "Port-channel",
-        }
-        for short, full in expansions.items():
-            if interface.startswith(short) and not interface.startswith(full):
-                return interface.replace(short, full, 1)
-        return interface
-```
-
----
-
-## 8. Domain Layer (бизнес-логика)
-
-Domain Layer — это слой бизнес-логики. Здесь живёт вся логика преобразования данных, не зависящая от внешних систем (SSH, NetBox API, файлы).
-
-### 8.1 Что такое Domain Layer
-
-**Принцип:** отделить бизнес-логику от инфраструктуры.
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    ИНФРАСТРУКТУРА                            │
-│  SSH (Scrapli)  │  NetBox API  │  Файлы (Excel, JSON)       │
-└────────┬────────────────┬─────────────────┬─────────────────┘
-         │                │                 │
-         ▼                ▼                 ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     DOMAIN LAYER                             │
-│  Нормализаторы  │  Валидаторы  │  Сравнение (Diff)          │
-│  Объединение    │  Фильтрация  │  Преобразование            │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Зачем это нужно:**
-- Код легко тестировать (не нужен SSH/NetBox для тестов)
-- Логика в одном месте (не размазана по проекту)
-- Можно переиспользовать (CLI, API, тесты)
-
-### 8.2 Структура папки core/domain/
-
-```
-core/domain/
-├── __init__.py         # Экспорт классов
-├── mac.py              # MACNormalizer
-├── lldp.py             # LLDPNormalizer + merge логика
-├── interface.py        # InterfaceNormalizer
-├── inventory.py        # InventoryNormalizer
-└── sync.py             # DiffCalculator, SyncComparator
-```
-
-### 8.3 Паттерн: Normalizer
-
-Каждый тип данных имеет свой нормализатор с единым интерфейсом.
-
-```python
-# core/domain/base.py (концептуально)
-class BaseNormalizer:
-    """Базовый класс нормализатора."""
-
-    # Маппинг NTC полей → наши поля
-    KEY_MAPPING: Dict[str, str] = {}
-
-    def normalize_dicts(
-        self,
-        data: List[Dict[str, Any]],
-        **context,  # hostname, device_ip, etc.
-    ) -> List[Dict[str, Any]]:
-        """Нормализует список словарей."""
-        return [self._normalize_row(row, **context) for row in data]
-
-    def _normalize_row(self, row: Dict, **context) -> Dict:
-        """Нормализует одну запись."""
-        result = {}
-
-        # 1. Переименовываем ключи
-        for key, value in row.items():
-            new_key = self.KEY_MAPPING.get(key.lower(), key)
-            result[new_key] = value
-
-        # 2. Добавляем контекст
-        result.update(context)
-
-        # 3. Специфичная обработка (переопределяется)
-        return self._post_process(result)
-
-    def _post_process(self, row: Dict) -> Dict:
-        """Хук для дополнительной обработки."""
-        return row
-```
-
-### 8.4 Пример: LLDPNormalizer
-
-```python
-# core/domain/lldp.py
-class LLDPNormalizer:
-    """Нормализатор LLDP/CDP данных."""
-
-    KEY_MAPPING = {
-        # NTC поля → наши поля
-        "neighbor": "remote_hostname",
-        "chassis_id": "remote_mac",
-        "port_id": "remote_port",
-        "port_description": "port_description",
-        "system_name": "remote_hostname",
-        "system_description": "remote_description",
-        "management_ip": "remote_ip",
-        "platform": "remote_platform",
-        "local_interface": "local_interface",
-        "local_port": "local_interface",
-    }
-
-    def normalize_dicts(
-        self,
-        data: List[Dict],
-        protocol: str = "lldp",
-        hostname: str = "",
-        device_ip: str = "",
-    ) -> List[Dict]:
-        """Нормализует LLDP/CDP данные."""
-
-        result = []
-
-        for row in data:
-            normalized = {}
-
-            # 1. Переименовываем ключи
-            for key, value in row.items():
-                new_key = self.KEY_MAPPING.get(key.lower(), key)
-                normalized[new_key] = value
-
-            # 2. Добавляем контекст
-            normalized["hostname"] = hostname
-            normalized["device_ip"] = device_ip
-            normalized["protocol"] = protocol.upper()
-
-            # 3. Определяем тип соседа
-            normalized["neighbor_type"] = self._determine_neighbor_type(
-                normalized.get("remote_hostname", ""),
-                normalized.get("remote_description", ""),
-            )
-
-            # 4. Нормализуем MAC
-            if "remote_mac" in normalized:
-                normalized["remote_mac"] = self._normalize_mac(
-                    normalized["remote_mac"]
-                )
-
-            result.append(normalized)
-
-        return result
-
-    def _determine_neighbor_type(self, hostname: str, description: str) -> str:
-        """Определяет тип соседа: switch, phone, ap, server, unknown."""
-
-        text = f"{hostname} {description}".lower()
-
-        if "phone" in text or "cp-" in text:
-            return "phone"
-        if "ap" in text or "air-" in text:
-            return "ap"
-        if any(x in text for x in ["switch", "router", "nexus", "catalyst"]):
-            return "switch"
-        if any(x in text for x in ["server", "linux", "vmware", "esxi"]):
-            return "server"
-
-        return "unknown"
-```
-
-### 8.5 Пример: Merge LLDP + CDP
-
-Ключевая логика — объединение данных из двух протоколов.
-
-```python
-# core/domain/lldp.py
-class LLDPNormalizer:
-    # ... (предыдущий код)
-
-    def merge_lldp_cdp(
-        self,
-        lldp_data: List[Dict],
-        cdp_data: List[Dict],
-    ) -> List[Dict]:
-        """
-        Объединяет LLDP и CDP данные.
-
-        Логика:
-        - CDP — база (содержит platform)
-        - LLDP — дополняет MAC (chassis_id)
-        - Совпадение по local_interface + remote_hostname
-        """
-
-        # Только LLDP
-        if not cdp_data:
-            for row in lldp_data:
-                row["protocol"] = "BOTH"
-            return lldp_data
-
-        # Только CDP
-        if not lldp_data:
-            for row in cdp_data:
-                row["protocol"] = "BOTH"
-            return cdp_data
-
-        # Индексируем LLDP по ключу
-        lldp_index = {}
-        for row in lldp_data:
-            key = self._make_merge_key(row)
-            lldp_index[key] = row
-
-        result = []
-
-        # Проходим по CDP (база)
-        for cdp_row in cdp_data:
-            key = self._make_merge_key(cdp_row)
-            merged = cdp_row.copy()
-
-            # Ищем соответствующую LLDP запись
-            if key in lldp_index:
-                lldp_row = lldp_index[key]
-
-                # Берём MAC из LLDP (chassis_id более надёжен)
-                if lldp_row.get("remote_mac"):
-                    merged["remote_mac"] = lldp_row["remote_mac"]
-
-            merged["protocol"] = "BOTH"
-            result.append(merged)
-
-            # Удаляем из индекса (чтобы не дублировать)
-            lldp_index.pop(key, None)
-
-        # Добавляем LLDP записи, которых нет в CDP
-        for lldp_row in lldp_index.values():
-            lldp_row["protocol"] = "BOTH"
-            result.append(lldp_row)
-
-        return result
-
-    def _make_merge_key(self, row: Dict) -> tuple:
-        """Создаёт ключ для объединения."""
-        return (
-            row.get("local_interface", "").lower(),
-            self._normalize_hostname(row.get("remote_hostname", "")),
-        )
-
-    def _normalize_hostname(self, hostname: str) -> str:
-        """Убирает домен из hostname."""
-        return hostname.split(".")[0].lower()
-```
-
-### 8.6 Пример: DiffCalculator (Sync)
-
-```python
-# core/domain/sync.py
-from dataclasses import dataclass
-from typing import List, Dict, Any
-
-@dataclass
-class SyncDiff:
-    """Результат сравнения локальных и удалённых данных."""
-    to_create: List[Dict]   # Есть локально, нет удалённо
-    to_update: List[Dict]   # Есть и там, и там, но отличаются
-    to_delete: List[Dict]   # Есть удалённо, нет локально
-    unchanged: List[Dict]   # Одинаковые
-
-    @property
-    def has_changes(self) -> bool:
-        """Есть ли изменения."""
-        return bool(self.to_create or self.to_update or self.to_delete)
-
-
-class SyncComparator:
-    """Сравнивает локальные и удалённые данные."""
-
-    def __init__(self, key_field: str = "name"):
-        self.key_field = key_field
-
-    def compare(
-        self,
-        local: List[Dict],
-        remote: List[Dict],
-        compare_fields: List[str] = None,
-    ) -> SyncDiff:
-        """
-        Сравнивает два списка и возвращает diff.
-
-        Args:
-            local: Локальные данные (с устройств)
-            remote: Удалённые данные (из NetBox)
-            compare_fields: Поля для сравнения (если None — все)
-        """
-        local_by_key = {item[self.key_field]: item for item in local}
-        remote_by_key = {item[self.key_field]: item for item in remote}
-
-        to_create = []
-        to_update = []
-        unchanged = []
-
-        # Проходим по локальным
-        for key, local_item in local_by_key.items():
-            if key not in remote_by_key:
-                # Нет в remote → создать
-                to_create.append(local_item)
-            else:
-                # Есть в remote → проверяем изменения
-                remote_item = remote_by_key[key]
-                if self._has_differences(local_item, remote_item, compare_fields):
-                    to_update.append({
-                        "local": local_item,
-                        "remote": remote_item,
-                        "changes": self._get_changes(local_item, remote_item, compare_fields),
-                    })
-                else:
-                    unchanged.append(local_item)
-
-        # Есть в remote, нет локально → удалить
-        to_delete = [
-            remote_by_key[key]
-            for key in remote_by_key
-            if key not in local_by_key
-        ]
-
-        return SyncDiff(
-            to_create=to_create,
-            to_update=to_update,
-            to_delete=to_delete,
-            unchanged=unchanged,
-        )
-
-    def _has_differences(
-        self,
-        local: Dict,
-        remote: Dict,
-        fields: List[str] = None,
-    ) -> bool:
-        """Проверяет есть ли различия."""
-        fields = fields or list(local.keys())
-
-        for field in fields:
-            if local.get(field) != remote.get(field):
-                return True
+class Connection:
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.disconnect()
         return False
 
-    def _get_changes(
-        self,
-        local: Dict,
-        remote: Dict,
-        fields: List[str] = None,
-    ) -> Dict:
-        """Возвращает словарь изменений."""
-        fields = fields or list(local.keys())
-        changes = {}
-
-        for field in fields:
-            local_val = local.get(field)
-            remote_val = remote.get(field)
-            if local_val != remote_val:
-                changes[field] = {"old": remote_val, "new": local_val}
-
-        return changes
-```
-
-### 8.7 Почему Domain Layer важен
-
-**Без Domain Layer:**
-```python
-# Всё в одном месте — каша
-def cmd_lldp(args):
-    for device in devices:
-        output = ssh_connect_and_run(device, "show lldp")
-        parsed = ntc_parse(output)
-
-        # Нормализация прямо здесь
-        for row in parsed:
-            row["hostname"] = get_hostname(device)
-            if row.get("neighbor"):
-                row["remote_hostname"] = row.pop("neighbor")
-            # ... ещё 50 строк преобразований
-
-        # Сравнение с NetBox прямо здесь
-        for row in parsed:
-            existing = netbox.get(row["remote_hostname"])
-            if existing:
-                # ... логика update
-            else:
-                # ... логика create
-```
-
-**С Domain Layer:**
-```python
-# Чистый, понятный код
-def cmd_lldp(args):
-    # 1. Сбор (инфраструктура)
-    collector = LLDPCollector(credentials)
-    raw_data = collector.collect(devices)
-
-    # 2. Нормализация (domain)
-    normalizer = LLDPNormalizer()
-    data = normalizer.normalize_dicts(raw_data)
-
-    # 3. Экспорт или sync (инфраструктура)
-    exporter.export(data, "lldp")
-```
-
-**Тестирование:**
-```python
-# test_domain/test_lldp_normalizer.py
-def test_merge_lldp_cdp():
-    """Тестируем merge БЕЗ SSH, БЕЗ NetBox."""
-    normalizer = LLDPNormalizer()
-
-    lldp = [{"local_interface": "Gi0/1", "remote_hostname": "switch2"}]
-    cdp = [{"local_interface": "Gi0/1", "remote_hostname": "switch2", "platform": "Cisco"}]
-
-    result = normalizer.merge_lldp_cdp(lldp, cdp)
-
-    assert result[0]["protocol"] == "BOTH"
-    assert result[0]["remote_platform"] == "Cisco"
+# Использование в коде
+with Connection(device, credentials) as conn:
+    output = conn.send_command("show interfaces")
+# Соединение автоматически закрыто
 ```
 
 ---
 
-## 9. Экспорт данных
+## 5. Декораторы
 
-### 9.1 Базовый экспортер
+### Что такое декоратор
+
+**Декоратор** — функция, которая модифицирует другую функцию.
+Синтаксис `@decorator` — это просто сокращение.
 
 ```python
-# exporters/base.py
-from abc import ABC, abstractmethod
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Any, Optional
+# Без декоратора
+def my_function():
+    pass
+my_function = decorator(my_function)
 
-class BaseExporter(ABC):
-    """Абстрактный базовый класс для экспортеров."""
+# С декоратором — то же самое
+@decorator
+def my_function():
+    pass
+```
 
-    file_extension = ""  # Переопределяется в наследниках
+### 5.1 @property
 
-    def __init__(
-        self,
-        output_folder: str = "reports",
-        encoding: str = "utf-8",
-    ):
-        self.output_folder = Path(output_folder)
-        self.encoding = encoding
+Превращает метод в атрибут (без скобок при вызове).
 
-    def export(
-        self,
-        data: List[Dict[str, Any]],
-        filename: str,
-    ) -> Optional[str]:
+```python
+class Interface:
+    def __init__(self, name, speed_mbps):
+        self.name = name
+        self._speed_mbps = speed_mbps  # "Приватный" атрибут
+
+    @property
+    def speed(self):
+        """Скорость в читаемом формате."""
+        if self._speed_mbps >= 1000:
+            return f"{self._speed_mbps // 1000} Gbps"
+        return f"{self._speed_mbps} Mbps"
+
+    @property
+    def speed_mbps(self):
+        """Скорость в Mbps."""
+        return self._speed_mbps
+
+    @speed_mbps.setter
+    def speed_mbps(self, value):
+        """Setter для speed_mbps."""
+        if value < 0:
+            raise ValueError("Speed cannot be negative")
+        self._speed_mbps = value
+
+
+intf = Interface("Gi0/1", 1000)
+print(intf.speed)      # "1 Gbps" — вызов без скобок!
+print(intf.speed_mbps) # 1000
+
+intf.speed_mbps = 10000  # Использует setter
+print(intf.speed)        # "10 Gbps"
+```
+
+**Из проекта (`core/context.py`):**
+```python
+class RunContext:
+    def __init__(self, run_id, start_time):
+        self.run_id = run_id
+        self._start_time = start_time
+
+    @property
+    def elapsed(self) -> float:
+        """Прошедшее время в секундах."""
+        return time.time() - self._start_time
+
+    @property
+    def elapsed_human(self) -> str:
+        """Прошедшее время в читаемом формате."""
+        seconds = int(self.elapsed)
+        if seconds < 60:
+            return f"{seconds}s"
+        minutes = seconds // 60
+        seconds = seconds % 60
+        return f"{minutes}m {seconds}s"
+```
+
+### 5.2 @staticmethod и @classmethod
+
+```python
+class Device:
+    default_port = 22
+
+    def __init__(self, host):
+        self.host = host
+
+    @staticmethod
+    def validate_ip(ip):
         """
-        Экспортирует данные в файл.
-
-        Args:
-            data: Список словарей с данными
-            filename: Имя файла (без расширения)
-
-        Returns:
-            Путь к созданному файлу или None
+        Статический метод — не принимает self или cls.
+        Просто функция внутри класса.
         """
-        if not data:
-            return None
+        parts = ip.split(".")
+        return len(parts) == 4 and all(0 <= int(p) <= 255 for p in parts)
 
-        # Создаём папку если нет
-        self.output_folder.mkdir(parents=True, exist_ok=True)
+    @classmethod
+    def from_string(cls, string):
+        """
+        Метод класса — принимает cls (класс) вместо self.
+        Используется как альтернативный конструктор.
+        """
+        # cls — это класс Device (или его подкласс)
+        host, port = string.split(":")
+        device = cls(host)  # Создаём экземпляр
+        device.port = int(port)
+        return device
 
-        # Формируем путь: reports/2026-01-12_mac_addresses.xlsx
-        timestamp = datetime.now().strftime("%Y-%m-%d")
-        file_path = self.output_folder / f"{timestamp}_{filename}{self.file_extension}"
+    @classmethod
+    def get_default_port(cls):
+        """Доступ к атрибутам класса."""
+        return cls.default_port
 
-        # Вызываем абстрактный метод записи
-        self._write(data, file_path)
 
-        return str(file_path)
+# Статический метод
+print(Device.validate_ip("192.168.1.1"))  # True
+print(Device.validate_ip("invalid"))       # False
 
-    @abstractmethod
-    def _write(self, data: List[Dict], file_path: Path) -> None:
-        """Записывает данные в файл. Реализуется в наследниках."""
+# Метод класса
+device = Device.from_string("192.168.1.1:2222")
+print(device.host)  # "192.168.1.1"
+print(device.port)  # 2222
+```
+
+### 5.3 @dataclass
+
+Автоматически создаёт `__init__`, `__repr__`, `__eq__` и другие методы.
+
+```python
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+@dataclass
+class Device:
+    """Устройство с автоматическими методами."""
+    host: str
+    platform: str = "cisco_ios"  # Значение по умолчанию
+    port: int = 22
+    tags: List[str] = field(default_factory=list)  # Мутабельное значение
+
+
+# Автоматически создан __init__:
+device = Device(host="192.168.1.1", platform="cisco_nxos")
+
+# Автоматически создан __repr__:
+print(device)  # Device(host='192.168.1.1', platform='cisco_nxos', port=22, tags=[])
+
+# Автоматически создан __eq__:
+device2 = Device(host="192.168.1.1", platform="cisco_nxos")
+print(device == device2)  # True
+```
+
+**Из проекта (`core/pipeline/models.py`):**
+```python
+@dataclass
+class PipelineStep:
+    """Один шаг pipeline."""
+    id: str
+    type: StepType
+    target: str
+    enabled: bool = True
+    options: Dict = field(default_factory=dict)
+    depends_on: List[str] = field(default_factory=list)
+
+    # Runtime поля
+    status: StepStatus = StepStatus.PENDING
+    result: Optional[Dict] = None
+    error: Optional[str] = None
+```
+
+---
+
+## 6. Type Hints (аннотации типов)
+
+Type hints — подсказки о типах. Python их не проверяет, но IDE и mypy используют.
+
+### Базовые типы
+
+```python
+# Аннотации переменных
+name: str = "switch-01"
+port: int = 22
+timeout: float = 30.5
+enabled: bool = True
+
+# Аннотации параметров и возвращаемого значения
+def connect(host: str, port: int = 22) -> bool:
+    """Подключается."""
+    return True
+```
+
+### Optional, Union, List, Dict
+
+```python
+from typing import Optional, Union, List, Dict, Any, Tuple
+
+# Optional[X] = X или None
+def find_device(name: str) -> Optional[Device]:
+    """Возвращает Device или None."""
+    pass
+
+# Union[X, Y] = X или Y
+def process(value: Union[str, int]) -> str:
+    """Принимает строку или число."""
+    return str(value)
+
+# List[X] — список элементов типа X
+def get_devices() -> List[Device]:
+    return []
+
+# Dict[K, V] — словарь
+def get_stats() -> Dict[str, int]:
+    return {"created": 5, "updated": 3}
+
+# Tuple[X, Y, Z] — кортеж фиксированной длины
+def get_coordinates() -> Tuple[float, float]:
+    return (10.5, 20.3)
+
+# Any — любой тип
+def process_any(data: Any) -> Any:
+    return data
+```
+
+**Из проекта (`api/services/sync_service.py`):**
+```python
+from typing import List, Dict, Optional, Any
+
+class SyncService:
+    def _get_devices(self, device_list: List[str] = None) -> List[Device]:
+        """Получает список устройств."""
+        pass
+
+    def _do_sync(
+        self,
+        request: SyncRequest,
+        devices: List[Device],
+        task_id: str,
+        steps: List[str],
+    ) -> Dict[str, Any]:
+        """Выполняет синхронизацию."""
         pass
 ```
 
-### 9.2 Excel экспортер
+---
+
+## 7. Enum — перечисления
+
+**Enum** — набор именованных констант.
 
 ```python
-# exporters/excel.py
-import pandas as pd
-from openpyxl.styles import Font, PatternFill
-from .base import BaseExporter
+from enum import Enum, auto
 
-class ExcelExporter(BaseExporter):
-    """Экспортер в Excel с форматированием."""
+class StepStatus(str, Enum):
+    """
+    Статус выполнения шага.
 
-    file_extension = ".xlsx"
+    str, Enum — наследование от str позволяет сравнивать со строками.
+    """
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
 
-    def _write(self, data: List[Dict], file_path: Path) -> None:
-        """Записывает данные в Excel."""
 
-        # Конвертируем список словарей в DataFrame
-        df = pd.DataFrame(data)
+# Использование
+status = StepStatus.COMPLETED
 
-        # Записываем в Excel
-        with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Data")
+# Сравнение
+if status == StepStatus.COMPLETED:
+    print("Done!")
 
-            # Форматируем
-            workbook = writer.book
-            worksheet = writer.sheets["Data"]
+# Доступ к значению
+print(status.value)  # "completed"
 
-            # Заголовок — жирный, с фоном
-            header_font = Font(bold=True)
-            header_fill = PatternFill("solid", fgColor="CCCCCC")
+# Доступ к имени
+print(status.name)   # "COMPLETED"
 
-            for cell in worksheet[1]:
-                cell.font = header_font
-                cell.fill = header_fill
+# Итерация по всем значениям
+for s in StepStatus:
+    print(f"{s.name} = {s.value}")
 
-            # Автоширина колонок
-            for column in worksheet.columns:
-                max_length = max(len(str(cell.value or "")) for cell in column)
-                worksheet.column_dimensions[column[0].column_letter].width = max_length + 2
+# Создание из строки
+status = StepStatus("pending")  # StepStatus.PENDING
 ```
 
-### 9.3 Фабрика экспортеров
+**Из проекта (`core/pipeline/models.py`):**
+```python
+class StepType(str, Enum):
+    """Тип шага pipeline."""
+    COLLECT = "collect"
+    SYNC = "sync"
+    EXPORT = "export"
+
+
+class StepStatus(str, Enum):
+    """Статус выполнения."""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+```
+
+---
+
+## 8. Dataclasses
+
+**dataclass** — декоратор для автоматического создания методов класса.
 
 ```python
-# cli.py
-def get_exporter(format_type: str, output_folder: str, delimiter: str = ","):
-    """Возвращает экспортер по типу формата."""
+from dataclasses import dataclass, field, asdict, astuple
+from typing import List, Optional
 
-    from .exporters import CSVExporter, JSONExporter, ExcelExporter, RawExporter
+@dataclass
+class Interface:
+    """Интерфейс с автоматическими методами."""
 
+    # Обязательные поля
+    name: str
+
+    # Поля со значением по умолчанию
+    status: str = "unknown"
+    speed: int = 0
+    mtu: Optional[int] = None
+
+    # Мутабельные значения — через field()
+    tags: List[str] = field(default_factory=list)
+
+    # Поле не в __repr__ и сравнении
+    _cache: dict = field(default_factory=dict, repr=False, compare=False)
+
+    # Вычисляемое поле
+    full_name: str = field(init=False)
+
+    def __post_init__(self):
+        """Вызывается после __init__."""
+        self.full_name = f"{self.name} ({self.status})"
+
+
+# Создание
+intf = Interface(name="Gi0/1", status="up", speed=1000)
+
+# __repr__ автоматический
+print(intf)
+
+# __eq__ автоматический
+intf2 = Interface(name="Gi0/1", status="up", speed=1000)
+print(intf == intf2)  # True
+
+# Конвертация в dict/tuple
+d = asdict(intf)
+t = astuple(intf)
+```
+
+---
+
+## 9. Pydantic — валидация данных
+
+**Pydantic** — библиотека для валидации и сериализации данных.
+Используется в FastAPI для автоматической валидации запросов.
+
+### BaseModel
+
+```python
+from pydantic import BaseModel, Field
+from typing import Optional, List
+
+class SyncRequest(BaseModel):
+    """Запрос на синхронизацию."""
+
+    # Обязательные поля
+    site: str
+
+    # Опциональные с значением по умолчанию
+    dry_run: bool = True
+    sync_all: bool = False
+
+    # Field() — дополнительные настройки
+    timeout: int = Field(default=30, ge=1, le=300)  # 1 <= timeout <= 300
+
+    # Опциональные поля
+    devices: Optional[List[str]] = None
+
+
+# Создание — автоматическая валидация
+request = SyncRequest(site="Office", dry_run=False)
+
+# Ошибка валидации
+try:
+    bad_request = SyncRequest(site="Office", timeout=1000)  # > 300
+except ValueError as e:
+    print(e)  # timeout must be <= 300
+```
+
+### model_dump() и model_validate()
+
+```python
+from pydantic import BaseModel
+
+class Interface(BaseModel):
+    name: str
+    status: str = "unknown"
+    speed: int = 0
+
+# Создание из словаря
+data = {"name": "Gi0/1", "status": "up", "speed": 1000}
+intf = Interface.model_validate(data)
+
+# Конвертация в словарь
+d = intf.model_dump()
+# {'name': 'Gi0/1', 'status': 'up', 'speed': 1000}
+
+# JSON сериализация
+json_str = intf.model_dump_json()
+```
+
+**Из проекта (`api/schemas.py`):**
+```python
+class SyncStats(BaseModel):
+    """Статистика синхронизации."""
+    created: int = 0
+    updated: int = 0
+    deleted: int = 0
+    skipped: int = 0
+    failed: int = 0
+
+
+class DiffEntry(BaseModel):
+    """Одно изменение."""
+    entity_type: str
+    entity_name: str
+    action: str
+    device: Optional[str] = None
+```
+
+---
+
+## 10. Исключения
+
+### try/except/finally
+
+```python
+def connect_to_device(host):
+    """Подключение с обработкой ошибок."""
+    try:
+        connection = create_connection(host)
+        return connection
+
+    except ConnectionError as e:
+        print(f"Connection failed: {e}")
+        return None
+
+    except TimeoutError:
+        print("Connection timed out")
+        return None
+
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        raise  # Пробросить дальше
+
+    finally:
+        # Выполняется ВСЕГДА
+        print("Connection attempt finished")
+```
+
+### raise
+
+```python
+def validate_port(port):
+    """Проверяет номер порта."""
+    if not isinstance(port, int):
+        raise TypeError(f"Port must be int, got {type(port)}")
+
+    if not 1 <= port <= 65535:
+        raise ValueError(f"Port must be 1-65535, got {port}")
+
+    return port
+
+# Пробросить текущее исключение
+try:
+    something()
+except Exception:
+    logger.error("Failed")
+    raise
+```
+
+### Собственные исключения
+
+```python
+class NetworkCollectorError(Exception):
+    """Базовое исключение проекта."""
+    pass
+
+
+class ConnectionError(NetworkCollectorError):
+    """Ошибка подключения."""
+
+    def __init__(self, host, message="Connection failed"):
+        self.host = host
+        self.message = message
+        super().__init__(f"{message}: {host}")
+
+
+# Использование
+try:
+    connect("192.168.1.1", None)
+except ConnectionError as e:
+    print(f"Cannot connect to {e.host}: {e.message}")
+```
+
+---
+
+## 11. Контекстные менеджеры (with)
+
+**Через класс:**
+```python
+class DatabaseConnection:
+    def __init__(self, connection_string):
+        self.connection_string = connection_string
+        self.connection = None
+
+    def __enter__(self):
+        print("Opening connection")
+        self.connection = connect(self.connection_string)
+        return self.connection
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        print("Closing connection")
+        if self.connection:
+            self.connection.close()
+        return False
+
+
+with DatabaseConnection("localhost:5432") as conn:
+    conn.execute("SELECT * FROM devices")
+# Соединение закрыто автоматически
+```
+
+**Через contextlib:**
+```python
+from contextlib import contextmanager
+
+@contextmanager
+def connection(host):
+    """Контекстный менеджер через генератор."""
+    conn = None
+    try:
+        print(f"Connecting to {host}")
+        conn = create_connection(host)
+        yield conn  # Возвращаем и "замораживаем"
+    finally:
+        print(f"Disconnecting from {host}")
+        if conn:
+            conn.close()
+
+
+with connection("192.168.1.1") as conn:
+    conn.send_command("show version")
+```
+
+---
+
+## 12. Генераторы и comprehensions
+
+### yield
+
+**Генератор** — функция, которая возвращает значения по одному (лениво).
+
+```python
+def count_up_to(n):
+    """Генератор чисел от 1 до n."""
+    i = 1
+    while i <= n:
+        yield i  # Возвращаем и "замораживаем"
+        i += 1
+
+
+for num in count_up_to(5):
+    print(num)  # 1, 2, 3, 4, 5
+```
+
+### List comprehension
+
+```python
+# Обычный способ
+squares = []
+for x in range(10):
+    squares.append(x ** 2)
+
+# List comprehension
+squares = [x ** 2 for x in range(10)]
+
+# С условием
+even_squares = [x ** 2 for x in range(10) if x % 2 == 0]
+```
+
+**Из проекта:**
+```python
+# Фильтрация интерфейсов
+enabled_interfaces = [
+    intf for intf in interfaces
+    if intf.status == "up"
+]
+
+# Извлечение IP адресов
+hosts = [device.host for device in devices]
+```
+
+### Dict comprehension
+
+```python
+# Создание словаря
+squares = {x: x ** 2 for x in range(5)}
+# {0: 0, 1: 1, 2: 4, 3: 9, 4: 16}
+
+# Фильтрация
+config = {"host": "localhost", "port": 22, "debug": None}
+clean_config = {k: v for k, v in config.items() if v is not None}
+# {"host": "localhost", "port": 22}
+```
+
+### Set comprehension
+
+```python
+# Уникальные значения
+vlans = {intf.vlan for intf in interfaces if intf.vlan}
+```
+
+---
+
+## 13. Асинхронное программирование
+
+### async/await
+
+**Асинхронный код** — выполнение нескольких операций "одновременно" без потоков.
+
+```python
+import asyncio
+
+async def fetch_data(url):
+    """Асинхронно получает данные."""
+    print(f"Fetching {url}...")
+    await asyncio.sleep(1)  # await — ждём
+    return f"Data from {url}"
+
+
+async def main():
+    # Параллельное выполнение
+    results = await asyncio.gather(
+        fetch_data("http://api1.com"),
+        fetch_data("http://api2.com"),
+        fetch_data("http://api3.com"),
+    )
+    # Занимает 1 секунду (все параллельно)
+    return results
+
+
+asyncio.run(main())
+```
+
+**Из проекта (`api/services/sync_service.py`):**
+```python
+class SyncService:
+    async def _run_in_executor(self, func, *args):
+        """Запускает синхронную функцию в executor."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self._executor, func, *args)
+
+    async def sync(self, request: SyncRequest) -> SyncResponse:
+        """Асинхронная синхронизация."""
+        result = await self._run_in_executor(
+            lambda: self._do_sync(request, devices, task_id, steps)
+        )
+        return SyncResponse(**result)
+```
+
+---
+
+## 14. Многопоточность
+
+### ThreadPoolExecutor
+
+**ThreadPoolExecutor** — пул потоков для параллельных задач.
+
+```python
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def collect_from_device(device):
+    """Собирает данные с одного устройства."""
+    return f"Data from {device}"
+
+
+devices = ["192.168.1.1", "192.168.1.2", "192.168.1.3"]
+
+# Пул из 5 потоков
+with ThreadPoolExecutor(max_workers=5) as executor:
+    # Способ 1: map
+    results = list(executor.map(collect_from_device, devices))
+
+    # Способ 2: submit + as_completed
+    futures = {
+        executor.submit(collect_from_device, d): d
+        for d in devices
+    }
+
+    for future in as_completed(futures):
+        device = futures[future]
+        try:
+            result = future.result()
+            print(f"{device}: {result}")
+        except Exception as e:
+            print(f"{device}: Error - {e}")
+```
+
+**Из проекта (`collectors/base.py`):**
+```python
+class BaseCollector:
+    def __init__(self, credentials=None, max_workers=5):
+        self.credentials = credentials
+        self.max_workers = max_workers
+
+    def collect(self, devices: List[Device]) -> List[Any]:
+        """Собирает данные параллельно."""
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            results = list(executor.map(self._collect_one, devices))
+        return [r for r in results if r is not None]
+```
+
+---
+
+## 15. Полезные паттерны из проекта
+
+### Singleton
+
+**Singleton** — только один экземпляр класса.
+
+```python
+# Модульный singleton — глобальная переменная
+_config: Optional[AppConfig] = None
+
+def load_config(path: str = None) -> AppConfig:
+    global _config
+    if _config is None:
+        _config = AppConfig.from_yaml(path or "config.yaml")
+    return _config
+
+config = load_config()
+```
+
+### Factory
+
+**Factory** — создание объектов без указания класса.
+
+```python
+class CollectorFactory:
+    _collectors = {
+        "devices": DeviceCollector,
+        "mac": MACCollector,
+        "lldp": LLDPCollector,
+    }
+
+    @classmethod
+    def create(cls, collector_type: str, **kwargs) -> BaseCollector:
+        collector_class = cls._collectors.get(collector_type)
+        if not collector_class:
+            raise ValueError(f"Unknown: {collector_type}")
+        return collector_class(**kwargs)
+
+
+# Использование
+collector = CollectorFactory.create("mac", credentials=creds)
+```
+
+### Strategy
+
+**Strategy** — выбор алгоритма во время выполнения.
+
+```python
+def get_exporter(format_type: str, output_folder: str):
+    """Возвращает экспортер по типу (Strategy)."""
     if format_type == "csv":
-        return CSVExporter(output_folder=output_folder, delimiter=delimiter)
+        return CSVExporter(output_folder=output_folder)
     elif format_type == "json":
         return JSONExporter(output_folder=output_folder)
-    elif format_type == "raw":
-        return RawExporter()  # Вывод в stdout
     else:
         return ExcelExporter(output_folder=output_folder)
 ```
 
 ---
 
-## 10. Синхронизация с NetBox
+## Резюме
 
-### 10.1 NetBox API клиент
+### Ключевые файлы для изучения
 
-```python
-# netbox/client.py
-import pynetbox
+| Сложность | Файл | Что изучить |
+|-----------|------|-------------|
+| Начальный | `core/device.py` | Простой класс |
+| Начальный | `core/models.py` | Dataclass, property |
+| Средний | `collectors/base.py` | Наследование, ThreadPoolExecutor |
+| Средний | `netbox/sync/base.py` | Методы, кэширование |
+| Средний | `api/schemas.py` | Pydantic модели |
+| Продвинутый | `netbox/sync/main.py` | Множественное наследование |
+| Продвинутый | `core/pipeline/executor.py` | Сложная логика |
+| Продвинутый | `api/services/sync_service.py` | Async, threading |
 
-class NetBoxClient:
-    """Клиент для работы с NetBox API."""
+### Порядок изучения
 
-    def __init__(self, url: str, token: str):
-        self.api = pynetbox.api(url, token=token)
-
-    def get_device(self, name: str):
-        """Получает устройство по имени."""
-        return self.api.dcim.devices.get(name=name)
-
-    def create_device(self, data: dict):
-        """Создаёт устройство."""
-        return self.api.dcim.devices.create(data)
-
-    def get_interfaces(self, device_id: int):
-        """Получает интерфейсы устройства."""
-        return self.api.dcim.interfaces.filter(device_id=device_id)
-```
-
-### 10.2 Логика синхронизации
-
-```python
-# netbox/sync/main.py (mixins в отдельных файлах)
-class NetBoxSync:
-    """Синхронизация данных с NetBox."""
-
-    def __init__(self, client: NetBoxClient):
-        self.client = client
-
-    def sync_interfaces(
-        self,
-        hostname: str,
-        interfaces: List[Dict],
-        update_existing: bool = True,
-    ) -> Dict[str, int]:
-        """
-        Синхронизирует интерфейсы устройства.
-
-        Returns:
-            Статистика: {"created": N, "updated": N, "skipped": N}
-        """
-        stats = {"created": 0, "updated": 0, "skipped": 0, "failed": 0}
-
-        # Получаем устройство из NetBox
-        device = self.client.get_device(hostname)
-        if not device:
-            logger.error(f"Устройство {hostname} не найдено в NetBox")
-            return stats
-
-        # Получаем существующие интерфейсы
-        existing = {i.name: i for i in self.client.get_interfaces(device.id)}
-
-        for iface_data in interfaces:
-            name = iface_data["name"]
-
-            if name in existing:
-                # Интерфейс существует
-                if update_existing:
-                    self._update_interface(existing[name], iface_data)
-                    stats["updated"] += 1
-                else:
-                    stats["skipped"] += 1
-            else:
-                # Создаём новый
-                self._create_interface(device.id, iface_data)
-                stats["created"] += 1
-
-        return stats
-
-    def _create_interface(self, device_id: int, data: Dict):
-        """Создаёт интерфейс в NetBox."""
-        self.client.api.dcim.interfaces.create({
-            "device": device_id,
-            "name": data["name"],
-            "type": data.get("type", "other"),
-            "enabled": data.get("enabled", True),
-            "description": data.get("description", ""),
-        })
-
-    def _update_interface(self, interface, data: Dict):
-        """Обновляет интерфейс в NetBox."""
-        interface.description = data.get("description", interface.description)
-        interface.enabled = data.get("enabled", interface.enabled)
-        interface.save()
-```
-
-### 10.3 Diff и Dry-Run
-
-```python
-# core/domain/sync.py
-class DiffCalculator:
-    """Вычисляет разницу между локальными и удалёнными данными."""
-
-    def diff_interfaces(
-        self,
-        hostname: str,
-        local_interfaces: List[Dict],
-    ) -> SyncDiff:
-        """
-        Сравнивает локальные интерфейсы с NetBox.
-
-        Returns:
-            SyncDiff: to_create, to_update, to_delete, unchanged
-        """
-        # Получаем из NetBox
-        remote = self._get_netbox_interfaces(hostname)
-        remote_by_name = {i["name"]: i for i in remote}
-
-        to_create = []
-        to_update = []
-        unchanged = []
-
-        for local in local_interfaces:
-            name = local["name"]
-
-            if name not in remote_by_name:
-                to_create.append(local)
-            else:
-                remote_iface = remote_by_name[name]
-                if self._has_changes(local, remote_iface):
-                    to_update.append({"local": local, "remote": remote_iface})
-                else:
-                    unchanged.append(local)
-
-        # Интерфейсы для удаления (есть в NetBox, нет локально)
-        local_names = {i["name"] for i in local_interfaces}
-        to_delete = [r for r in remote if r["name"] not in local_names]
-
-        return SyncDiff(
-            to_create=to_create,
-            to_update=to_update,
-            to_delete=to_delete,
-            unchanged=unchanged,
-        )
-```
-
----
-
-## 11. Полный путь данных
-
-### Пример: `python -m network_collector mac --format excel`
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ 1. ТОЧКА ВХОДА                                                   │
-├─────────────────────────────────────────────────────────────────┤
-│ __main__.py → cli.main() → argparse → cmd_mac()                  │
-│                                                                   │
-│ args.command = "mac"                                              │
-│ args.format = "excel"                                             │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 2. ПОДГОТОВКА                                                    │
-├─────────────────────────────────────────────────────────────────┤
-│ prepare_collection(args)                                          │
-│   ├── load_devices("devices_ips.py") → [Device, Device, ...]     │
-│   └── get_credentials() → Credentials(username, password)        │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 3. СБОР ДАННЫХ                                                   │
-├─────────────────────────────────────────────────────────────────┤
-│ MACCollector.collect(devices)                                     │
-│                                                                   │
-│ Для каждого device:                                               │
-│   ├── SSH подключение (Scrapli)                                   │
-│   ├── send_command("show mac address-table")                      │
-│   └── response.result = "Vlan Mac Address Type Ports\n..."       │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 4. ПАРСИНГ (NTC Templates)                                       │
-├─────────────────────────────────────────────────────────────────┤
-│ parse_output(platform="cisco_ios", command="show mac...")         │
-│                                                                   │
-│ Вход (текст):                                                     │
-│   "  10  aabb.ccdd.eeff  DYNAMIC  Gi0/1"                         │
-│                                                                   │
-│ Выход (список словарей):                                          │
-│   [{"vlan": "10", "destination_address": "aabb.ccdd.eeff",       │
-│     "type": "DYNAMIC", "destination_port": "Gi0/1"}]              │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 5. НОРМАЛИЗАЦИЯ                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│ MACNormalizer.normalize_dicts(raw_data, hostname, device_ip)      │
-│                                                                   │
-│ Вход:                                                             │
-│   {"destination_address": "aabb.ccdd.eeff", "destination_port":  │
-│    "Gi0/1", "vlan": "10"}                                         │
-│                                                                   │
-│ Выход:                                                            │
-│   {"hostname": "switch1", "device_ip": "10.0.0.1",               │
-│    "mac_address": "AA:BB:CC:DD:EE:FF",                           │
-│    "interface": "GigabitEthernet0/1", "vlan": 10}                 │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 6. ФИЛЬТР ПОЛЕЙ (fields.yaml)                                    │
-├─────────────────────────────────────────────────────────────────┤
-│ apply_fields_config(data, "mac")                                  │
-│                                                                   │
-│ fields.yaml:                                                      │
-│   mac:                                                            │
-│     hostname: {enabled: true, name: "Device", order: 1}           │
-│     vlan: {enabled: false}  # Не включать VLAN                    │
-│                                                                   │
-│ Результат: убраны/переименованы колонки по конфигу                │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 7. ЭКСПОРТ                                                       │
-├─────────────────────────────────────────────────────────────────┤
-│ get_exporter("excel", "reports") → ExcelExporter                  │
-│ exporter.export(data, "mac_addresses")                            │
-│                                                                   │
-│ Результат: reports/2026-01-12_mac_addresses.xlsx                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Пример: `python -m network_collector sync-netbox --interfaces`
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ 1-5. Сбор и нормализация (как выше)                              │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 6. DIFF (сравнение с NetBox)                                     │
-├─────────────────────────────────────────────────────────────────┤
-│ DiffCalculator.diff_interfaces(hostname, local_interfaces)        │
-│                                                                   │
-│ Локально: [Gi0/1, Gi0/2, Gi0/3]                                   │
-│ NetBox:   [Gi0/1, Gi0/2, Gi0/4]                                   │
-│                                                                   │
-│ Результат:                                                        │
-│   to_create: [Gi0/3]      # Есть локально, нет в NetBox          │
-│   to_update: [Gi0/1]      # Изменились поля                      │
-│   to_delete: [Gi0/4]      # Есть в NetBox, нет локально          │
-│   unchanged: [Gi0/2]                                              │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 7. DRY-RUN или ПРИМЕНЕНИЕ                                        │
-├─────────────────────────────────────────────────────────────────┤
-│ --dry-run:                                                        │
-│   Показать что будет изменено, ничего не менять                   │
-│                                                                   │
-│ Без --dry-run:                                                    │
-│   NetBoxSync.sync_interfaces(hostname, interfaces)                │
-│   → API вызовы: POST (create), PATCH (update), DELETE             │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ 8. ОТЧЁТ                                                         │
-├─────────────────────────────────────────────────────────────────┤
-│ ============================================================      │
-│ СВОДКА СИНХРОНИЗАЦИИ NetBox                                       │
-│ ============================================================      │
-│   Интерфейсы: +1 создано, ~1 обновлено, -1 удалено               │
-│ ------------------------------------------------------------      │
-│   ИТОГО: +1 создано, ~1 обновлено, -1 удалено                    │
-│ ============================================================      │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Заключение
-
-Теперь ты понимаешь:
-
-1. **Как запускается программа** — `__main__.py` → `cli.main()` → argparse
-2. **Как загружаются данные** — YAML конфиг, Python файл устройств
-3. **Как работает SSH** — Scrapli, retry логика
-4. **Как парсится вывод** — NTC Templates (TextFSM)
-5. **Зачем нормализация** — единый формат для всех платформ
-6. **Как экспортируется** — Excel/CSV/JSON через экспортеры
-7. **Как синхронизируется** — diff → dry-run → API вызовы
-
-**Следующие шаги:**
-- Прочитать код коллекторов (`collectors/*.py`)
-- Прочитать нормализаторы (`core/domain/*.py`)
-- Запустить с `-v` для debug логов
-- Добавить свою платформу/команду
+1. **Основы**: переменные, списки, словари, циклы, функции
+2. **ООП**: классы, наследование, `self`, `__init__`
+3. **Модули**: импорты, пакеты, `__init__.py`
+4. **Исключения**: try/except, raise
+5. **Type hints**: для понимания сигнатур
+6. **Декораторы**: @property, @staticmethod, @dataclass
+7. **Pydantic**: BaseModel для API
+8. **Async/Threading**: для понимания параллелизма
