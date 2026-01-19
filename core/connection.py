@@ -24,6 +24,7 @@ ConnectionManager обеспечивает:
 
 import logging
 import re
+import time
 from typing import Optional, Generator, Any, Dict
 from contextlib import contextmanager
 
@@ -41,6 +42,7 @@ from .exceptions import (
     AuthenticationError,
     TimeoutError as CollectorTimeoutError,
     CommandError,
+    is_retryable,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,9 +127,11 @@ class ConnectionManager:
         timeout_transport: Таймаут транспорта (секунды)
         timeout_ops: Таймаут операций (секунды)
         transport: Тип транспорта (ssh2, paramiko, system)
+        max_retries: Максимум повторных попыток при ошибке
+        retry_delay: Задержка между попытками (секунды)
 
     Example:
-        manager = ConnectionManager(timeout_socket=15)
+        manager = ConnectionManager(timeout_socket=15, max_retries=2)
         with manager.connect(device, creds) as conn:
             result = conn.send_command("show version")
     """
@@ -138,6 +142,8 @@ class ConnectionManager:
         timeout_transport: int = 30,
         timeout_ops: int = 60,
         transport: str = "ssh2",
+        max_retries: int = 2,
+        retry_delay: int = 5,
     ):
         """
         Инициализация менеджера подключений.
@@ -147,11 +153,15 @@ class ConnectionManager:
             timeout_transport: Таймаут транспорта
             timeout_ops: Таймаут операций
             transport: Тип транспорта (ssh2, paramiko, system)
+            max_retries: Максимум повторных попыток (0 = без retry)
+            retry_delay: Задержка между попытками в секундах
         """
         self.timeout_socket = timeout_socket
         self.timeout_transport = timeout_transport
         self.timeout_ops = timeout_ops
         self.transport = transport
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
 
     def _build_connection_params(
         self,
@@ -199,10 +209,11 @@ class ConnectionManager:
         credentials: Credentials,
     ) -> Generator[Scrapli, None, None]:
         """
-        Контекстный менеджер для подключения к устройству.
+        Контекстный менеджер для подключения к устройству с retry.
 
         Автоматически закрывает соединение при выходе из контекста.
-        Обновляет статус устройства.
+        Обновляет статус устройства. При ошибках подключения (timeout,
+        connection error) выполняет повторные попытки.
 
         Args:
             device: Объект устройства
@@ -212,69 +223,128 @@ class ConnectionManager:
             Scrapli: Активное подключение Scrapli
 
         Raises:
-            ScrapliTimeout: Таймаут подключения
-            ScrapliAuthenticationFailed: Ошибка аутентификации
+            CollectorTimeoutError: Таймаут подключения (после всех retry)
+            AuthenticationError: Ошибка аутентификации (без retry)
+            CollectorConnectionError: Ошибка подключения (после всех retry)
         """
         connection = None
-        try:
-            params = self._build_connection_params(device, credentials)
+        last_error = None
+        params = self._build_connection_params(device, credentials)
 
-            logger.info(f"Подключение к {device.host}...")
-            connection = Scrapli(**params)
-            connection.open()
+        # Всего попыток = 1 (первая) + max_retries
+        total_attempts = 1 + self.max_retries
 
-            # Обновляем статус и hostname
-            device.status = DeviceStatus.ONLINE
-            device.hostname = self.get_hostname(connection)
+        for attempt in range(1, total_attempts + 1):
+            try:
+                if attempt == 1:
+                    logger.info(f"Подключение к {device.host}...")
+                else:
+                    logger.info(
+                        f"Подключение к {device.host} (попытка {attempt}/{total_attempts})..."
+                    )
 
-            logger.info(f"Подключено к {device.display_name}")
-            yield connection
+                connection = Scrapli(**params)
+                connection.open()
 
-        except ScrapliTimeout as e:
-            device.status = DeviceStatus.OFFLINE
-            device.last_error = f"Таймаут подключения: {e}"
-            logger.error(f"Таймаут при подключении к {device.host}: {e}")
-            raise CollectorTimeoutError(
-                f"Таймаут подключения: {e}",
-                device=device.host,
-                timeout_seconds=self.timeout_socket,
-            ) from e
+                # Успешное подключение
+                device.status = DeviceStatus.ONLINE
+                device.hostname = self.get_hostname(connection)
+                logger.info(f"Подключено к {device.display_name}")
 
-        except ScrapliAuthenticationFailed as e:
-            device.status = DeviceStatus.ERROR
-            device.last_error = f"Ошибка аутентификации: {e}"
-            logger.error(f"Ошибка аутентификации на {device.host}: {e}")
-            raise AuthenticationError(
-                f"Ошибка аутентификации: {e}",
-                device=device.host,
-            ) from e
-
-        except ScrapliConnectionError as e:
-            device.status = DeviceStatus.ERROR
-            device.last_error = f"Ошибка подключения: {e}"
-            logger.error(f"Ошибка подключения к {device.host}: {e}")
-            raise CollectorConnectionError(
-                f"Ошибка подключения: {e}",
-                device=device.host,
-                port=device.port or 22,
-            ) from e
-
-        except Exception as e:
-            device.status = DeviceStatus.ERROR
-            device.last_error = str(e)
-            logger.error(f"Ошибка при подключении к {device.host}: {e}")
-            raise CollectorConnectionError(
-                f"Неизвестная ошибка: {e}",
-                device=device.host,
-            ) from e
-
-        finally:
-            if connection:
                 try:
-                    connection.close()
-                    logger.debug(f"Отключено от {device.host}")
-                except Exception:
-                    pass
+                    yield connection
+                finally:
+                    if connection:
+                        try:
+                            connection.close()
+                            logger.debug(f"Отключено от {device.host}")
+                        except Exception:
+                            pass
+                return  # Успешно завершено
+
+            except ScrapliAuthenticationFailed as e:
+                # Ошибки аутентификации НЕ повторяем
+                device.status = DeviceStatus.ERROR
+                device.last_error = f"Ошибка аутентификации: {e}"
+                logger.error(f"Ошибка аутентификации на {device.host}: {e}")
+                raise AuthenticationError(
+                    f"Ошибка аутентификации: {e}",
+                    device=device.host,
+                ) from e
+
+            except ScrapliTimeout as e:
+                last_error = CollectorTimeoutError(
+                    f"Таймаут подключения: {e}",
+                    device=device.host,
+                    timeout_seconds=self.timeout_socket,
+                )
+                device.status = DeviceStatus.OFFLINE
+                device.last_error = f"Таймаут подключения: {e}"
+
+                if attempt < total_attempts:
+                    logger.warning(
+                        f"Таймаут при подключении к {device.host}, "
+                        f"повтор через {self.retry_delay}с ({attempt}/{total_attempts})"
+                    )
+                    time.sleep(self.retry_delay)
+                else:
+                    logger.error(
+                        f"Таймаут при подключении к {device.host} "
+                        f"(исчерпаны все {total_attempts} попыток)"
+                    )
+
+            except ScrapliConnectionError as e:
+                last_error = CollectorConnectionError(
+                    f"Ошибка подключения: {e}",
+                    device=device.host,
+                    port=device.port or 22,
+                )
+                device.status = DeviceStatus.ERROR
+                device.last_error = f"Ошибка подключения: {e}"
+
+                if attempt < total_attempts:
+                    logger.warning(
+                        f"Ошибка подключения к {device.host}, "
+                        f"повтор через {self.retry_delay}с ({attempt}/{total_attempts})"
+                    )
+                    time.sleep(self.retry_delay)
+                else:
+                    logger.error(
+                        f"Ошибка подключения к {device.host} "
+                        f"(исчерпаны все {total_attempts} попыток)"
+                    )
+
+            except Exception as e:
+                last_error = CollectorConnectionError(
+                    f"Неизвестная ошибка: {e}",
+                    device=device.host,
+                )
+                device.status = DeviceStatus.ERROR
+                device.last_error = str(e)
+
+                # Проверяем можно ли повторить
+                if is_retryable(e) and attempt < total_attempts:
+                    logger.warning(
+                        f"Ошибка при подключении к {device.host}: {e}, "
+                        f"повтор через {self.retry_delay}с ({attempt}/{total_attempts})"
+                    )
+                    time.sleep(self.retry_delay)
+                else:
+                    logger.error(f"Ошибка при подключении к {device.host}: {e}")
+                    break  # Не retryable или исчерпаны попытки
+
+            finally:
+                # Закрываем соединение если было открыто частично
+                if connection:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
+                    connection = None
+
+        # Если дошли сюда - все попытки исчерпаны
+        if last_error:
+            raise last_error
 
     @staticmethod
     def get_hostname(connection: Scrapli) -> str:

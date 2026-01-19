@@ -51,6 +51,8 @@ class InterfacesSyncMixin:
         device = self.client.get_device_by_name(device_name)
         if not device:
             logger.error(f"Устройство не найдено в NetBox: {device_name}")
+            stats["failed"] = 1
+            stats["errors"] = [f"Device not found in NetBox: {device_name}"]
             return stats
 
         existing = list(self.client.get_interfaces(device_id=device.id))
@@ -63,7 +65,25 @@ class InterfacesSyncMixin:
         sorted_interfaces = sorted(interface_models, key=is_lag)
 
         comparator = SyncComparator()
-        local_data = [intf.to_dict() for intf in sorted_interfaces if intf.name]
+        # Добавляем вычисленные поля в данные для сравнения
+        local_data = []
+        for intf in sorted_interfaces:
+            if intf.name:
+                data = intf.to_dict()
+                if sync_cfg.get_option("auto_detect_type", True):
+                    data["type"] = get_netbox_interface_type(interface=intf)
+                # Парсим speed и duplex для сравнения
+                if intf.speed:
+                    data["speed"] = self._parse_speed(intf.speed)
+                if intf.duplex:
+                    data["duplex"] = self._parse_duplex(intf.duplex)
+                local_data.append(data)
+
+        enabled_mode = sync_cfg.get_option("enabled_mode", "admin")
+        compare_fields = ["description", "enabled", "mode", "mtu", "duplex", "speed"]
+        if sync_cfg.get_option("auto_detect_type", True):
+            compare_fields.append("type")
+
         diff = comparator.compare_interfaces(
             local=local_data,
             remote=existing,
@@ -71,6 +91,8 @@ class InterfacesSyncMixin:
             create_missing=create_missing,
             update_existing=update_existing,
             cleanup=cleanup,
+            enabled_mode=enabled_mode,
+            compare_fields=compare_fields,
         )
 
         for item in diff.to_create:
@@ -198,9 +220,16 @@ class InterfacesSyncMixin:
                 updates["description"] = intf.description
 
         if sync_cfg.is_field_enabled("enabled"):
-            # disabled = administratively down, error = err-disabled
-            # up/down = порт включён (down = нет линка, но порт активен)
-            enabled = intf.status not in ("disabled", "error")
+            # Режим определения enabled:
+            # "admin" - по административному статусу (up/down = enabled)
+            # "link" - по состоянию линка (только up = enabled)
+            enabled_mode = sync_cfg.get_option("enabled_mode", "admin")
+            if enabled_mode == "link":
+                # Только up = enabled, всё остальное = disabled
+                enabled = intf.status == "up"
+            else:
+                # admin: disabled/error = порт выключен, up/down = порт включён
+                enabled = intf.status not in ("disabled", "error")
             if enabled != nb_interface.enabled:
                 updates["enabled"] = enabled
 

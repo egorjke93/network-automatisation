@@ -59,6 +59,7 @@ class TestSyncEndpoint:
                 "create_devices": True,
                 "dry_run": True,
                 "site": "Office",
+                "async_mode": False,  # Sync mode for testing
             },
         )
         assert response.status_code == 200
@@ -103,6 +104,7 @@ class TestSyncEndpoint:
                 "devices": ["10.0.0.1"],
                 "interfaces": True,
                 "dry_run": False,
+                "async_mode": False,  # Sync mode for testing
             },
         )
         assert response.status_code == 200
@@ -146,6 +148,7 @@ class TestSyncEndpoint:
             json={
                 "devices": ["10.0.0.1"],
                 "cables": True,
+                "async_mode": False,  # Sync mode for testing
             },
         )
         assert response.status_code == 200
@@ -209,6 +212,7 @@ class TestSyncDiff:
                 "devices": ["10.0.0.1", "10.0.0.2"],
                 "create_devices": True,
                 "update_devices": True,
+                "async_mode": False,  # Sync mode for testing
             },
         )
         assert response.status_code == 200

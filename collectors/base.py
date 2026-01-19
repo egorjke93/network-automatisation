@@ -27,11 +27,14 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Type, TypeVar
+from typing import List, Dict, Any, Optional, Type, TypeVar, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # TypeVar для типизированных моделей
 T = TypeVar("T")
+
+# Callback для прогресса: (current_index, total, device_host, success)
+ProgressCallback = Callable[[int, int, str, bool], None]
 
 from ..core.device import Device, DeviceStatus
 from ..core.connection import ConnectionManager, get_ntc_platform
@@ -96,6 +99,8 @@ class BaseCollector(ABC):
         timeout_socket: int = 15,
         timeout_transport: int = 30,
         transport: str = "ssh2",
+        max_retries: int = 2,
+        retry_delay: int = 5,
         context: Optional[RunContext] = None,
     ):
         """
@@ -109,6 +114,8 @@ class BaseCollector(ABC):
             timeout_socket: Таймаут сокета
             timeout_transport: Таймаут транспорта
             transport: Тип транспорта
+            max_retries: Максимум повторных попыток при ошибке подключения
+            retry_delay: Задержка между попытками (секунды)
             context: Контекст выполнения (если None — использует глобальный)
         """
         self.credentials = credentials
@@ -118,11 +125,13 @@ class BaseCollector(ABC):
         self.ntc_fields = ntc_fields
         self.max_workers = max_workers
 
-        # Менеджер подключений
+        # Менеджер подключений с retry логикой
         self._conn_manager = ConnectionManager(
             timeout_socket=timeout_socket,
             timeout_transport=timeout_transport,
             transport=transport,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
         )
 
         # NTC парсер
@@ -178,6 +187,7 @@ class BaseCollector(ABC):
         self,
         devices: List[Device],
         parallel: bool = True,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> List[Dict[str, Any]]:
         """
         Собирает данные как словари (для экспортеров, pandas).
@@ -185,18 +195,24 @@ class BaseCollector(ABC):
         Args:
             devices: Список устройств
             parallel: Параллельный сбор
+            progress_callback: Callback для отслеживания прогресса
+                               (current_index, total, device_host, success)
 
         Returns:
             List[Dict]: Собранные данные со всех устройств
         """
         all_data = []
+        total = len(devices)
 
         if parallel and len(devices) > 1:
-            all_data = self._collect_parallel(devices)
+            all_data = self._collect_parallel(devices, progress_callback)
         else:
-            for device in devices:
+            for idx, device in enumerate(devices):
                 data = self._collect_from_device(device)
+                success = len(data) > 0
                 all_data.extend(data)
+                if progress_callback:
+                    progress_callback(idx + 1, total, device.host, success)
 
         logger.info(f"{self._log_prefix()}Собрано записей: {len(all_data)} с {len(devices)} устройств")
         return all_data
@@ -226,17 +242,24 @@ class BaseCollector(ABC):
             )
         return [self.model_class.from_dict(row) for row in data]
 
-    def _collect_parallel(self, devices: List[Device]) -> List[Dict[str, Any]]:
+    def _collect_parallel(
+        self,
+        devices: List[Device],
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> List[Dict[str, Any]]:
         """
         Параллельный сбор данных.
 
         Args:
             devices: Список устройств
+            progress_callback: Callback для отслеживания прогресса
 
         Returns:
             List[Dict]: Собранные данные
         """
         all_data = []
+        total = len(devices)
+        completed_count = 0
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
@@ -246,15 +269,22 @@ class BaseCollector(ABC):
 
             for future in as_completed(futures):
                 device = futures[future]
+                completed_count += 1
+                success = False
                 try:
                     data = future.result()
                     all_data.extend(data)
+                    success = len(data) > 0
                 except CollectorError as e:
                     # Наши типизированные ошибки — логируем с деталями
                     logger.error(f"{self._log_prefix()}Ошибка сбора с {device.host}: {format_error_for_log(e)}")
                 except Exception as e:
                     # Неизвестные ошибки — оборачиваем
                     logger.error(f"{self._log_prefix()}Неизвестная ошибка сбора с {device.host}: {e}")
+
+                # Вызываем callback после каждого устройства
+                if progress_callback:
+                    progress_callback(completed_count, total, device.host, success)
 
         return all_data
 

@@ -36,6 +36,7 @@ wheels/
 # Reports and outputs
 reports/
 backups/
+data/
 *.xlsx
 *.csv
 matched_data.xlsx

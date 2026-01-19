@@ -56,10 +56,10 @@
                     ▼                           ▼
 ┌───────────────────────────────┐ ┌───────────────────────────────────────────┐
 │        4a. EXPORTER           │ │              4b. NETBOX SYNC              │
-│      exporters/*.py           │ │            netbox/sync.py                 │
+│      exporters/*.py           │ │            netbox/sync/*.py               │
 │                               │ │                                           │
 │  ExcelExporter.export()       │ │  NetBoxSync.sync_cables_from_lldp()       │
-│  CSVExporter.export()         │ │       │                                   │
+│  CSVExporter.export()         │ │       │ (cables.py mixin)                 │
 │  JSONExporter.export()        │ │       ├── _find_device()                  │
 │                               │ │       ├── _find_interface()               │
 │       │                       │ │       ├── _find_neighbor_device()         │
@@ -74,7 +74,7 @@
 
 ### 1.1 Точка входа: CLI
 
-**Файл:** `cli.py`
+**Файл:** `cli/commands/collect.py`
 
 ```python
 # Команда: python -m network_collector lldp --protocol both --format excel
@@ -716,7 +716,7 @@ lldp:
 
 ### 4b.1 sync_cables_from_lldp()
 
-**Файл:** `netbox/sync.py`
+**Файл:** `netbox/sync/cables.py`
 
 ```python
 class NetBoxSync:
@@ -792,7 +792,7 @@ class NetBoxSync:
 
 ### 4b.2 _find_neighbor_device() — поиск соседа
 
-**Файл:** `netbox/sync.py`
+**Файл:** `netbox/sync/cables.py`
 
 ```python
 def _find_neighbor_device(self, entry: LLDPNeighbor):
@@ -841,7 +841,7 @@ def _find_neighbor_device(self, entry: LLDPNeighbor):
 
 ### 4b.3 _create_cable() — создание кабеля
 
-**Файл:** `netbox/sync.py`
+**Файл:** `netbox/sync/cables.py`
 
 ```python
 def _create_cable(self, interface_a, interface_b):
@@ -900,7 +900,7 @@ def _create_cable(self, interface_a, interface_b):
 ## Полная цепочка вызовов
 
 ```
-cli.py: cmd_lldp()
+cli/commands/collect.py: cmd_lldp()
     │
     ├── LLDPCollector(protocol="both")
     │       │
@@ -947,12 +947,13 @@ cli.py: cmd_lldp()
 
 | Файл | Роль |
 |------|------|
-| `cli.py` | Точка входа, команды CLI |
+| `cli/` | CLI модуль (модульная структура) |
+| `cli/commands/collect.py` | cmd_lldp команда |
 | `collectors/lldp.py` | Сбор и парсинг LLDP/CDP |
 | `collectors/base.py` | Базовый класс, TextFSM парсинг |
 | `parsers/textfsm_parser.py` | NTC Templates обёртка |
 | `core/domain/lldp.py` | Нормализация, merge |
 | `core/models.py` | Dataclass модели |
 | `exporters/*.py` | Экспорт в файлы |
-| `netbox/sync.py` | Синхронизация с NetBox |
+| `netbox/sync/*.py` | Синхронизация с NetBox (модули) |
 | `netbox/client.py` | API клиент NetBox |

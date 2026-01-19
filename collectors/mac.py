@@ -29,8 +29,10 @@ from ..core.connection import get_ntc_platform
 from ..core.logging import get_logger
 from ..core.domain import MACNormalizer
 from ..core.constants import (
+    COLLECTOR_COMMANDS,
     CUSTOM_TEXTFSM_TEMPLATES,
     ONLINE_PORT_STATUSES,
+    get_interface_aliases,
     normalize_interface_short,
     normalize_mac,
 )
@@ -71,29 +73,8 @@ class MACCollector(BaseCollector):
     # Типизированная модель
     model_class = MACEntry
 
-    # Команды для разных платформ
-    platform_commands = {
-        "cisco_ios": "show mac address-table",
-        "cisco_iosxe": "show mac address-table",
-        "cisco_nxos": "show mac address-table",
-        "arista_eos": "show mac address-table",
-        "juniper_junos": "show ethernet-switching table",
-        "juniper": "show ethernet-switching table",
-        "qtech": "show mac address-table",
-        "qtech_qsw": "show mac address-table",
-    }
-
-    # Маппинг полных имён интерфейсов к коротким
-    INTERFACE_MAP = {
-        "GigabitEthernet": "Gi",
-        "FastEthernet": "Fa",
-        "TenGigabitEthernet": "Te",
-        "TwentyFiveGigE": "Twe",
-        "FortyGigabitEthernet": "Fo",
-        "HundredGigE": "Hu",
-        "Ethernet": "Eth",
-        "Port-channel": "Po",
-    }
+    # Команды для разных платформ (из централизованного хранилища)
+    platform_commands = COLLECTOR_COMMANDS.get("mac", {})
 
     def __init__(
         self,
@@ -385,95 +366,17 @@ class MACCollector(BaseCollector):
         """
         Добавляет статус интерфейса во все возможные варианты имени.
 
-        Покрывает все возможные форматы интерфейсов:
-        - GigabitEthernet0/1, Gi0/1, Gig0/1
-        - FastEthernet0/1, Fa0/1
-        - TenGigabitEthernet0/1, Te0/1, Ten0/1
-        - Ethernet0/0, Et0/0, Eth0/0
-        - Port-channel1, Po1
+        Использует get_interface_aliases() для генерации всех возможных
+        форматов имени интерфейса (полное, короткое, альтернативные).
 
         Args:
             status_map: Словарь статусов
             iface: Имя интерфейса
             status: Статус
         """
-        # Убираем возможные пробелы в имени (Gi 0/1 -> Gi0/1)
-        iface = iface.replace(" ", "")
-        status_map[iface] = status
-
-        # Добавляем сокращённую версию
-        short_iface = normalize_interface_short(iface)
-        if short_iface != iface:
-            status_map[short_iface] = status
-
-        # Добавляем альтернативные сокращения для разных форматов
-        if iface.startswith("Ethernet"):
-            suffix = iface[8:]
-            status_map[f"Et{suffix}"] = status
-            status_map[f"Eth{suffix}"] = status
-        elif iface.startswith("GigabitEthernet"):
-            suffix = iface[15:]
-            status_map[f"Gi{suffix}"] = status
-            status_map[f"Gig{suffix}"] = status
-        elif iface.startswith("FastEthernet"):
-            suffix = iface[12:]
-            status_map[f"Fa{suffix}"] = status
-        elif iface.startswith("TenGigabitEthernet"):
-            suffix = iface[18:]
-            status_map[f"Te{suffix}"] = status
-            status_map[f"Ten{suffix}"] = status
-        elif iface.startswith("TwentyFiveGigE"):
-            suffix = iface[14:]
-            status_map[f"Twe{suffix}"] = status
-        elif iface.startswith("FortyGigabitEthernet"):
-            suffix = iface[20:]
-            status_map[f"Fo{suffix}"] = status
-        elif iface.startswith("HundredGigE"):
-            suffix = iface[11:]
-            status_map[f"Hu{suffix}"] = status
-        elif iface.startswith("Port-channel"):
-            suffix = iface[12:]
-            status_map[f"Po{suffix}"] = status
-        # Обратные маппинги (короткие -> полные)
-        elif iface.startswith("Gig"):
-            suffix = iface[3:]
-            status_map[f"GigabitEthernet{suffix}"] = status
-            status_map[f"Gi{suffix}"] = status
-        elif iface.startswith("Gi"):
-            suffix = iface[2:]
-            status_map[f"GigabitEthernet{suffix}"] = status
-            status_map[f"Gig{suffix}"] = status
-        elif iface.startswith("Fa"):
-            suffix = iface[2:]
-            status_map[f"FastEthernet{suffix}"] = status
-        elif iface.startswith("Ten"):
-            suffix = iface[3:]
-            status_map[f"TenGigabitEthernet{suffix}"] = status
-            status_map[f"Te{suffix}"] = status
-        elif iface.startswith("Te"):
-            suffix = iface[2:]
-            status_map[f"TenGigabitEthernet{suffix}"] = status
-            status_map[f"Ten{suffix}"] = status
-        elif iface.startswith("Eth"):
-            suffix = iface[3:]
-            status_map[f"Ethernet{suffix}"] = status
-            status_map[f"Et{suffix}"] = status
-        elif iface.startswith("Et"):
-            suffix = iface[2:]
-            status_map[f"Ethernet{suffix}"] = status
-            status_map[f"Eth{suffix}"] = status
-        elif iface.startswith("Twe"):
-            suffix = iface[3:]
-            status_map[f"TwentyFiveGigE{suffix}"] = status
-        elif iface.startswith("Fo"):
-            suffix = iface[2:]
-            status_map[f"FortyGigabitEthernet{suffix}"] = status
-        elif iface.startswith("Hu"):
-            suffix = iface[2:]
-            status_map[f"HundredGigE{suffix}"] = status
-        elif iface.startswith("Po"):
-            suffix = iface[2:]
-            status_map[f"Port-channel{suffix}"] = status
+        # Получаем все возможные варианты написания интерфейса
+        for alias in get_interface_aliases(iface):
+            status_map[alias] = status
 
     def _parse_interface_status_regex(self, output: str) -> Dict[str, str]:
         """
@@ -582,13 +485,8 @@ class MACCollector(BaseCollector):
                 if parts:
                     iface = parts[0]
                     if re.match(r"^(Gi|Fa|Te|Eth|Po)", iface, re.IGNORECASE):
-                        trunk_interfaces.add(iface)
-                        # Добавляем полное имя тоже
-                        for full, short in self.INTERFACE_MAP.items():
-                            if iface.startswith(short):
-                                full_iface = iface.replace(short, full, 1)
-                                trunk_interfaces.add(full_iface)
-                                break
+                        # Добавляем все возможные варианты написания
+                        trunk_interfaces.update(get_interface_aliases(iface))
 
         return trunk_interfaces
 

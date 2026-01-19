@@ -152,10 +152,10 @@ class TestPipelineCreate:
         # ID генерируется из имени
         assert "test_pipeline" in data["id"]
 
-    def test_create_pipeline_validation_error(self, client):
-        """Ошибка валидации при создании."""
-        invalid_data = {
-            "name": "Test",
+    def test_create_pipeline_sync_without_collect_allowed(self, client):
+        """Sync без collect допустим (auto-collect)."""
+        valid_data = {
+            "name": "Sync Only",
             "steps": [
                 {
                     "id": "sync_first",
@@ -167,10 +167,11 @@ class TestPipelineCreate:
                 },
             ],
         }
-        response = client.post("/api/pipelines", json=invalid_data)
-        # Sync шаг должен идти после collect
-        assert response.status_code == 400
-        assert "errors" in response.json()["detail"]
+        response = client.post("/api/pipelines", json=valid_data)
+        # Sync без collect теперь допустим - auto-collect выполнится автоматически
+        assert response.status_code == 201
+        data = response.json()
+        assert data["name"] == "Sync Only"
 
     def test_create_duplicate_pipeline(self, client, sample_pipeline_yaml):
         """Попытка создать pipeline с существующим ID."""
@@ -322,25 +323,25 @@ class TestPipelineValidate:
         response = client.post("/api/pipelines/nonexistent/validate")
         assert response.status_code == 404
 
-    def test_validate_invalid_pipeline(self, client, temp_pipelines_dir):
-        """Валидация невалидного pipeline."""
-        # Создаём невалидный pipeline (sync без collect)
+    def test_validate_valid_pipeline(self, client, temp_pipelines_dir):
+        """Валидация валидного pipeline (sync без collect допустим с auto-collect)."""
+        # sync без collect теперь допустим (auto-collect)
         yaml_content = """
-id: invalid
-name: Invalid Pipeline
+id: valid_sync
+name: Valid Sync Pipeline
 steps:
   - id: sync_first
     type: sync
     target: devices
     enabled: true
 """
-        (temp_pipelines_dir / "invalid.yaml").write_text(yaml_content)
+        (temp_pipelines_dir / "valid_sync.yaml").write_text(yaml_content)
 
-        response = client.post("/api/pipelines/invalid/validate")
+        response = client.post("/api/pipelines/valid_sync/validate")
         assert response.status_code == 200
         data = response.json()
-        assert data["valid"] is False
-        assert len(data["errors"]) > 0
+        assert data["valid"] is True
+        assert len(data["errors"]) == 0
 
 
 @pytest.mark.api
@@ -348,12 +349,13 @@ class TestPipelineRun:
     """Тесты для POST /api/pipelines/{id}/run."""
 
     def test_run_pipeline_dry_run(self, client_with_netbox, sample_pipeline_yaml):
-        """Запуск pipeline в dry-run режиме."""
+        """Запуск pipeline в dry-run режиме (sync mode)."""
         request_data = {
             "devices": [
                 {"host": "10.0.0.1", "platform": "cisco_ios"},
             ],
             "dry_run": True,
+            "async_mode": False,  # Sync mode для тестирования
         }
         response = client_with_netbox.post("/api/pipelines/sample/run", json=request_data)
         assert response.status_code == 200

@@ -147,6 +147,34 @@ def get_column_order(data_type: str) -> List[str]:
     return [display for _, display, _, _ in enabled_fields]
 
 
+def get_reverse_mapping(data_type: str) -> Dict[str, str]:
+    """
+    Возвращает обратный маппинг: display_name → field_name.
+
+    Используется для преобразования колонок Excel обратно в имена полей модели.
+    Маппинг НЕчувствителен к регистру (ключи приводятся к lowercase).
+
+    Args:
+        data_type: Тип данных (lldp, mac, devices, interfaces, inventory)
+
+    Returns:
+        Dict[str, str]: {display_name.lower(): field_name}
+
+    Пример для mac:
+        {"device": "hostname", "port": "interface", "mac address": "mac", ...}
+    """
+    fields_config = get_export_fields(data_type)
+    result = {}
+
+    for field_name, cfg in fields_config.items():
+        if isinstance(cfg, dict):
+            display_name = cfg.get("name", field_name)
+            # Ключ в lowercase для case-insensitive lookup
+            result[display_name.lower()] = field_name
+
+    return result
+
+
 # =============================================================================
 # SYNC CONFIG (для NetBox)
 # =============================================================================
@@ -226,3 +254,48 @@ def reload_config() -> None:
     global _config_cache
     _config_cache = None
     _load_yaml()
+
+
+# =============================================================================
+# VALIDATION (использует field_registry)
+# =============================================================================
+
+def validate_config(verbose: bool = False) -> List[str]:
+    """
+    Валидирует fields.yaml против моделей и реестра.
+
+    Проверяет:
+    - Все enabled поля существуют в моделях
+    - Sync source поля существуют в моделях
+    - Предупреждает о неизвестных полях
+
+    Args:
+        verbose: Выводить подробности
+
+    Returns:
+        List[str]: Список ошибок и предупреждений
+    """
+    try:
+        from .core.field_registry import validate_fields_config
+        return validate_fields_config()
+    except ImportError as e:
+        logger.warning(f"Cannot import field_registry: {e}")
+        return []
+
+
+def validate_on_load() -> None:
+    """
+    Валидирует конфигурацию при первой загрузке.
+
+    Вызывается автоматически если LOG_LEVEL=DEBUG или VALIDATE_FIELDS=1.
+    """
+    import os
+
+    # Проверяем нужна ли валидация
+    validate = os.environ.get("VALIDATE_FIELDS", "").lower() in ("1", "true", "yes")
+    debug = os.environ.get("LOG_LEVEL", "").upper() == "DEBUG"
+
+    if validate or debug:
+        errors = validate_config()
+        for err in errors:
+            logger.warning(f"fields.yaml: {err}")

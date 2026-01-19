@@ -54,21 +54,101 @@ tests/
 ├── fixtures/                      # Реальные выводы команд
 │   ├── cisco_ios/
 │   ├── cisco_nxos/
-│   ├── arista_eos/
-│   └── juniper_junos/
+│   ├── qtech/
+│   └── real_output/               # Реальные данные с устройств
+├── test_api/                      # Тесты REST API (132 теста)
+│   ├── test_auth.py               # Аутентификация
+│   ├── test_collectors.py         # API коллекторов
+│   ├── test_device_management.py  # Device Management API
+│   ├── test_health.py             # Health check
+│   ├── test_history_service.py    # History Service
+│   ├── test_integration.py        # Интеграционные тесты API
+│   ├── test_pipelines.py          # Pipeline API
+│   ├── test_sync.py               # Sync API
+│   └── test_tasks.py              # Tasks API (async mode)
+├── test_cli/                      # Тесты CLI
+│   ├── test_pipeline.py           # Pipeline команды
+│   └── test_sync_summary.py       # Sync summary
 ├── test_collectors/               # Тесты коллекторов
-├── test_netbox/                   # Тесты NetBox синхронизации
-├── test_parsers/                  # Тесты парсинга
-├── test_core/                     # Тесты core модулей
-│   ├── test_constants.py
-│   ├── test_config_schema.py
-│   └── test_domain/               # Тесты Domain Layer
+│   ├── test_lldp_parsing.py       # LLDP/CDP парсинг
+│   ├── test_port_type_detection.py # Определение типа порта
+│   └── test_switchport_mode.py    # Режимы switchport
+├── test_configurator/             # Тесты конфигуратора
+│   └── test_pusher_retry.py       # Retry логика Netmiko
 ├── test_contracts/                # Contract тесты
-├── test_integration/              # Интеграционные тесты
-└── test_e2e/                      # E2E тесты
+│   └── test_fields_contract.py    # Контракт fields.yaml ↔ Models
+├── test_core/                     # Тесты core модулей
+│   ├── test_config_schema.py      # Валидация config.yaml
+│   ├── test_connection_retry.py   # Retry логика Scrapli
+│   ├── test_constants.py          # Константы и маппинги
+│   ├── test_constants_extra.py    # Функции нормализации
+│   ├── test_context.py            # RunContext
+│   ├── test_credentials.py        # CredentialsManager
+│   ├── test_exceptions.py         # Custom exceptions
+│   ├── test_field_registry.py     # Field registry
+│   ├── test_fields_config.py      # fields_config.py
+│   ├── test_logging.py
+│   ├── test_models.py
+│   ├── test_domain/               # Тесты Domain Layer
+│   │   ├── test_interface_normalizer.py
+│   │   ├── test_inventory_normalizer.py
+│   │   ├── test_lldp_normalizer.py
+│   │   ├── test_lldp_real_data.py
+│   │   ├── test_mac_normalizer.py
+│   │   └── test_sync_comparator.py
+│   └── test_pipeline/             # Тесты Pipeline
+│       ├── test_executor.py
+│       ├── test_executor_integration.py
+│       └── test_models.py
+├── test_e2e/                      # E2E тесты
+│   ├── test_pipeline.py           # Pipeline E2E
+│   └── test_sync_pipeline.py      # Sync pipeline E2E
+├── test_exporters/                # Тесты экспорта
+│   ├── test_csv_exporter.py       # CSV экспорт
+│   ├── test_excel_exporter.py     # Excel экспорт
+│   ├── test_json_exporter.py      # JSON экспорт
+│   └── test_raw_exporter.py       # Raw JSON stdout
+├── test_fixes/                    # Регрессионные тесты
+│   ├── test_interface_enabled.py  # Bug fix: interface enabled
+│   ├── test_platform_mapping.py   # Platform mapping
+│   └── test_sync_preview.py       # Sync preview
+├── test_netbox/                   # Тесты NetBox синхронизации
+│   ├── test_diff.py               # DiffCalculator
+│   ├── test_interface_type_mapping.py
+│   ├── test_inventory_sync.py     # Inventory sync
+│   ├── test_sync_base.py          # SyncBase class
+│   ├── test_sync_integration.py   # Sync integration
+│   └── test_vlans_sync.py         # VLANs sync
+└── test_parsers/                  # Тесты парсинга
+    ├── test_interfaces.py
+    ├── test_inventory.py
+    ├── test_lldp.py               # LLDP/CDP парсинг
+    ├── test_mac.py
+    ├── test_nxos_enrichment.py
+    └── test_version.py
 ```
 
-### 2.2 Запуск тестов
+**Всего: 1334 теста, покрытие ~79%**
+
+### 2.2 Описание тестовых модулей
+
+| Модуль | Что тестируется |
+|--------|-----------------|
+| **test_api/** | REST API endpoints: аутентификация, коллекторы, пайплайны, async mode (Tasks API), history |
+| **test_cli/** | CLI команды: pipeline, sync summary |
+| **test_collectors/** | Парсинг данных с устройств: LLDP/CDP, switchport mode, port type detection |
+| **test_configurator/** | Отправка конфигурации на устройства: retry логика Netmiko |
+| **test_contracts/** | Контракт между fields.yaml и моделями данных |
+| **test_core/** | Core модули: config schema, constants, context, credentials, exceptions, logging, models |
+| **test_core/test_domain/** | Domain Layer: нормализаторы (interface, inventory, lldp, mac), sync comparator |
+| **test_core/test_pipeline/** | Pipeline: executor, models, интеграция |
+| **test_e2e/** | End-to-end тесты: pipeline, sync pipeline |
+| **test_exporters/** | Экспорт данных: CSV, Excel, JSON, Raw |
+| **test_fixes/** | Регрессионные тесты для исправленных багов |
+| **test_netbox/** | NetBox синхронизация: diff, inventory, interfaces, vlans, cables |
+| **test_parsers/** | TextFSM парсинг: interfaces, inventory, lldp, mac, version |
+
+### 2.3 Запуск тестов
 
 ```bash
 # Все тесты
@@ -165,6 +245,58 @@ def load_fixture():
         path = Path(__file__).parent / "fixtures" / platform / filename
         return path.read_text()
     return _load
+```
+
+### 2.6 Retry тесты
+
+Тесты для проверки retry логики при SSH подключениях.
+
+**Scrapli (ConnectionManager)** — `tests/test_core/test_connection_retry.py`:
+
+```python
+# 11 тестов:
+- test_connect_success_first_try      # Успешное подключение с первой попытки
+- test_connect_retry_on_timeout       # Retry при timeout
+- test_connect_no_retry_on_auth_error # НЕ retry при ошибке аутентификации
+- test_connect_max_retries_exceeded   # Превышение max_retries
+- test_connect_retry_delay_applied    # Проверка задержки между попытками
+- test_connect_success_after_retry    # Успех после retry
+- test_default_retry_values           # Дефолтные значения (2 попытки, 5 сек)
+- test_custom_retry_values            # Кастомные значения
+- test_connect_closes_on_failure      # Закрытие соединения при ошибке
+- test_retry_on_connection_refused    # Retry при connection refused
+- test_retry_on_socket_error          # Retry при socket error
+```
+
+**Netmiko (ConfigPusher)** — `tests/test_configurator/test_pusher_retry.py`:
+
+```python
+# 12 тестов:
+- test_dry_run_no_connection          # dry_run не подключается
+- test_push_success_first_try         # Успех с первой попытки
+- test_push_retry_on_timeout          # Retry при timeout
+- test_push_no_retry_on_auth_error    # НЕ retry при auth error
+- test_push_max_retries_exceeded      # Превышение лимита
+- test_push_retry_delay_applied       # Задержка между попытками
+- test_push_success_after_retry       # Успех после retry
+- test_default_retry_values           # Дефолтные значения
+- test_custom_retry_values            # Кастомные значения
+- test_save_config_called             # Вызов save_config
+- test_disconnect_called_on_success   # Отключение после успеха
+- test_disconnect_called_on_failure   # Отключение после ошибки
+```
+
+**Запуск retry тестов:**
+
+```bash
+# Все retry тесты
+pytest tests/test_core/test_connection_retry.py tests/test_configurator/test_pusher_retry.py -v
+
+# Только Scrapli
+pytest tests/test_core/test_connection_retry.py -v
+
+# Только Netmiko
+pytest tests/test_configurator/test_pusher_retry.py -v
 ```
 
 ---
@@ -300,7 +432,7 @@ python -m network_collector sync-netbox --interfaces --dry-run
 │    Результат: "10g-sfp+", "1g-rj45", "lag", "virtual"          │
 ├────────────────────────────────────────────────────────────────┤
 │ 2. Sync → NetBox type                                           │
-│    _get_interface_type() в netbox/sync.py                       │
+│    _get_interface_type() в netbox/sync/interfaces.py            │
 │    Результат: "10gbase-x-sfpp", "1000base-t", "lag"            │
 └────────────────────────────────────────────────────────────────┘
 ```

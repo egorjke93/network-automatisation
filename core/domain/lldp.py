@@ -28,9 +28,9 @@ KEY_MAPPING: Dict[str, str] = {
     "system_name": "remote_hostname",
     "device_id": "remote_hostname",
     # Порт соседа
-    # neighbor_port_id → remote_port (правильный порт из Port ID)
+    # ВАЖНО: neighbor_port_id обрабатывается ОТДЕЛЬНО в _normalize_row!
+    # Потому что может быть: Te1/1/3 (интерфейс), 0 (число), или MAC
     # neighbor_interface → port_description (это Port Description, НЕ порт!)
-    "neighbor_port_id": "remote_port",
     "neighbor_interface": "port_description",  # НЕ remote_port!
     "port_description": "port_description",
     # IP соседа
@@ -126,18 +126,21 @@ class LLDPNormalizer:
         # Применяем маппинг ключей
         for key, value in row.items():
             key_lower = key.lower()
-            # port_id обрабатываем отдельно (может быть MAC)
-            if key_lower == "port_id":
+            # port_id и neighbor_port_id обрабатываем отдельно
+            # Они могут быть: Te1/1/3 (интерфейс), 0 (число), или MAC
+            if key_lower in ("port_id", "neighbor_port_id"):
                 port_id_value = value
                 continue
             new_key = KEY_MAPPING.get(key_lower, key_lower)
             result[new_key] = value
 
         # Определяем remote_port с приоритетом:
-        # 1. remote_port (уже смаплен из neighbor_interface)
+        # 1. remote_port (уже смаплен из neighbor_port_id в TextFSM)
         # 2. port_id (если похож на интерфейс: Te/Gi/Fa/Et/Po)
-        # 3. port_description (если похож на интерфейс)
-        # 4. port_id (если не MAC) или port_description
+        # 3. port_description (ТОЛЬКО если похож на интерфейс!)
+        #
+        # ВАЖНО: remote_port должен быть ТОЛЬКО реальным именем порта!
+        # MAC-адреса и hostname'ы НЕ должны попадать в remote_port!
         if not result.get("remote_port"):
             port_desc = result.get("port_description", "")
 
@@ -151,20 +154,27 @@ class LLDPNormalizer:
                 elif self.is_mac_address(port_id_str):
                     if not result.get("remote_mac"):
                         result["remote_mac"] = port_id_str
-                    # port_description как fallback для remote_port
-                    if port_desc:
-                        result["remote_port"] = port_desc
-                # port_id не интерфейс и не MAC
-                else:
-                    # Если port_description — интерфейс, используем его
+                    # port_description как fallback ТОЛЬКО если это интерфейс!
                     if port_desc and self._is_interface_name(port_desc):
                         result["remote_port"] = port_desc
-                    # Иначе используем port_id как есть
+                    # Иначе remote_port остаётся пустым — это нормально
+                # port_id не интерфейс и не MAC (например, числовой port id "0", "3", "16")
+                else:
+                    # Если port_description — интерфейс, используем его (eth0, etc)
+                    if port_desc and self._is_interface_name(port_desc):
+                        result["remote_port"] = port_desc
+                    # Если port_id — число, используем port_description как fallback
+                    # Для экспорта лучше "100TX,RJ45." чем пусто
+                    elif port_id_str.isdigit():
+                        if port_desc and port_desc.lower() not in ("not advertised", "-", ""):
+                            result["remote_port"] = port_desc
+                    # Иначе используем port_id (возможно нестандартный интерфейс)
                     else:
                         result["remote_port"] = port_id_str
-            # Нет port_id — используем port_description
-            elif port_desc:
+            # Нет port_id — используем port_description ТОЛЬКО если это интерфейс
+            elif port_desc and self._is_interface_name(port_desc):
                 result["remote_port"] = port_desc
+            # Иначе remote_port остаётся пустым — это OK, лучше пусто чем неправильно
 
         # Определяем тип идентификации соседа
         result["neighbor_type"] = self.determine_neighbor_type(result)
@@ -253,6 +263,7 @@ class LLDPNormalizer:
             "gigabit", "tengig", "fasteth", "ethernet", "port-channel",  # Полные
             "mgmt", "vlan", "loopback", "lo", "null",  # Специальные
             "hundredgig", "fortygig", "twentyfivegig",  # Высокоскоростные
+            "eth", "swp", "ens", "enp",  # Linux/AP интерфейсы (eth0, swp1, ens192)
         )
 
         # Проверяем начинается ли с префикса интерфейса
@@ -286,11 +297,25 @@ class LLDPNormalizer:
             cdp_data: Нормализованные данные CDP
 
         Returns:
-            List[Dict]: Объединённые данные
+            List[Dict]: Объединённые данные с protocol="BOTH"
         """
+        # Если только CDP — помечаем как BOTH (пытались собрать оба)
         if not lldp_data:
+            for row in cdp_data:
+                row["protocol"] = "BOTH"
             return cdp_data
+
+        # Если только LLDP — помечаем как BOTH и пробуем извлечь platform
         if not cdp_data:
+            for row in lldp_data:
+                row["protocol"] = "BOTH"
+                # Пробуем извлечь platform из System Description
+                if not row.get("remote_platform"):
+                    platform = self._extract_platform_from_description(
+                        row.get("remote_description", "")
+                    )
+                    if platform:
+                        row["remote_platform"] = platform
             return lldp_data
 
         # Индекс LLDP по local_interface для поиска MAC
@@ -322,17 +347,77 @@ class LLDPNormalizer:
             result["protocol"] = "BOTH"
             merged.append(result)
 
+        # Индекс CDP по hostname для проверки уже обработанных
+        cdp_hostnames = set()
+        for cdp_row in cdp_data:
+            h = cdp_row.get("remote_hostname", "").lower().split(".")[0]
+            if h:
+                cdp_hostnames.add(h)
+
         # Добавляем LLDP соседей без CDP (например, не-Cisco устройства)
         for lldp_row in lldp_data:
             local_intf = normalize_interface_short(
                 lldp_row.get("local_interface", ""), lowercase=True
             )
-            if local_intf not in used_lldp_interfaces:
+            # Пропускаем уже обработанные (смерженные с CDP)
+            if local_intf and local_intf in used_lldp_interfaces:
+                continue
+
+            lldp_hostname = lldp_row.get("remote_hostname", "")
+            lldp_hostname_short = lldp_hostname.lower().split(".")[0]
+
+            # Пропускаем если этот hostname уже есть в CDP (уже обработан выше)
+            if lldp_hostname_short in cdp_hostnames:
+                continue
+
+            # LLDP без local_interface: пытаемся найти соответствие с CDP по hostname
+            if not local_intf:
+                # Ищем CDP запись с таким же hostname
+                for cdp_row in cdp_data:
+                    cdp_hostname = cdp_row.get("remote_hostname", "")
+                    # Сравниваем hostname (могут быть с/без домена)
+                    if self._hostnames_match(lldp_hostname, cdp_hostname):
+                        cdp_local = cdp_row.get("local_interface", "")
+                        if cdp_local:
+                            # Нашли! Берём local_interface из CDP
+                            result = dict(lldp_row)
+                            result["local_interface"] = cdp_local
+                            # Также берём другие поля из CDP если нужно
+                            if not result.get("remote_port"):
+                                result["remote_port"] = cdp_row.get("remote_port", "")
+                            if not result.get("remote_platform"):
+                                result["remote_platform"] = cdp_row.get("remote_platform", "")
+                            result["protocol"] = "BOTH"
+                            merged.append(result)
+                            break
+                else:
+                    # Не нашли соответствие - добавляем как есть
+                    lldp_row = dict(lldp_row)
+                    lldp_row["protocol"] = "BOTH"
+                    merged.append(lldp_row)
+            else:
+                # LLDP с local_interface, но без CDP соответствия
                 lldp_row = dict(lldp_row)
                 lldp_row["protocol"] = "BOTH"
                 merged.append(lldp_row)
 
         return merged
+
+    def _hostnames_match(self, hostname1: str, hostname2: str) -> bool:
+        """
+        Сравнивает hostname'ы с учётом доменов.
+
+        switch-01.corp.domain.ru == switch-01
+        """
+        if not hostname1 or not hostname2:
+            return False
+        # Убираем placeholders типа [MAC:...]
+        if hostname1.startswith("[") or hostname2.startswith("["):
+            return False
+        # Сравниваем короткие имена (без домена)
+        h1 = hostname1.lower().split(".")[0]
+        h2 = hostname2.lower().split(".")[0]
+        return h1 == h2
 
     def _merge_cdp_with_lldp(
         self,
@@ -404,3 +489,53 @@ class LLDPNormalizer:
             row for row in data
             if row.get("local_interface", "").lower() in interfaces_lower
         ]
+
+    def _extract_platform_from_description(self, description: str) -> str:
+        """
+        Извлекает платформу из LLDP System Description.
+
+        LLDP System Description часто содержит информацию о платформе:
+        - "Cisco IOS Software, C9200L Software..."
+        - "Arista Networks EOS version 4.25.0F"
+        - "Juniper Networks, Inc. ex4300-48p"
+
+        Args:
+            description: LLDP System Description
+
+        Returns:
+            str: Платформа или пустая строка
+        """
+        if not description:
+            return ""
+
+        desc_lower = description.lower()
+
+        # Cisco паттерны
+        cisco_patterns = [
+            (r"cisco\s+ios.*?,\s*(\S+)\s+software", 1),  # "Cisco IOS Software, C9200L Software"
+            (r"cisco\s+(\S+)", 1),  # "Cisco WS-C2960X-48FPS-L"
+            (r"catalyst\s+(\S+)", 1),  # "Catalyst 9200L"
+        ]
+
+        for pattern, group in cisco_patterns:
+            match = re.search(pattern, description, re.IGNORECASE)
+            if match:
+                platform = match.group(group).strip()
+                # Убираем лишние символы
+                platform = re.sub(r"[,;]$", "", platform)
+                if platform and len(platform) > 2:
+                    return f"cisco {platform}"
+
+        # Arista
+        if "arista" in desc_lower:
+            match = re.search(r"arista\s+networks?\s+(\S+)", description, re.IGNORECASE)
+            if match:
+                return f"Arista {match.group(1)}"
+
+        # Juniper
+        if "juniper" in desc_lower:
+            match = re.search(r"juniper.*?(\S+-\S+)", description, re.IGNORECASE)
+            if match:
+                return f"Juniper {match.group(1)}"
+
+        return ""

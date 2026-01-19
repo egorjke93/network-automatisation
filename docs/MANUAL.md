@@ -452,6 +452,7 @@ python -m network_collector sync-netbox [опции]
   --cleanup-interfaces       Удалить интерфейсы которых нет на устройстве
   --cleanup-ips              Удалить IP-адреса которых нет на устройстве
   --cleanup-cables           Удалить кабели которых нет в LLDP/CDP
+  --cleanup-inventory        Удалить inventory items которых нет на устройстве
   --update-ips               Обновить существующие IP-адреса
 
 # Параметры:
@@ -476,7 +477,7 @@ python -m network_collector sync-netbox [опции]
 | **IP Address** | `--ip-addresses` | Всегда | `--update-ips` | `--cleanup-ips` |
 | **Cable** | `--cables` | Проверка наличия | ❌ Нет | `--cleanup-cables` |
 | **VLAN** | `--vlans` | Проверка наличия | ❌ Нет | ❌ Нет |
-| **Inventory** | `--inventory` | Всегда | `--inventory` (автоматически) | ❌ Нет |
+| **Inventory** | `--inventory` | Всегда | `--inventory` (manufacturer по PID) | `--cleanup-inventory` |
 
 #### Детальный расклад по сущностям
 
@@ -521,7 +522,12 @@ sync:
     options:
       update_existing: true    # ← Включает UPDATE
       auto_detect_type: true   # Автоопределение типа
+      enabled_mode: "admin"    # Режим определения enabled
 ```
+
+**enabled_mode опции:**
+- `"admin"` — по административному статусу: up/down = enabled, disabled = disabled
+- `"link"` — по состоянию линка: только up = enabled, down = disabled
 
 ##### IP Addresses
 
@@ -581,12 +587,17 @@ sync-netbox --cables --cleanup-cables --dry-run
 
 ##### Inventory Items
 
-| Операция | Условие | Поля |
-|----------|---------|------|
-| **CREATE** | Компонент не существует | name, part_id, serial, description |
-| **UPDATE** | Компонент существует + поля отличаются | part_id, serial, description |
-| **DELETE** | ❌ Не реализовано | — |
-| **SKIP** | Нет серийного номера | Пропуск |
+| Операция | Флаг | Поля |
+|----------|------|------|
+| **CREATE** | `--inventory` | name, part_id, serial, description, manufacturer |
+| **UPDATE** | `--inventory` | part_id, serial, description, manufacturer |
+| **DELETE** | `--cleanup-inventory` | Удаляет items которых нет на устройстве |
+| **SKIP** | — | Если нет серийного номера |
+
+**Manufacturer логика:**
+- Определяется **автоматически по PID** (Product ID), не по платформе устройства
+- Паттерны: `WS-`, `C9`, `SFP-` → Cisco; `DCS-` → Arista; `FINISAR` → Finisar
+- Если PID не распознан → manufacturer **пустой** (очищается в NetBox)
 
 ### 4.3 Флаг --update-devices детально
 
@@ -673,14 +684,15 @@ sync-netbox --ip-addresses
 | UPDATE кабелей | ❌ | Обновление типа кабеля |
 | UPDATE VLAN | ❌ | Обновление имени VLAN |
 | DELETE VLAN | ❌ | Удаление неиспользуемых VLAN |
-| DELETE Inventory | ❌ | Удаление модулей которых нет на устройстве |
 | Sync untagged/tagged VLANs | ❌ | Привязка VLAN к интерфейсам |
 
 **Реализовано:**
 - ✅ `--cleanup-interfaces` — удаление интерфейсов которых нет на устройстве
 - ✅ `--cleanup-ips` — удаление IP-адресов которых нет на устройстве
 - ✅ `--cleanup-cables` — удаление кабелей при изменении топологии
+- ✅ `--cleanup-inventory` — удаление inventory items которых нет на устройстве
 - ✅ `--update-ips` — обновление существующих IP-адресов
+- ✅ `enabled_mode` — конфигурируемая логика enabled для интерфейсов
 
 ### 4.8 Порядок выполнения --sync-all
 
@@ -727,6 +739,7 @@ python -m network_collector sync-netbox \
     --interfaces --cleanup-interfaces \
     --ip-addresses --update-ips --cleanup-ips \
     --cables --cleanup-cables \
+    --inventory --cleanup-inventory \
     --site "Office" --dry-run
 ```
 
@@ -940,23 +953,111 @@ options:
 
 ### 5.5 Использование Pipeline через Web UI
 
-1. Открыть http://localhost:8080 (API) и http://localhost:5173 (Frontend)
+1. Открыть http://localhost:8000 (API) и http://localhost:5173 (Frontend)
 2. Перейти в раздел "Pipelines"
 3. Создать/редактировать pipeline через UI
 4. Нажать "Run Pipeline"
 5. Выбрать устройства и режим (dry-run / real)
 
-### 5.6 Использование Pipeline через API
+### 5.6 Использование Pipeline через CLI
+
+```bash
+# Список всех pipelines
+python -m network_collector pipeline list
+python -m network_collector pipeline list --format json
+
+# Показать детали pipeline
+python -m network_collector pipeline show default
+python -m network_collector pipeline show default --format json
+
+# Валидировать pipeline
+python -m network_collector pipeline validate default
+
+# Запустить pipeline (dry-run по умолчанию)
+python -m network_collector pipeline run default
+python -m network_collector pipeline run default --dry-run
+
+# Запустить pipeline с применением изменений
+python -m network_collector pipeline run default --apply
+
+# Переопределить NetBox настройки
+python -m network_collector pipeline run default --apply \
+  --netbox-url http://netbox:8000 \
+  --netbox-token your-token
+
+# Создать pipeline из YAML файла
+python -m network_collector pipeline create my_pipeline.yaml
+python -m network_collector pipeline create my_pipeline.yaml --force
+
+# Удалить pipeline
+python -m network_collector pipeline delete my_pipeline
+python -m network_collector pipeline delete my_pipeline --force
+```
+
+**Пример вывода `pipeline list`:**
+
+```
+ID                   Name                      Steps   Enabled  Description
+--------------------------------------------------------------------------------
+default              Full Sync                 6       ✓        Полная синхронизация с NetBox...
+
+Total: 1 pipeline(s)
+```
+
+**Пример вывода `pipeline show default`:**
+
+```
+============================================================
+Pipeline: Full Sync
+============================================================
+ID:          default
+Description: Полная синхронизация с NetBox: устройства, интерфейсы, кабели
+Enabled:     Yes
+Steps:       6
+
+Steps:
+------------------------------------------------------------
+  1. [✓] collect_devices
+      Type: collect, Target: devices
+  2. [✓] sync_devices
+      Type: sync, Target: devices (depends: collect_devices)
+      Options: create=True, update=True
+  ...
+============================================================
+```
+
+**Пример вывода `pipeline run`:**
+
+```
+Running pipeline: Full Sync
+Devices: 10
+Dry-run: True
+----------------------------------------
+  ► collect_devices...
+  ✓ collect_devices (1250ms)
+  ► sync_devices...
+  ✓ sync_devices (350ms)
+  ...
+
+============================================================
+Pipeline Run Result: default
+============================================================
+Status: ✓ COMPLETED
+Duration: 5230ms
+============================================================
+```
+
+### 5.7 Использование Pipeline через API
 
 ```bash
 # Список pipelines
-curl http://localhost:8080/api/pipelines
+curl http://localhost:8000/api/pipelines
 
 # Получить pipeline
-curl http://localhost:8080/api/pipelines/full_sync
+curl http://localhost:8000/api/pipelines/full_sync
 
 # Запустить pipeline
-curl -X POST http://localhost:8080/api/pipelines/full_sync/run \
+curl -X POST http://localhost:8000/api/pipelines/full_sync/run \
   -H "Content-Type: application/json" \
   -H "X-SSH-Username: admin" \
   -H "X-SSH-Password: admin" \
@@ -971,10 +1072,10 @@ curl -X POST http://localhost:8080/api/pipelines/full_sync/run \
   }'
 
 # Валидировать pipeline
-curl -X POST http://localhost:8080/api/pipelines/full_sync/validate
+curl -X POST http://localhost:8000/api/pipelines/full_sync/validate
 
 # Создать pipeline
-curl -X POST http://localhost:8080/api/pipelines \
+curl -X POST http://localhost:8000/api/pipelines \
   -H "Content-Type: application/json" \
   -d '{
     "name": "My Pipeline",
@@ -985,7 +1086,7 @@ curl -X POST http://localhost:8080/api/pipelines \
   }'
 ```
 
-### 5.7 Результат выполнения Pipeline
+### 5.8 Результат выполнения Pipeline
 
 ```json
 {
@@ -1023,11 +1124,109 @@ Network Collector имеет Web интерфейс для удобного уп
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │  Frontend   │────▶│   Backend   │────▶│   Devices   │
 │  (Vue.js)   │     │  (FastAPI)  │     │   NetBox    │
-│  :5173      │     │   :8080     │     │             │
+│  :5173      │     │   :8000     │     │             │
 └─────────────┘     └─────────────┘     └─────────────┘
 ```
 
-### 6.2 Запуск Web интерфейса
+### 6.2 Конфигурация портов
+
+**ВАЖНО:** Frontend и Backend должны быть согласованы по портам!
+
+| Компонент | Порт по умолчанию | Где менять |
+|-----------|-------------------|------------|
+| **Backend (FastAPI)** | 8000 | Параметр `--port` при запуске uvicorn |
+| **Frontend (Vite)** | 5173 | `frontend/vite.config.js` → `server.port` |
+| **Proxy target** | 8000 | `frontend/vite.config.js` → `server.proxy.target` |
+
+#### Файлы конфигурации портов
+
+**1. Backend порт** — при запуске uvicorn:
+
+```bash
+# Стандартный порт 8000
+uvicorn network_collector.api.main:app --host 0.0.0.0 --port 8000
+
+# Другой порт (например 8080)
+uvicorn network_collector.api.main:app --host 0.0.0.0 --port 8080
+```
+
+**2. Frontend порт и proxy** — `frontend/vite.config.js`:
+
+```javascript
+// frontend/vite.config.js
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    port: 5173,              // ← Порт frontend (dev server)
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',  // ← ДОЛЖЕН совпадать с портом backend!
+        changeOrigin: true,
+      },
+      '/health': {
+        target: 'http://localhost:8000',  // ← ДОЛЖЕН совпадать с портом backend!
+        changeOrigin: true,
+      },
+    },
+  },
+})
+```
+
+#### Как изменить порты
+
+**Сценарий 1: Изменить порт backend на 8080**
+
+```bash
+# 1. Запустить backend на порту 8080
+uvicorn network_collector.api.main:app --host 0.0.0.0 --port 8080
+
+# 2. Изменить vite.config.js:
+#    target: 'http://localhost:8080'
+
+# 3. Перезапустить frontend
+npm run dev
+```
+
+**Сценарий 2: Изменить порт frontend на 3000**
+
+```javascript
+// vite.config.js
+server: {
+  port: 3000,  // Изменить на 3000
+  ...
+}
+```
+
+```bash
+npm run dev
+# Открыть http://localhost:3000
+```
+
+#### Типичные ошибки
+
+| Симптом | Причина | Решение |
+|---------|---------|---------|
+| "Загрузка..." вечно висит | Proxy указывает на неправильный порт | Проверить `target` в vite.config.js |
+| CORS ошибки в консоли | Frontend обращается напрямую к backend | Убедиться что запросы идут через `/api/...` |
+| 404 на API запросах | Backend не запущен или на другом порту | Проверить что backend запущен на том же порту что в proxy |
+
+#### Проверка работоспособности
+
+```bash
+# 1. Проверить backend
+curl http://localhost:8000/health
+# Ожидаем: {"status":"ok",...}
+
+# 2. Проверить proxy (через frontend)
+curl http://localhost:5173/api/device-management/stats
+# Ожидаем: {"total":...}
+
+# 3. Если proxy не работает — запросы не проксируются
+curl http://localhost:5173/api/health
+# Если 404 — проверить vite.config.js
+```
+
+### 6.3 Запуск Web интерфейса
 
 **Backend (FastAPI):**
 
@@ -1035,11 +1234,11 @@ Network Collector имеет Web интерфейс для удобного уп
 cd /home/sa/project
 source network_collector/myenv/bin/activate
 
-# Запуск с hot-reload (для разработки)
-uvicorn network_collector.api.main:app --reload --host 0.0.0.0 --port 8080
+# ВАЖНО: Запускать из /home/sa/project с PYTHONPATH!
+PYTHONPATH=/home/sa/project uvicorn network_collector.api.main:app --reload --host 0.0.0.0 --port 8000
 
-# Запуск для продакшена
-uvicorn network_collector.api.main:app --host 0.0.0.0 --port 8080 --workers 4
+# Или для продакшена
+PYTHONPATH=/home/sa/project uvicorn network_collector.api.main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
 **Frontend (Vue.js):**
@@ -1059,12 +1258,13 @@ npm run build
 # Результат в dist/
 ```
 
-### 6.3 Страницы Web UI
+### 6.4 Страницы Web UI
 
 | Страница | URL | Описание |
 |----------|-----|----------|
 | Home | `/` | Главная страница |
 | Credentials | `/credentials` | Настройка учётных данных SSH и NetBox |
+| Device Management | `/device-management` | CRUD устройств, импорт из NetBox |
 | Devices | `/devices` | Сбор инвентаризации устройств |
 | MAC Table | `/mac` | Сбор MAC-адресов |
 | LLDP/CDP | `/lldp` | Сбор соседей |
@@ -1073,8 +1273,9 @@ npm run build
 | Backup | `/backup` | Резервное копирование конфигураций |
 | Sync NetBox | `/sync` | Синхронизация с NetBox |
 | Pipelines | `/pipelines` | Управление конвейерами |
+| History | `/history` | Журнал операций |
 
-### 6.4 Настройка Credentials
+### 6.5 Настройка Credentials
 
 1. Перейти в `/credentials`
 2. Ввести SSH credentials (username/password)
@@ -1083,7 +1284,7 @@ npm run build
 
 Credentials хранятся в сессии и передаются в каждый запрос через headers.
 
-### 6.5 Использование Pipelines через UI
+### 6.6 Использование Pipelines через UI
 
 **Создание Pipeline:**
 1. Перейти в `/pipelines`
@@ -1105,13 +1306,115 @@ Credentials хранятся в сессии и передаются в кажд
 - Время выполнения
 - Ошибки (если есть)
 
+### 6.7 Device Management
+
+Страница `/device-management` позволяет управлять списком устройств:
+
+**Функции:**
+- Просмотр всех устройств с фильтрацией
+- Добавление/редактирование/удаление устройств
+- Включение/выключение устройств (enabled)
+- Импорт из NetBox
+- Импорт из JSON/Python файлов
+
+**Импорт из NetBox:**
+1. Нажать "Import from NetBox"
+2. Указать URL и Token (если не заданы в Credentials)
+3. Выбрать фильтры (site, role, status)
+4. Нажать Import
+
+**Поля устройства:**
+
+| Поле | Описание |
+|------|----------|
+| host | IP-адрес (обязательно) |
+| device_type | Платформа (cisco_ios, cisco_nxos, etc.) |
+| name | Имя устройства |
+| site | Сайт NetBox |
+| role | Роль (switch, router, etc.) |
+| enabled | Включено в сбор данных |
+
+### 6.8 Progress Bar и Async Mode
+
+При сборе данных отображается progress bar с real-time обновлениями:
+
+```
+[████████░░░░░░░░░░░░] 40%
+Обработка 10.0.0.5 (4/10)
+```
+
+**Как это работает:**
+1. Web UI отправляет запрос с `async_mode: true`
+2. API сразу возвращает `task_id`
+3. Сбор выполняется в фоне
+4. Frontend поллит `/api/tasks/{id}` каждые 500ms
+5. После завершения результаты доступны в `task.result.data`
+
+**Статусы задачи:**
+
+| Статус | Описание |
+|--------|----------|
+| `pending` | Ожидание запуска |
+| `running` | Выполняется |
+| `completed` | Успешно завершена |
+| `failed` | Ошибка |
+
+### 6.9 History (Журнал операций)
+
+Страница `/history` показывает историю всех операций:
+
+**Функции:**
+- Статистика: всего операций, за 24 часа, успешных, ошибок
+- Фильтры по типу операции (devices, mac, sync, pipeline и др.) и статусу
+- Пагинация по истории
+- Очистка истории
+
+**Детали операций:**
+
+Для каждой операции показываются **полные детали без ограничений**:
+
+| Тип операции | Что показывается |
+|--------------|------------------|
+| **Pipeline** | Статистика по каждому шагу: created/updated/deleted/skipped |
+| **Sync** | Полный diff всех изменений (create/update/delete) |
+| **Collect** | Количество собранных записей, устройства |
+
+**Детали для Pipeline:**
+```
+Step: sync_interfaces
+  Created: +15
+  Updated: ~3
+  Skipped: =10
+
+  Создано: Gi0/1, Gi0/2, ...
+  Обновлено: Gi0/3 [description, enabled]
+```
+
+**Детали для Sync (diff):**
+```
+Изменения (26):
+  [create] interface Gi0/10 @ switch-01
+  [update] ip_address 10.0.0.1/24 (interface) @ switch-01
+  [create] primary_ip 10.0.0.1/24 @ switch-01
+  [delete] cable Gi0/5 - Gi0/6
+```
+
+**IP адреса с PRIMARY флагом:**
+- При синхронизации IP адресов показывается метка `[PRIMARY]` для primary IP устройства
+- Пример: `10.0.0.1/24 (Vlan10) [PRIMARY]`
+
+**Хранение истории:**
+- Файл: `data/history.json`
+- Максимум: 1000 записей (старые удаляются автоматически)
+- История записывается только для реальных операций (не dry-run)
+
 ---
 
 ## 7. REST API
 
 Полная документация API доступна по адресам:
-- Swagger UI: http://localhost:8080/docs
-- ReDoc: http://localhost:8080/redoc
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
 
 ### 7.1 Аутентификация
 
@@ -1126,20 +1429,56 @@ X-NetBox-Token: your-token
 
 ### 7.2 Endpoints
 
+**Общие:**
+
 | Method | Endpoint | Описание |
 |--------|----------|----------|
 | GET | `/health` | Проверка состояния API |
 | POST | `/api/auth/credentials` | Установить credentials |
 | GET | `/api/auth/credentials/status` | Проверить credentials |
-| POST | `/api/devices` | Сбор инвентаризации |
-| POST | `/api/mac` | Сбор MAC-адресов |
-| POST | `/api/lldp` | Сбор LLDP/CDP |
-| POST | `/api/interfaces` | Сбор интерфейсов |
-| POST | `/api/inventory` | Сбор модулей |
-| POST | `/api/backup` | Резервное копирование |
+
+**Сбор данных (поддерживают async_mode):**
+
+| Method | Endpoint | Описание |
+|--------|----------|----------|
+| POST | `/api/devices/collect` | Сбор инвентаризации |
+| POST | `/api/mac/collect` | Сбор MAC-адресов |
+| POST | `/api/lldp/collect` | Сбор LLDP/CDP |
+| POST | `/api/interfaces/collect` | Сбор интерфейсов |
+| POST | `/api/inventory/collect` | Сбор модулей |
+| POST | `/api/backup/run` | Резервное копирование |
+
+**Синхронизация:**
+
+| Method | Endpoint | Описание |
+|--------|----------|----------|
 | POST | `/api/sync` | Синхронизация с NetBox |
 | POST | `/api/match` | Сопоставление MAC |
 | POST | `/api/push` | Push описаний |
+
+**Device Management:**
+
+| Method | Endpoint | Описание |
+|--------|----------|----------|
+| GET | `/api/devices` | Список устройств |
+| POST | `/api/devices` | Добавить устройство |
+| PUT | `/api/devices/{host}` | Обновить устройство |
+| DELETE | `/api/devices/{host}` | Удалить устройство |
+| POST | `/api/devices/import/netbox` | Импорт из NetBox |
+| POST | `/api/devices/import/json` | Импорт из JSON |
+
+**Tasks (async operations):**
+
+| Method | Endpoint | Описание |
+|--------|----------|----------|
+| GET | `/api/tasks` | Список задач |
+| GET | `/api/tasks/{id}` | Статус задачи |
+| DELETE | `/api/tasks/{id}` | Отменить задачу |
+
+**Pipelines:**
+
+| Method | Endpoint | Описание |
+|--------|----------|----------|
 | GET | `/api/pipelines` | Список pipelines |
 | GET | `/api/pipelines/{id}` | Получить pipeline |
 | POST | `/api/pipelines` | Создать pipeline |
@@ -1148,12 +1487,75 @@ X-NetBox-Token: your-token
 | POST | `/api/pipelines/{id}/run` | Запустить pipeline |
 | POST | `/api/pipelines/{id}/validate` | Валидировать pipeline |
 
-### 7.3 Примеры запросов
+**History:**
 
-**Сбор устройств:**
+| Method | Endpoint | Описание |
+|--------|----------|----------|
+| GET | `/api/history/` | История операций (с пагинацией) |
+| GET | `/api/history/stats` | Статистика (всего, за 24ч, по статусам) |
+| DELETE | `/api/history/` | Очистить всю историю |
+
+**Параметры `/api/history/`:**
+- `limit` — количество записей (по умолчанию 50)
+- `offset` — смещение для пагинации
+- `operation` — фильтр по типу (devices, mac, sync, pipeline:default)
+- `status` — фильтр по статусу (success, error, partial)
+
+### 7.3 Async Mode
+
+Все эндпоинты сбора данных поддерживают `async_mode`:
+
+```json
+// Запрос
+{
+  "devices": ["10.0.0.1", "10.0.0.2"],
+  "async_mode": true
+}
+
+// Ответ (сразу)
+{
+  "success": true,
+  "task_id": "abc12345"
+}
+```
+
+Затем опрашиваем статус:
 
 ```bash
-curl -X POST http://localhost:8080/api/devices \
+curl http://localhost:8000/api/tasks/abc12345
+```
+
+```json
+{
+  "id": "abc12345",
+  "status": "running",
+  "progress_percent": 50,
+  "current_item": 5,
+  "total_items": 10,
+  "message": "Обработка 10.0.0.5 (5/10)"
+}
+```
+
+После завершения:
+
+```json
+{
+  "id": "abc12345",
+  "status": "completed",
+  "progress_percent": 100,
+  "result": {
+    "total": 10,
+    "data": [...]
+  }
+}
+```
+
+### 7.4 Примеры запросов
+
+**Сбор устройств (sync):**
+
+```bash
+curl -X POST http://localhost:8000/api/devices/collect \
   -H "Content-Type: application/json" \
   -H "X-SSH-Username: admin" \
   -H "X-SSH-Password: admin" \
@@ -1162,10 +1564,23 @@ curl -X POST http://localhost:8080/api/devices \
   }'
 ```
 
+**Сбор устройств (async):**
+
+```bash
+curl -X POST http://localhost:8000/api/devices/collect \
+  -H "Content-Type: application/json" \
+  -H "X-SSH-Username: admin" \
+  -H "X-SSH-Password: admin" \
+  -d '{
+    "devices": ["10.0.0.1", "10.0.0.2"],
+    "async_mode": true
+  }'
+```
+
 **Синхронизация с NetBox:**
 
 ```bash
-curl -X POST http://localhost:8080/api/sync \
+curl -X POST http://localhost:8000/api/sync \
   -H "Content-Type: application/json" \
   -H "X-SSH-Username: admin" \
   -H "X-SSH-Password: admin" \
@@ -1179,7 +1594,33 @@ curl -X POST http://localhost:8080/api/sync \
   }'
 ```
 
-### 7.4 Коды ответов
+**Device Management:**
+
+```bash
+# Получить список устройств
+curl http://localhost:8000/api/devices
+
+# Добавить устройство
+curl -X POST http://localhost:8000/api/devices \
+  -H "Content-Type: application/json" \
+  -d '{
+    "host": "10.0.0.1",
+    "device_type": "cisco_ios",
+    "name": "switch-01"
+  }'
+
+# Импорт из NetBox
+curl -X POST http://localhost:8000/api/devices/import/netbox \
+  -H "Content-Type: application/json" \
+  -H "X-NetBox-URL: http://netbox:8000" \
+  -H "X-NetBox-Token: your-token" \
+  -d '{
+    "site": "Office",
+    "status": "active"
+  }'
+```
+
+### 7.5 Коды ответов
 
 | Код | Описание |
 |-----|----------|

@@ -155,35 +155,42 @@ devices:
     name: "Uptime"
     order: 6
 
-  # Поля по умолчанию (отключены)
-  name:
-    enabled: false
-    name: "Name"
-    order: 10
+  # Дополнительные парсируемые поля
   manufacturer:
-    enabled: false
+    enabled: true
     name: "Manufacturer"
     order: 11
   platform:
-    enabled: false
+    enabled: true
     name: "Platform"
     order: 12
+
+  # Поля для CSV-экспорта → импорта в NetBox (не парсятся, заполняются default)
+  name:
+    enabled: false
+    name: "Name"
+    order: 20
+    default: ""  # Будет hostname если пусто
   status:
     enabled: false
     name: "Status"
-    order: 13
+    order: 21
+    default: "active"
   site:
     enabled: false
     name: "Site"
-    order: 14
+    order: 22
+    default: "SU"
   role:
     enabled: false
     name: "Role"
-    order: 15
+    order: 23
+    default: "Switch"
   tenant:
     enabled: false
     name: "Tenant"
-    order: 16
+    order: 24
+    default: "Отдел ОИТ"
 
 # -----------------------------------------------------------------------------
 # Интерфейсы (python -m network_collector interfaces)
@@ -313,7 +320,7 @@ inventory:
     name: "Description"
     order: 7
   manufacturer:
-    enabled: false
+    enabled: true
     name: "Manufacturer"
     order: 8
 
@@ -340,6 +347,9 @@ sync:
       platform:
         enabled: true
         source: platform
+      manufacturer:
+        enabled: true
+        source: manufacturer  # из DeviceInfo.manufacturer (парсится из vendor)
       asset_tag:
         enabled: true
         source: asset_tag
@@ -395,9 +405,17 @@ sync:
       create_missing: true
       update_existing: true
       auto_detect_type: true  # Определять тип по hardware_type/media_type/speed
+      # Режим определения enabled для интерфейсов:
+      # "admin" - по административному статусу:
+      #           up/down = enabled (порт включён, down = нет линка)
+      #           disabled/error = disabled (порт выключен администратором)
+      # "link"  - по состоянию линка:
+      #           up = enabled (есть соединение)
+      #           down/disabled/error = disabled (нет соединения)
+      enabled_mode: "admin"
       # Исключить интерфейсы из синхронизации (regex паттерны)
       exclude_interfaces:
-        - "^Vlan1$"         # Vlan1 (дефолтный VLAN)
+        #- "^Vlan1$"          # Vlan1 (дефолтный VLAN)
         - "^Null\\d+"       # Null интерфейсы
       # MAC-адрес только на интерфейсы с IP (L3)
       # Если true - MAC добавляется только на интерфейсы где есть ip_address

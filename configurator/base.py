@@ -14,6 +14,7 @@
 """
 
 import logging
+import time
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
@@ -46,11 +47,14 @@ class ConfigPusher:
 
     Использует Netmiko для надёжного применения конфигураций на устройствах.
     Поддерживает dry-run режим для тестирования без реальных изменений.
+    При ошибках подключения выполняет повторные попытки.
 
     Attributes:
         credentials: Учётные данные
         timeout: Таймаут подключения
         save_config: Сохранять конфигурацию после изменений
+        max_retries: Максимум повторных попыток
+        retry_delay: Задержка между попытками
 
     Example:
         pusher = ConfigPusher(credentials)
@@ -67,6 +71,8 @@ class ConfigPusher:
         credentials: Credentials,
         timeout: int = 30,
         save_config: bool = True,
+        max_retries: int = 2,
+        retry_delay: int = 5,
     ):
         """
         Инициализация конфигуратора.
@@ -75,10 +81,14 @@ class ConfigPusher:
             credentials: Учётные данные
             timeout: Таймаут подключения
             save_config: Сохранять конфигурацию после изменений
+            max_retries: Максимум повторных попыток при ошибке подключения
+            retry_delay: Задержка между попытками (секунды)
         """
         self.credentials = credentials
         self.timeout = timeout
         self.save_config = save_config
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
 
     def _build_connection_params(self, device: Device) -> Dict[str, Any]:
         """
@@ -117,7 +127,7 @@ class ConfigPusher:
         dry_run: bool = True,
     ) -> ConfigResult:
         """
-        Применяет конфигурационные команды на устройстве.
+        Применяет конфигурационные команды на устройстве с retry.
 
         Args:
             device: Устройство
@@ -146,61 +156,87 @@ class ConfigPusher:
                 output="[DRY RUN] Команды не применены",
             )
 
-        try:
-            params = self._build_connection_params(device)
+        params = self._build_connection_params(device)
+        total_attempts = 1 + self.max_retries
+        last_error = ""
 
-            logger.info(f"Подключение к {device.host}...")
-            with ConnectHandler(**params) as conn:
-                # Переходим в enable если нужно
-                if self.credentials.secret:
-                    conn.enable()
+        for attempt in range(1, total_attempts + 1):
+            try:
+                if attempt == 1:
+                    logger.info(f"Подключение к {device.host}...")
+                else:
+                    logger.info(
+                        f"Подключение к {device.host} (попытка {attempt}/{total_attempts})..."
+                    )
 
-                # Применяем конфигурацию
-                output = conn.send_config_set(commands)
+                with ConnectHandler(**params) as conn:
+                    # Переходим в enable если нужно
+                    if self.credentials.secret:
+                        conn.enable()
 
-                # Сохраняем если нужно
-                if self.save_config:
-                    save_output = conn.save_config()
-                    output += f"\n{save_output}"
+                    # Применяем конфигурацию
+                    output = conn.send_config_set(commands)
 
-                logger.info(f"{device.host}: применено {len(commands)} команд")
+                    # Сохраняем если нужно
+                    if self.save_config:
+                        save_output = conn.save_config()
+                        output += f"\n{save_output}"
 
+                    logger.info(f"{device.host}: применено {len(commands)} команд")
+
+                    return ConfigResult(
+                        success=True,
+                        device=device.host,
+                        commands_sent=len(commands),
+                        output=output,
+                    )
+
+            except NetmikoAuthenticationException as e:
+                # Ошибки аутентификации НЕ повторяем
+                error_msg = f"Ошибка аутентификации: {e}"
+                logger.error(f"{device.host}: {error_msg}")
                 return ConfigResult(
-                    success=True,
+                    success=False,
                     device=device.host,
-                    commands_sent=len(commands),
-                    output=output,
+                    commands_sent=0,
+                    error=error_msg,
                 )
 
-        except NetmikoTimeoutException as e:
-            error_msg = f"Таймаут подключения: {e}"
-            logger.error(f"{device.host}: {error_msg}")
-            return ConfigResult(
-                success=False,
-                device=device.host,
-                commands_sent=0,
-                error=error_msg,
-            )
+            except NetmikoTimeoutException as e:
+                last_error = f"Таймаут подключения: {e}"
+                if attempt < total_attempts:
+                    logger.warning(
+                        f"{device.host}: {last_error}, "
+                        f"повтор через {self.retry_delay}с ({attempt}/{total_attempts})"
+                    )
+                    time.sleep(self.retry_delay)
+                else:
+                    logger.error(
+                        f"{device.host}: {last_error} "
+                        f"(исчерпаны все {total_attempts} попыток)"
+                    )
 
-        except NetmikoAuthenticationException as e:
-            error_msg = f"Ошибка аутентификации: {e}"
-            logger.error(f"{device.host}: {error_msg}")
-            return ConfigResult(
-                success=False,
-                device=device.host,
-                commands_sent=0,
-                error=error_msg,
-            )
+            except Exception as e:
+                last_error = f"Ошибка: {e}"
+                if attempt < total_attempts:
+                    logger.warning(
+                        f"{device.host}: {last_error}, "
+                        f"повтор через {self.retry_delay}с ({attempt}/{total_attempts})"
+                    )
+                    time.sleep(self.retry_delay)
+                else:
+                    logger.error(
+                        f"{device.host}: {last_error} "
+                        f"(исчерпаны все {total_attempts} попыток)"
+                    )
 
-        except Exception as e:
-            error_msg = f"Ошибка: {e}"
-            logger.error(f"{device.host}: {error_msg}")
-            return ConfigResult(
-                success=False,
-                device=device.host,
-                commands_sent=0,
-                error=error_msg,
-            )
+        # Все попытки исчерпаны
+        return ConfigResult(
+            success=False,
+            device=device.host,
+            commands_sent=0,
+            error=last_error,
+        )
 
     def push_config_batch(
         self,

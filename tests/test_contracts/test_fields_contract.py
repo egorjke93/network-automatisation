@@ -21,6 +21,7 @@ from network_collector.core.models import (
     LLDPNeighbor,
     InventoryItem,
     DeviceInfo,
+    IPAddressEntry,
 )
 
 
@@ -42,7 +43,7 @@ FIELD_MAPPING = {
         "interface": "name",  # interface в fields.yaml это name в модели
     },
     "lldp": {
-        "remote_platform": "platform",  # remote_platform → platform
+        # remote_platform теперь напрямую в модели
     },
 }
 
@@ -180,15 +181,15 @@ class TestFieldsToDict:
             hostname="switch-01",
             device_ip="10.0.0.1",
             capabilities="Switch",
-            platform="Cisco IOS",
+            remote_platform="Cisco IOS",
         )
         result = neighbor.to_dict()
 
         for field_name, field_config in fields_config["lldp"].items():
             if isinstance(field_config, dict) and field_config.get("enabled", False):
                 if field_name == "remote_platform":
-                    # remote_platform это алиас для platform
-                    assert "platform" in result, f"LLDP: поле platform (→remote_platform) отсутствует в to_dict()"
+                    # remote_platform напрямую в модели
+                    assert "remote_platform" in result, f"LLDP: поле remote_platform отсутствует в to_dict()"
                 else:
                     assert field_name in result, f"LLDP: поле {field_name} отсутствует в to_dict()"
 
@@ -230,6 +231,7 @@ class TestFieldsToDict:
             version="17.3.4",
             uptime="5 weeks",
             platform="cisco_ios",
+            manufacturer="Cisco",
         )
         result = device.to_dict()
 
@@ -281,9 +283,180 @@ class TestFieldsToDict:
             description="24-port switch",
             vid="V02",
             hostname="switch-01",
+            manufacturer="Cisco",
         )
         result = item.to_dict()
 
         for field_name, field_config in fields_config["inventory"].items():
             if isinstance(field_config, dict) and field_config.get("enabled", False):
                 assert field_name in result, f"Inventory: поле {field_name} отсутствует в to_dict()"
+
+
+class TestIPAddressSyncContract:
+    """Контрактные тесты для синхронизации IP-адресов.
+
+    Проверяет что Interface.prefix_length корректно передаётся в IPAddressEntry.mask
+    для правильного формирования IP с маской при синхронизации с NetBox.
+
+    Эти тесты предотвращают баг когда IP создаются с /32 вместо правильной маски.
+    """
+
+    @pytest.mark.unit
+    def test_interface_has_prefix_length_field(self):
+        """Interface модель имеет поле prefix_length."""
+        interface_fields = {f.name for f in dataclass_fields(Interface)}
+        assert "prefix_length" in interface_fields, (
+            "Interface должен иметь поле prefix_length для передачи маски в IPAddressEntry"
+        )
+
+    @pytest.mark.unit
+    def test_interface_from_dict_extracts_prefix_length(self):
+        """Interface.from_dict() корректно извлекает prefix_length."""
+        # Данные как из парсера show interfaces
+        data = {
+            "interface": "Vlan30",
+            "ip_address": "10.177.30.213",
+            "prefix_length": "24",
+            "status": "up",
+        }
+        intf = Interface.from_dict(data)
+
+        assert intf.prefix_length == "24", (
+            "Interface.from_dict() должен извлекать prefix_length из данных парсера"
+        )
+
+    @pytest.mark.unit
+    def test_interface_prefix_length_to_ip_address_entry(self):
+        """Interface.prefix_length передаётся в IPAddressEntry.mask."""
+        # Создаём Interface как из парсера
+        intf = Interface(
+            name="Vlan30",
+            ip_address="10.177.30.213",
+            prefix_length="24",
+            status="up",
+        )
+
+        # Создаём IPAddressEntry как в CLI (cli.py)
+        ip_entry = IPAddressEntry(
+            ip_address=intf.ip_address,
+            interface=intf.name,
+            mask=intf.prefix_length,  # Критично: должен использовать prefix_length!
+        )
+
+        assert ip_entry.mask == "24", "IPAddressEntry.mask должен получить prefix_length из Interface"
+        assert ip_entry.with_prefix == "10.177.30.213/24", (
+            "IPAddressEntry.with_prefix должен формировать IP с правильной маской"
+        )
+
+    @pytest.mark.unit
+    def test_ip_address_entry_with_prefix_not_32_when_mask_provided(self):
+        """IPAddressEntry.with_prefix НЕ возвращает /32 если mask задана."""
+        # Тест на регрессию бага с /32
+        ip_entry = IPAddressEntry(
+            ip_address="10.177.30.213",
+            interface="Vlan30",
+            mask="24",
+        )
+
+        assert ip_entry.with_prefix != "10.177.30.213/32", (
+            "with_prefix не должен возвращать /32 если mask задана"
+        )
+        assert ip_entry.with_prefix == "10.177.30.213/24"
+
+    @pytest.mark.unit
+    def test_ip_address_entry_from_dict_uses_prefix_length(self):
+        """IPAddressEntry.from_dict() использует prefix_length как альтернативу mask."""
+        data = {
+            "ip_address": "192.168.1.1",
+            "interface": "Vlan100",
+            "prefix_length": "24",  # prefix_length вместо mask
+        }
+        ip_entry = IPAddressEntry.from_dict(data)
+
+        assert ip_entry.mask == "24", (
+            "IPAddressEntry.from_dict() должен брать prefix_length если mask не задан"
+        )
+        assert ip_entry.with_prefix == "192.168.1.1/24"
+
+    @pytest.mark.unit
+    def test_fields_yaml_has_prefix_length_in_interfaces(self, fields_config):
+        """fields.yaml содержит prefix_length в секции interfaces."""
+        assert "prefix_length" in fields_config["interfaces"], (
+            "fields.yaml должен содержать prefix_length в секции interfaces"
+        )
+
+    @pytest.mark.unit
+    def test_fields_yaml_sync_ip_addresses_config(self, fields_config):
+        """fields.yaml содержит конфигурацию sync.ip_addresses."""
+        assert "sync" in fields_config, "fields.yaml должен содержать секцию sync"
+        assert "ip_addresses" in fields_config["sync"], (
+            "fields.yaml sync должен содержать секцию ip_addresses"
+        )
+
+
+class TestSyncOptionsContract:
+    """Контрактные тесты для опций синхронизации в fields.yaml."""
+
+    @pytest.mark.unit
+    def test_enabled_mode_option_exists_in_config(self, fields_config):
+        """fields.yaml содержит опцию enabled_mode в sync.interfaces.options."""
+        assert "sync" in fields_config, "fields.yaml должен содержать секцию sync"
+        assert "interfaces" in fields_config["sync"], (
+            "fields.yaml sync должен содержать секцию interfaces"
+        )
+        assert "options" in fields_config["sync"]["interfaces"], (
+            "fields.yaml sync.interfaces должен содержать секцию options"
+        )
+        assert "enabled_mode" in fields_config["sync"]["interfaces"]["options"], (
+            "fields.yaml sync.interfaces.options должен содержать enabled_mode"
+        )
+
+    @pytest.mark.unit
+    def test_enabled_mode_valid_values(self, fields_config):
+        """enabled_mode должен иметь допустимое значение (admin или link)."""
+        enabled_mode = fields_config["sync"]["interfaces"]["options"]["enabled_mode"]
+        valid_values = ("admin", "link")
+        assert enabled_mode in valid_values, (
+            f"enabled_mode должен быть одним из {valid_values}, "
+            f"получено: {enabled_mode}"
+        )
+
+    @pytest.mark.unit
+    def test_get_sync_config_reads_enabled_mode(self):
+        """get_sync_config() корректно читает enabled_mode из файла."""
+        from network_collector.fields_config import get_sync_config
+
+        sync_cfg = get_sync_config("interfaces")
+        enabled_mode = sync_cfg.get_option("enabled_mode")
+
+        assert enabled_mode is not None, (
+            "get_sync_config('interfaces').get_option('enabled_mode') "
+            "должен вернуть значение, не None"
+        )
+        assert enabled_mode in ("admin", "link"), (
+            f"enabled_mode должен быть 'admin' или 'link', получено: {enabled_mode}"
+        )
+
+    @pytest.mark.unit
+    def test_get_sync_config_default_for_missing_option(self):
+        """get_option() возвращает default для несуществующей опции."""
+        from network_collector.fields_config import get_sync_config
+
+        sync_cfg = get_sync_config("interfaces")
+        result = sync_cfg.get_option("nonexistent_option", "default_value")
+
+        assert result == "default_value", (
+            "get_option() должен вернуть default для несуществующей опции"
+        )
+
+    @pytest.mark.unit
+    def test_sync_interfaces_options_structure(self, fields_config):
+        """sync.interfaces.options содержит все необходимые опции."""
+        options = fields_config["sync"]["interfaces"]["options"]
+
+        # Проверяем базовые опции
+        expected_options = ["create_missing", "update_existing", "auto_detect_type", "enabled_mode"]
+        for opt in expected_options:
+            assert opt in options, (
+                f"sync.interfaces.options должен содержать '{opt}'"
+            )

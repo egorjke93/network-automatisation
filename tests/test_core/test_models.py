@@ -407,6 +407,82 @@ class TestBatchConversions:
         assert items[1].pid == "SFP-10G-SR"
 
 
+class TestInterfacePrefixLength:
+    """Тесты поля prefix_length в Interface."""
+
+    def test_from_dict_with_prefix_length(self):
+        """Создание Interface с prefix_length."""
+        data = {
+            "interface": "Vlan30",
+            "ip_address": "10.177.30.213",
+            "prefix_length": "24",
+            "status": "up",
+        }
+        intf = Interface.from_dict(data)
+
+        assert intf.ip_address == "10.177.30.213"
+        assert intf.prefix_length == "24"
+
+    def test_from_dict_with_mask_alternative(self):
+        """Создание Interface с mask (альтернативное имя)."""
+        data = {
+            "interface": "Vlan100",
+            "ip_address": "192.168.1.1",
+            "mask": "255.255.255.0",
+        }
+        intf = Interface.from_dict(data)
+
+        assert intf.prefix_length == "255.255.255.0"
+
+    def test_prefix_length_in_to_dict(self):
+        """prefix_length включается в to_dict."""
+        intf = Interface(name="Vlan30", ip_address="10.0.0.1", prefix_length="24")
+        result = intf.to_dict()
+
+        assert result.get("prefix_length") == "24"
+
+    def test_prefix_length_empty_by_default(self):
+        """prefix_length пустой по умолчанию."""
+        intf = Interface(name="Gi0/1")
+        assert intf.prefix_length == ""
+
+
+class TestIPAddressEntryPrefixLength:
+    """Тесты IPAddressEntry с prefix_length."""
+
+    def test_from_dict_with_prefix_length(self):
+        """Создание IPAddressEntry с prefix_length."""
+        data = {
+            "ip_address": "10.177.30.213",
+            "interface": "Vlan30",
+            "prefix_length": "24",
+        }
+        ip = IPAddressEntry.from_dict(data)
+
+        assert ip.ip_address == "10.177.30.213"
+        assert ip.mask == "24"  # prefix_length -> mask
+        assert ip.with_prefix == "10.177.30.213/24"
+
+    def test_with_prefix_uses_mask_correctly(self):
+        """with_prefix корректно использует mask."""
+        # Числовая маска
+        ip1 = IPAddressEntry(ip_address="10.0.0.1", interface="Vlan10", mask="24")
+        assert ip1.with_prefix == "10.0.0.1/24"
+
+        # Dotted маска
+        ip2 = IPAddressEntry(ip_address="192.168.1.1", interface="Vlan20", mask="255.255.255.0")
+        assert ip2.with_prefix == "192.168.1.1/24"
+
+        # Маска /16
+        ip3 = IPAddressEntry(ip_address="172.16.0.1", interface="Vlan30", mask="16")
+        assert ip3.with_prefix == "172.16.0.1/16"
+
+    def test_with_prefix_fallback_to_32(self):
+        """with_prefix возвращает /32 только если mask пустой."""
+        ip = IPAddressEntry(ip_address="8.8.8.8", interface="Lo0", mask="")
+        assert ip.with_prefix == "8.8.8.8/32"
+
+
 class TestEdgeCases:
     """Тесты граничных случаев."""
 

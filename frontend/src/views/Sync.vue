@@ -5,15 +5,10 @@
 
     <div class="form-card">
       <form @submit.prevent="runSync">
-        <div class="form-row">
-          <div class="form-group">
-            <label>Устройства (IP через запятую)</label>
-            <input v-model="devicesInput" type="text" placeholder="10.0.0.1, 10.0.0.2" />
-          </div>
-          <div class="form-group">
-            <label>Site</label>
-            <input v-model="site" type="text" placeholder="Office" />
-          </div>
+        <DeviceSelector v-model="selectedDevices" />
+        <div class="form-group">
+          <label>Site</label>
+          <input v-model="site" type="text" placeholder="Office" />
         </div>
 
         <div class="form-section">
@@ -85,6 +80,10 @@
               <input type="checkbox" v-model="cleanupCables" />
               <span>Cleanup Cables</span>
             </label>
+            <label class="checkbox danger">
+              <input type="checkbox" v-model="cleanupInventory" />
+              <span>Cleanup Inventory</span>
+            </label>
           </div>
         </div>
 
@@ -96,6 +95,8 @@
       </form>
     </div>
 
+    <ProgressBar :task-id="taskId" @complete="onTaskComplete" />
+
     <div v-if="error" class="error-box">{{ error }}</div>
 
     <div v-if="result" class="result">
@@ -105,6 +106,11 @@
           {{ result.success ? 'OK' : 'Error' }}
         </span>
         <span class="badge dry-run" v-if="result.dry_run">PREVIEW</span>
+      </div>
+
+      <!-- Note about new devices + interfaces -->
+      <div v-if="result.dry_run && result.devices?.created && (interfaces || syncAll)" class="info-note">
+        Интерфейсы будут синхронизированы после создания устройств
       </div>
 
       <!-- Stats -->
@@ -176,7 +182,7 @@
           <h4>Изменения ({{ result.diff.length }})</h4>
           <div class="filter-buttons">
             <button
-              v-for="action in ['all', 'create', 'update', 'delete']"
+              v-for="action in ['all', 'create', 'update', 'delete', 'skip']"
               :key="action"
               class="filter-btn"
               :class="{ active: diffFilter === action }"
@@ -228,12 +234,15 @@
 
 <script>
 import axios from 'axios'
+import ProgressBar from '../components/ProgressBar.vue'
+import DeviceSelector from '../components/DeviceSelector.vue'
 
 export default {
   name: 'Sync',
+  components: { ProgressBar, DeviceSelector },
   data() {
     return {
-      devicesInput: '',
+      selectedDevices: [],
       site: '',
       // CREATE/UPDATE options
       syncAll: false,
@@ -250,12 +259,14 @@ export default {
       cleanupInterfaces: false,
       cleanupIps: false,
       cleanupCables: false,
+      cleanupInventory: false,
       // State
       loading: false,
       applying: false,
       result: null,
       error: null,
       diffFilter: 'all',
+      taskId: null,
     }
   },
   computed: {
@@ -284,12 +295,8 @@ export default {
       return String(val)
     },
     buildRequest() {
-      const devices = this.devicesInput
-        ? this.devicesInput.split(',').map(d => d.trim()).filter(Boolean)
-        : []
-
       return {
-        devices,
+        devices: this.selectedDevices,
         site: this.site || null,
         // CREATE/UPDATE
         sync_all: this.syncAll,
@@ -306,6 +313,7 @@ export default {
         cleanup_interfaces: this.cleanupInterfaces,
         cleanup_ips: this.cleanupIps,
         cleanup_cables: this.cleanupCables,
+        cleanup_inventory: this.cleanupInventory,
       }
     },
     async runSync() {
@@ -313,17 +321,20 @@ export default {
       this.error = null
       this.result = null
       this.diffFilter = 'all'
+      this.taskId = null
 
       try {
         const res = await axios.post('/api/sync/netbox', {
           ...this.buildRequest(),
           dry_run: true,
           show_diff: true,
+          async_mode: true,
         })
-        this.result = res.data
+        // В async mode сразу получаем task_id, результат придёт позже
+        this.taskId = res.data.task_id
+        // Не снимаем loading пока task не завершится
       } catch (e) {
         this.error = e.response?.data?.detail || e.message
-      } finally {
         this.loading = false
       }
     },
@@ -332,18 +343,44 @@ export default {
 
       this.applying = true
       this.error = null
+      this.result = null
+      this.taskId = null
 
       try {
         const res = await axios.post('/api/sync/netbox', {
           ...this.buildRequest(),
           dry_run: false,
           show_diff: true,
+          async_mode: true,
         })
-        this.result = res.data
+        // В async mode сразу получаем task_id
+        this.taskId = res.data.task_id
       } catch (e) {
         this.error = e.response?.data?.detail || e.message
-      } finally {
         this.applying = false
+      }
+    },
+    onTaskComplete(task) {
+      console.log('Task completed:', task)
+      this.loading = false
+      this.applying = false
+
+      // Получаем результат из task.result
+      if (task.result) {
+        this.result = {
+          success: task.result.success,
+          dry_run: task.result.dry_run,
+          devices: task.result.stats?.devices || {},
+          interfaces: task.result.stats?.interfaces || {},
+          ip_addresses: task.result.stats?.ip_addresses || {},
+          vlans: task.result.stats?.vlans || {},
+          cables: task.result.stats?.cables || {},
+          inventory: task.result.stats?.inventory || {},
+          diff: task.result.diff || [],
+          errors: task.result.errors || [],
+        }
+      } else if (task.status === 'failed') {
+        this.error = task.message || 'Sync failed'
       }
     },
   },
@@ -360,12 +397,6 @@ export default {
   border-radius: 8px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   margin-bottom: 20px;
-}
-
-.form-row {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 15px;
 }
 
 .form-group { margin-bottom: 15px; }
@@ -490,7 +521,7 @@ export default {
 .stat-values .created { background: #d4edda; color: #155724; }
 .stat-values .updated { background: #cce5ff; color: #004085; }
 .stat-values .deleted { background: #f8d7da; color: #721c24; }
-.stat-values .skipped { background: #e2e3e5; color: #383d41; }
+.stat-values .skipped { background: #6c757d; color: white; }
 .stat-values .failed { background: #f8d7da; color: #721c24; }
 
 /* Apply section */
@@ -562,6 +593,7 @@ export default {
 .diff-item.create { background: #d4edda; }
 .diff-item.update { background: #cce5ff; }
 .diff-item.delete { background: #f8d7da; }
+.diff-item.skip { background: #e9ecef; }
 
 .diff-main {
   display: flex;
@@ -580,6 +612,7 @@ export default {
 .action-badge.create { background: #27ae60; }
 .action-badge.update { background: #3498db; }
 .action-badge.delete { background: #e74c3c; }
+.action-badge.skip { background: #6c757d; }
 
 .entity-type { color: #666; }
 .entity-name { font-weight: 500; }
@@ -621,6 +654,16 @@ export default {
   color: #666;
   background: #f8f9fa;
   border-radius: 8px;
+}
+
+.info-note {
+  padding: 12px 15px;
+  background: #e7f3ff;
+  border-left: 4px solid #3498db;
+  border-radius: 4px;
+  color: #004085;
+  font-size: 14px;
+  margin-bottom: 15px;
 }
 
 .errors-section {

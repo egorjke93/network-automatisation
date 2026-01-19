@@ -28,6 +28,8 @@ from ..core.exceptions import (
     TimeoutError,
     format_error_for_log,
 )
+from ..core.domain.interface import InterfaceNormalizer
+from ..core.constants import COLLECTOR_COMMANDS
 
 logger = get_logger(__name__)
 
@@ -54,16 +56,8 @@ class InterfaceCollector(BaseCollector):
     # Типизированная модель для collect_models()
     model_class = Interface
 
-    # Команды для разных платформ
-    # Используем "show interfaces" для получения полной информации:
-    # статус, MAC, IP-адреса (включая Vlan SVI), description
-    platform_commands = {
-        "cisco_ios": "show interfaces",
-        "cisco_iosxe": "show interfaces",
-        "cisco_nxos": "show interface",
-        "arista_eos": "show interfaces",
-        "juniper_junos": "show interfaces extensive",
-    }
+    # Команды для разных платформ (из централизованного хранилища)
+    platform_commands = COLLECTOR_COMMANDS.get("interfaces", {})
 
     # Команды для ошибок
     error_commands = {
@@ -118,6 +112,7 @@ class InterfaceCollector(BaseCollector):
         self.collect_lag_info = collect_lag_info
         self.collect_switchport = collect_switchport
         self.collect_media_type = collect_media_type
+        self._normalizer = InterfaceNormalizer()
     
     def _parse_output(
         self,
@@ -127,30 +122,25 @@ class InterfaceCollector(BaseCollector):
         """
         Парсит вывод команды show interfaces.
 
+        Возвращает СЫРЫЕ данные. Нормализация происходит в Domain Layer.
+
         Args:
             output: Сырой вывод команды
             device: Устройство
 
         Returns:
-            List[Dict]: Список интерфейсов с полями:
-                - interface: имя интерфейса
-                - status: up/down/disabled
-                - mac: MAC-адрес интерфейса
-                - ip_address: IP-адрес (если есть)
-                - prefix_length: маска сети
-                - description: описание
-                - speed, duplex, mtu и др.
+            List[Dict]: Сырые данные интерфейсов
         """
         # Пробуем TextFSM
         if self.use_ntc:
             data = self._parse_with_textfsm(output, device)
             if data:
-                return self._normalize_data(data)
+                return data
 
         # Fallback на regex
-        return self._parse_with_regex(output, device)
+        return self._parse_with_regex_raw(output, device)
     
-    def _parse_with_regex(
+    def _parse_with_regex_raw(
         self,
         output: str,
         device: Device,
@@ -158,12 +148,14 @@ class InterfaceCollector(BaseCollector):
         """
         Парсит вывод show interfaces с помощью regex (fallback).
 
+        Возвращает СЫРЫЕ данные. Нормализация в Domain Layer.
+
         Args:
             output: Сырой вывод
             device: Устройство
 
         Returns:
-            List[Dict]: Интерфейсы
+            List[Dict]: Сырые данные интерфейсов
         """
         interfaces = []
         current_interface = None
@@ -183,7 +175,7 @@ class InterfaceCollector(BaseCollector):
                     interfaces.append(current_interface)
                 current_interface = {
                     "interface": intf_match.group(1),
-                    "status": intf_match.group(2),
+                    "link_status": intf_match.group(2),  # Сырой статус
                     "ip_address": "",
                     "prefix_length": "",
                     "mac": "",
@@ -218,61 +210,23 @@ class InterfaceCollector(BaseCollector):
         if current_interface:
             interfaces.append(current_interface)
 
-        return self._normalize_data(interfaces)
+        return interfaces
     
-    def _normalize_data(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Нормализует данные интерфейсов.
-
-        Args:
-            data: Сырые данные
-
-        Returns:
-            List[Dict]: Нормализованные данные
-        """
-        # Маппинг статусов из show interfaces
-        status_map = {
-            "connected": "up",
-            "up": "up",
-            "notconnect": "down",
-            "down": "down",
-            "disabled": "disabled",
-            "err-disabled": "error",
-            "administratively down": "disabled",
-        }
-
-        for row in data:
-            # Нормализуем статус (link_status из NTC или status)
-            status = row.get("link_status", row.get("status", ""))
-            if status:
-                status_lower = str(status).lower()
-                row["status"] = status_map.get(status_lower, status_lower)
-
-            # Унифицируем имена полей из NTC шаблона
-            # NTC может возвращать MAC в разных полях: mac_address, address, bia
-            if not row.get("mac"):
-                for mac_field in ["mac_address", "address", "bia", "hardware_address"]:
-                    if row.get(mac_field):
-                        row["mac"] = row[mac_field]
-                        break
-
-            # Унифицируем имена из NTC Templates (hardware_type, media_type)
-            if "hardware_type" not in row and "hardware" in row:
-                row["hardware_type"] = row["hardware"]
-            if "media_type" not in row and "media" in row:
-                row["media_type"] = row["media"]
-
-        return data
+    # Нормализация перенесена в Domain Layer: core/domain/interface.py (InterfaceNormalizer)
 
     def _collect_from_device(self, device: Device) -> List[Dict[str, Any]]:
         """
-        Собирает данные с одного устройства включая LAG membership.
+        Собирает данные с одного устройства.
+
+        Архитектура:
+        1. Collector: парсинг (TextFSM/regex) → сырые данные
+        2. Domain (InterfaceNormalizer): нормализация и обогащение
 
         Args:
             device: Устройство
 
         Returns:
-            List[Dict]: Данные с устройства
+            List[Dict]: Нормализованные данные с устройства
         """
         from ..core.connection import get_ntc_platform
 
@@ -287,11 +241,16 @@ class InterfaceCollector(BaseCollector):
                 hostname = self._conn_manager.get_hostname(conn)
                 device.metadata["hostname"] = hostname
 
-                # Основная команда show interfaces
+                # 1. Парсим основную команду show interfaces (СЫРЫЕ данные)
                 response = conn.send_command(command)
-                data = self._parse_output(response.result, device)
+                raw_data = self._parse_output(response.result, device)
 
-                # Собираем LAG membership если включено
+                # 2. Domain Layer: нормализация через InterfaceNormalizer
+                data = self._normalizer.normalize_dicts(
+                    raw_data, hostname=hostname, device_ip=device.host
+                )
+
+                # 3. Собираем дополнительные данные для обогащения
                 lag_membership = {}
                 if self.collect_lag_info:
                     lag_cmd = self.lag_commands.get(device.platform)
@@ -301,12 +260,11 @@ class InterfaceCollector(BaseCollector):
                             lag_membership = self._parse_lag_membership(
                                 lag_response.result,
                                 get_ntc_platform(device.platform),
-                                lag_cmd,  # Передаём команду для NTC
+                                lag_cmd,
                             )
                         except Exception as e:
                             logger.debug(f"Ошибка получения LAG info: {e}")
 
-                # Собираем switchport mode если включено
                 switchport_modes = {}
                 if self.collect_switchport:
                     sw_cmd = self.switchport_commands.get(device.platform)
@@ -316,12 +274,11 @@ class InterfaceCollector(BaseCollector):
                             switchport_modes = self._parse_switchport_modes(
                                 sw_response.result,
                                 get_ntc_platform(device.platform),
-                                sw_cmd,  # Передаём команду для NTC
+                                sw_cmd,
                             )
                         except Exception as e:
                             logger.debug(f"Ошибка получения switchport info: {e}")
 
-                # Собираем media_type если включено (NX-OS: тип трансивера из show interface status)
                 media_types = {}
                 if self.collect_media_type:
                     mt_cmd = self.media_type_commands.get(device.platform)
@@ -336,65 +293,17 @@ class InterfaceCollector(BaseCollector):
                         except Exception as e:
                             logger.debug(f"Ошибка получения media_type info: {e}")
 
-                # Определяем mode для LAG на основе members
-                # Если хотя бы один member в trunk → LAG тоже tagged/tagged-all
-                lag_modes: Dict[str, str] = {}
-                for member_iface, lag_name in lag_membership.items():
-                    if member_iface in switchport_modes:
-                        member_mode = switchport_modes[member_iface].get("mode", "")
-                        # tagged-all имеет приоритет над tagged
-                        if member_mode == "tagged-all":
-                            lag_modes[lag_name] = "tagged-all"
-                        elif member_mode == "tagged" and lag_modes.get(lag_name) != "tagged-all":
-                            lag_modes[lag_name] = "tagged"
+                # 4. Domain Layer: обогащение данных
+                if lag_membership:
+                    data = self._normalizer.enrich_with_lag(data, lag_membership)
 
-                # Добавляем metadata, LAG и switchport info к каждой записи
-                for row in data:
-                    row["hostname"] = hostname
-                    row["device_ip"] = device.host
+                if switchport_modes:
+                    data = self._normalizer.enrich_with_switchport(
+                        data, switchport_modes, lag_membership
+                    )
 
-                    iface = row.get("interface", "")
-                    iface_lower = iface.lower()
-
-                    # Обогащаем media_type из show interface status (NX-OS)
-                    # Это важно для правильного определения типа интерфейса в NetBox
-                    if iface in media_types and media_types[iface]:
-                        # Перезаписываем только если есть более точный тип
-                        existing_mt = row.get("media_type", "").lower()
-                        new_mt = media_types[iface].lower()
-                        # show interface status возвращает "10Gbase-LR", а show interface - "10G"
-                        # "10Gbase-LR" более информативно
-                        if "base" in new_mt or "sfp" in new_mt or "qsfp" in new_mt:
-                            row["media_type"] = media_types[iface]
-
-                    # Нормализуем port_type (платформонезависимо)
-                    # Это поле используется в sync.py для определения типа интерфейса
-                    row["port_type"] = self._detect_port_type(row, iface_lower)
-
-                    # Добавляем LAG для member интерфейсов
-                    if iface in lag_membership:
-                        row["lag"] = lag_membership[iface]
-
-                    # Добавляем switchport mode
-                    if iface in switchport_modes:
-                        sw_data = switchport_modes[iface]
-                        row["mode"] = sw_data.get("mode", "")
-                        row["native_vlan"] = sw_data.get("native_vlan", "")
-                        row["access_vlan"] = sw_data.get("access_vlan", "")
-                    # Для LAG интерфейсов берём mode из members
-                    elif iface_lower.startswith(("po", "port-channel")):
-                        # Ищем mode по любому варианту имени (Po1, Port-channel1)
-                        for lag_name, lag_mode in lag_modes.items():
-                            if lag_name.lower() == iface_lower or \
-                               f"po{lag_name}".lower() == iface_lower or \
-                               lag_name.lower().replace("po", "port-channel") == iface_lower:
-                                row["mode"] = lag_mode
-                                break
-                    # Для member интерфейсов без mode - наследуем от LAG
-                    elif iface in lag_membership and not row.get("mode"):
-                        lag_name = lag_membership[iface]
-                        if lag_name in lag_modes:
-                            row["mode"] = lag_modes[lag_name]
+                if media_types:
+                    data = self._normalizer.enrich_with_media_type(data, media_types)
 
                 logger.info(f"{hostname}: собрано {len(data)} интерфейсов")
                 return data
@@ -752,96 +661,4 @@ class InterfaceCollector(BaseCollector):
 
         return media_types
 
-    def _detect_port_type(self, row: Dict[str, Any], iface_lower: str) -> str:
-        """
-        Определяет тип порта на основе данных интерфейса.
-
-        Нормализует данные с разных платформ в единый формат:
-        - "100g-sfp28" - 100GE QSFP28
-        - "40g-qsfp" - 40GE QSFP+
-        - "25g-sfp28" - 25GE SFP28
-        - "10g-sfp+" - 10GE SFP+
-        - "1g-sfp" - 1GE SFP
-        - "1g-rj45" - 1GE RJ45 (copper)
-        - "100m-rj45" - 100M RJ45
-        - "lag" - Port-channel/LAG
-        - "virtual" - Vlan, Loopback, etc.
-        - "" - не определён
-
-        Args:
-            row: Данные интерфейса от NTC
-            iface_lower: Имя интерфейса в нижнем регистре
-
-        Returns:
-            str: Тип порта
-        """
-        hardware_type = row.get("hardware_type", "").lower()
-        media_type = row.get("media_type", "").lower()
-
-        # LAG интерфейсы
-        if iface_lower.startswith(("port-channel", "po")):
-            return "lag"
-
-        # Виртуальные интерфейсы
-        if iface_lower.startswith(("vlan", "loopback", "null", "tunnel", "nve")):
-            return "virtual"
-
-        # Management - обычно copper
-        if iface_lower.startswith(("mgmt", "management")):
-            return "1g-rj45"
-
-        # 1. По media_type (наиболее точный - есть информация о трансивере)
-        if media_type and media_type not in ("unknown", "not present", ""):
-            if "100gbase" in media_type or "100g" in media_type:
-                return "100g-qsfp28"
-            if "40gbase" in media_type or "40g" in media_type:
-                return "40g-qsfp"
-            if "25gbase" in media_type or "25g" in media_type:
-                return "25g-sfp28"
-            if "10gbase" in media_type or "10g" in media_type:
-                return "10g-sfp+"
-            if "1000base-t" in media_type or "rj45" in media_type:
-                return "1g-rj45"
-            if "1000base" in media_type or "sfp" in media_type:
-                return "1g-sfp"
-
-        # 2. По hardware_type (максимальная скорость порта)
-        # NX-OS: "100/1000/10000 Ethernet" = порт поддерживает 10G = SFP+
-        if hardware_type:
-            if "100000" in hardware_type or "100g" in hardware_type:
-                return "100g-qsfp28"
-            if "40000" in hardware_type or "40g" in hardware_type:
-                return "40g-qsfp"
-            if "25000" in hardware_type or "25g" in hardware_type:
-                return "25g-sfp28"
-            if "10000" in hardware_type or "10g" in hardware_type:
-                return "10g-sfp+"
-            # Только 1G без 10G - copper
-            if "1000" in hardware_type and "10000" not in hardware_type:
-                if "sfp" in hardware_type:
-                    return "1g-sfp"
-                return "1g-rj45"
-
-        # 3. По имени интерфейса (IOS/IOS-XE)
-        if iface_lower.startswith(("hundredgig", "hu")):
-            return "100g-qsfp28"
-        if iface_lower.startswith(("fortygig", "fo")):
-            return "40g-qsfp"
-        if iface_lower.startswith(("twentyfivegig", "twe")):
-            return "25g-sfp28"
-        if iface_lower.startswith("tengig"):
-            return "10g-sfp+"
-        # Te1/1 - короткий формат
-        if len(iface_lower) >= 3 and iface_lower[:2] == "te" and iface_lower[2].isdigit():
-            return "10g-sfp+"
-        if iface_lower.startswith(("gigabit", "gi")):
-            # GigabitEthernet по умолчанию RJ45, если нет SFP в hardware/media
-            if "sfp" in hardware_type or "sfp" in media_type:
-                return "1g-sfp"
-            return "1g-rj45"
-        if iface_lower.startswith(("fastethernet", "fa")):
-            return "100m-rj45"
-
-        # 4. Ethernet (NX-OS, Arista) - уже обработан через hardware_type выше
-        # Если дошли сюда - не удалось определить
-        return ""
+    # detect_port_type перенесён в Domain Layer: core/domain/interface.py (InterfaceNormalizer)

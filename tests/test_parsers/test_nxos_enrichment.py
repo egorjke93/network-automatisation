@@ -216,7 +216,7 @@ class TestNxosMediaTypeEnrichment:
 
 
 class TestInventoryCollectorTransceivers:
-    """Тесты InventoryCollector._parse_transceivers()."""
+    """Тесты InventoryNormalizer.normalize_transceivers()."""
 
     @pytest.fixture
     def nxos_transceiver(self):
@@ -227,36 +227,36 @@ class TestInventoryCollectorTransceivers:
         pytest.skip("Fixture not found")
 
     @pytest.fixture
-    def mock_device(self):
-        """Мок устройства NX-OS."""
-        from network_collector.core.device import Device
-        return Device(host="10.0.0.1", platform="cisco_nxos")
+    def normalizer(self):
+        """InventoryNormalizer для тестирования."""
+        from network_collector.core.domain.inventory import InventoryNormalizer
+        return InventoryNormalizer()
 
-    def test_parse_transceivers_returns_list(self, nxos_transceiver, mock_device):
-        """Тест что _parse_transceivers возвращает список."""
-        from network_collector.collectors.inventory import InventoryCollector
-
-        collector = InventoryCollector()
-        result = collector._parse_transceivers(
-            nxos_transceiver,
-            ntc_platform="cisco_nxos",
+    @pytest.fixture
+    def parsed_transceivers(self, nxos_transceiver):
+        """Распарсенные данные трансиверов через NTC."""
+        from ntc_templates.parse import parse_output
+        return parse_output(
+            platform="cisco_nxos",
             command="show interface transceiver",
-            device=mock_device,
+            data=nxos_transceiver,
+        )
+
+    def test_parse_transceivers_returns_list(self, parsed_transceivers, normalizer):
+        """Тест что normalize_transceivers возвращает список."""
+        result = normalizer.normalize_transceivers(
+            parsed_transceivers,
+            platform="cisco_nxos",
         )
 
         assert isinstance(result, list), "Должен вернуть список"
         assert len(result) > 0, "Список не должен быть пустым"
 
-    def test_parse_transceivers_format(self, nxos_transceiver, mock_device):
+    def test_parse_transceivers_format(self, parsed_transceivers, normalizer):
         """Тест что трансиверы в формате inventory."""
-        from network_collector.collectors.inventory import InventoryCollector
-
-        collector = InventoryCollector()
-        result = collector._parse_transceivers(
-            nxos_transceiver,
-            ntc_platform="cisco_nxos",
-            command="show interface transceiver",
-            device=mock_device,
+        result = normalizer.normalize_transceivers(
+            parsed_transceivers,
+            platform="cisco_nxos",
         )
 
         # Каждый элемент должен иметь поля inventory
@@ -270,16 +270,11 @@ class TestInventoryCollectorTransceivers:
             assert item["name"].startswith("Transceiver"), \
                 f"name должен начинаться с Transceiver: {item['name']}"
 
-    def test_parse_transceivers_filters_not_present(self, nxos_transceiver, mock_device):
+    def test_parse_transceivers_filters_not_present(self, parsed_transceivers, normalizer):
         """Тест что 'not present' трансиверы фильтруются."""
-        from network_collector.collectors.inventory import InventoryCollector
-
-        collector = InventoryCollector()
-        result = collector._parse_transceivers(
-            nxos_transceiver,
-            ntc_platform="cisco_nxos",
-            command="show interface transceiver",
-            device=mock_device,
+        result = normalizer.normalize_transceivers(
+            parsed_transceivers,
+            platform="cisco_nxos",
         )
 
         # Не должно быть "not present"
@@ -288,16 +283,11 @@ class TestInventoryCollectorTransceivers:
             assert "not present" not in desc, \
                 f"Не должно быть 'not present' в description: {desc}"
 
-    def test_parse_transceivers_has_valid_types(self, nxos_transceiver, mock_device):
+    def test_parse_transceivers_has_valid_types(self, parsed_transceivers, normalizer):
         """Тест что description содержит валидный тип."""
-        from network_collector.collectors.inventory import InventoryCollector
-
-        collector = InventoryCollector()
-        result = collector._parse_transceivers(
-            nxos_transceiver,
-            ntc_platform="cisco_nxos",
-            command="show interface transceiver",
-            device=mock_device,
+        result = normalizer.normalize_transceivers(
+            parsed_transceivers,
+            platform="cisco_nxos",
         )
 
         # description должен содержать base (10Gbase-LR, 1000base-SX)

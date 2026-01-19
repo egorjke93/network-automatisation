@@ -27,7 +27,10 @@
 network_collector/
 ├── __init__.py          # Делает папку Python-пакетом
 ├── __main__.py          # Точка входа: python -m network_collector
-├── cli.py               # Обработка команд CLI
+├── cli/                 # CLI модуль (модульная структура)
+│   ├── __init__.py      # main(), setup_parser()
+│   ├── utils.py         # load_devices, get_exporter
+│   └── commands/        # Обработчики команд
 ├── config.py            # Загрузка конфигурации
 │
 ├── core/                # Ядро: модели, подключения
@@ -50,7 +53,9 @@ network_collector/
 │
 └── netbox/              # Интеграция с NetBox
     ├── client.py        # API клиент
-    └── sync.py          # Синхронизация
+    └── sync/            # Синхронизация (модули)
+        ├── main.py      # NetBoxSync
+        └── *.py         # Mixins
 ```
 
 ### 1.2 Ключевые концепции Python
@@ -1445,7 +1450,7 @@ class NetBoxClient:
 ### 10.2 Логика синхронизации
 
 ```python
-# netbox/sync.py
+# netbox/sync/main.py (mixins в отдельных файлах)
 class NetBoxSync:
     """Синхронизация данных с NetBox."""
 

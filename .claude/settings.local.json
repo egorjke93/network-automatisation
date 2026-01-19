@@ -1,6 +1,7 @@
 {
   "permissions": {
     "allow": [
+      "Bash",
       "Bash(tree:*)",
       "Bash(python3:*)",
       "Bash(source myenv/bin/activate)",
@@ -37,7 +38,26 @@
       "Bash(python -m pytest:*)",
       "Bash(git rm:*)",
       "Bash(ls:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(git restore:*)",
+      "Bash(pytest:*)",
+      "Bash(cp:*)",
+      "Bash(npm install)",
+      "Bash(wc:*)",
+      "Bash(npm run build:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs:*)",
+      "Bash(fuser:*)",
+      "Bash(done)",
+      "Bash(pkill:*)",
+      "Bash(python -m json.tool:*)",
+      "Bash(rsync:*)",
+      "Bash(pip freeze:*)",
+      "Bash(unzip:*)",
+      "Bash(npm run dev:*)",
+      "Bash(python -m uvicorn:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker ps:*)"
     ],
     "deny": [],
     "ask": []

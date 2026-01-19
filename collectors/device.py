@@ -18,8 +18,11 @@
     data = collector.collect_dicts(devices)  # List[Dict]
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# Callback для прогресса: (current_index, total, device_host, success)
+ProgressCallback = Callable[[int, int, str, bool], None]
 
 from ntc_templates.parse import parse_output
 
@@ -94,6 +97,8 @@ class DeviceCollector:
         timeout_socket: int = 15,
         timeout_transport: int = 30,
         transport: str = "ssh2",
+        max_retries: int = 2,
+        retry_delay: int = 5,
     ):
         """
         Инициализация коллектора устройств.
@@ -106,6 +111,8 @@ class DeviceCollector:
             timeout_socket: Таймаут сокета
             timeout_transport: Таймаут транспорта
             transport: Тип транспорта (ssh2, paramiko, system)
+            max_retries: Максимум повторных попыток при ошибке подключения
+            retry_delay: Задержка между попытками (секунды)
         """
         self.credentials = credentials
         self.max_workers = max_workers
@@ -119,6 +126,8 @@ class DeviceCollector:
             timeout_socket=timeout_socket,
             timeout_transport=timeout_transport,
             transport=transport,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
         )
 
     def collect(
@@ -143,6 +152,7 @@ class DeviceCollector:
         self,
         devices: List[Device],
         parallel: bool = True,
+        progress_callback: Optional[ProgressCallback] = None,
     ) -> List[Dict[str, Any]]:
         """
         Собирает данные как словари (для экспортеров).
@@ -150,19 +160,25 @@ class DeviceCollector:
         Args:
             devices: Список устройств
             parallel: Параллельный сбор
+            progress_callback: Callback для отслеживания прогресса
+                               (current_index, total, device_host, success)
 
         Returns:
             List[Dict]: Собранные данные со всех устройств
         """
         all_data = []
+        total = len(devices)
 
         if parallel and len(devices) > 1:
-            all_data = self._collect_parallel(devices)
+            all_data = self._collect_parallel(devices, progress_callback)
         else:
-            for device in devices:
+            for idx, device in enumerate(devices):
                 data = self._collect_from_device(device)
+                success = data is not None
                 if data:
                     all_data.append(data)
+                if progress_callback:
+                    progress_callback(idx + 1, total, device.host, success)
 
         logger.info(f"Собрано устройств: {len(all_data)} из {len(devices)}")
         return all_data
@@ -176,17 +192,24 @@ class DeviceCollector:
         """Алиас для collect() (обратная совместимость)."""
         return self.collect(devices, parallel=parallel)
 
-    def _collect_parallel(self, devices: List[Device]) -> List[Dict[str, Any]]:
+    def _collect_parallel(
+        self,
+        devices: List[Device],
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> List[Dict[str, Any]]:
         """
         Параллельный сбор данных.
 
         Args:
             devices: Список устройств
+            progress_callback: Callback для отслеживания прогресса
 
         Returns:
             List[Dict]: Собранные данные
         """
         all_data = []
+        total = len(devices)
+        completed_count = 0
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
@@ -196,14 +219,20 @@ class DeviceCollector:
 
             for future in as_completed(futures):
                 device = futures[future]
+                completed_count += 1
+                success = False
                 try:
                     data = future.result()
                     if data:
                         all_data.append(data)
+                        success = True
                 except CollectorError as e:
                     logger.error(f"Ошибка сбора с {device.host}: {format_error_for_log(e)}")
                 except Exception as e:
                     logger.error(f"Неизвестная ошибка с {device.host}: {e}")
+
+                if progress_callback:
+                    progress_callback(completed_count, total, device.host, success)
 
         return all_data
 
@@ -272,19 +301,27 @@ class DeviceCollector:
 
         except (ConnectionError, AuthenticationError, TimeoutError) as e:
             logger.error(f"[ERROR] {device.host}: {format_error_for_log(e)}")
-            # Заполняем поля ошибками
-            for _, csv_key in self.device_fields.items():
-                data[csv_key] = "ERROR"
+            # Заполняем поля значениями из Device Management (fallback)
             data["_error"] = format_error_for_log(e)
-            data["name"] = device.host
-            data["hostname"] = device.host
+            # Используем hostname из Device Management или IP как fallback
+            fallback_hostname = device.hostname or device.host
+            data["name"] = fallback_hostname
+            data["hostname"] = fallback_hostname
+            # Используем device_type из Device Management или Unknown
+            data["model"] = normalize_device_model(device.device_type) if device.device_type else "Unknown"
+            data["serial"] = ""
+            data["version"] = ""
+            data["uptime"] = ""
         except Exception as e:
             logger.error(f"[ERROR] {device.host}: неизвестная ошибка: {e}")
-            for _, csv_key in self.device_fields.items():
-                data[csv_key] = "ERROR"
             data["_error"] = str(e)
-            data["name"] = device.host
-            data["hostname"] = device.host
+            fallback_hostname = device.hostname or device.host
+            data["name"] = fallback_hostname
+            data["hostname"] = fallback_hostname
+            data["model"] = normalize_device_model(device.device_type) if device.device_type else "Unknown"
+            data["serial"] = ""
+            data["version"] = ""
+            data["uptime"] = ""
 
         # Добавляем дополнительные поля
         for csv_key, value in self.extra_fields.items():

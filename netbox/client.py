@@ -135,8 +135,8 @@ class NetBoxClient:
         Получает список устройств из NetBox.
 
         Args:
-            site: Фильтр по сайту
-            role: Фильтр по роли
+            site: Фильтр по сайту (имя или slug)
+            role: Фильтр по роли (имя или slug)
             status: Фильтр по статусу (active, planned, etc.)
             **filters: Дополнительные фильтры
 
@@ -144,10 +144,25 @@ class NetBoxClient:
             List: Список устройств (pynetbox Record)
         """
         params = {}
+
+        # Site: поддержка имени или slug
         if site:
-            params["site"] = site
+            site_slug = self._resolve_site_slug(site)
+            if site_slug:
+                params["site"] = site_slug
+            else:
+                logger.warning(f"Сайт не найден: {site}")
+                return []  # Сайт не найден - возвращаем пустой список
+
+        # Role: поддержка имени или slug
         if role:
-            params["role"] = role
+            role_slug = self._resolve_role_slug(role)
+            if role_slug:
+                params["role"] = role_slug
+            else:
+                logger.warning(f"Роль не найдена: {role}")
+                return []
+
         if status:
             params["status"] = status
         params.update(filters)
@@ -155,6 +170,44 @@ class NetBoxClient:
         devices = list(self.api.dcim.devices.filter(**params))
         logger.debug(f"Получено устройств: {len(devices)}")
         return devices
+
+    def _resolve_site_slug(self, site_name_or_slug: str) -> Optional[str]:
+        """Находит slug сайта по имени или slug."""
+        # Сначала пробуем как slug
+        site_obj = self.api.dcim.sites.get(slug=site_name_or_slug.lower())
+        if site_obj:
+            return site_obj.slug
+
+        # Пробуем как имя
+        site_obj = self.api.dcim.sites.get(name=site_name_or_slug)
+        if site_obj:
+            return site_obj.slug
+
+        # Ищем частичное совпадение
+        sites = list(self.api.dcim.sites.filter(name__ic=site_name_or_slug))
+        if len(sites) == 1:
+            return sites[0].slug
+
+        return None
+
+    def _resolve_role_slug(self, role_name_or_slug: str) -> Optional[str]:
+        """Находит slug роли по имени или slug."""
+        # Сначала пробуем как slug
+        role_obj = self.api.dcim.device_roles.get(slug=role_name_or_slug.lower())
+        if role_obj:
+            return role_obj.slug
+
+        # Пробуем как имя
+        role_obj = self.api.dcim.device_roles.get(name=role_name_or_slug)
+        if role_obj:
+            return role_obj.slug
+
+        # Ищем частичное совпадение
+        roles = list(self.api.dcim.device_roles.filter(name__ic=role_name_or_slug))
+        if len(roles) == 1:
+            return roles[0].slug
+
+        return None
 
     def get_device_by_name(self, name: str) -> Optional[Any]:
         """
@@ -431,6 +484,30 @@ class NetBoxClient:
 
         return None
 
+    def get_cables(
+        self,
+        device_id: Optional[int] = None,
+        **filters,
+    ) -> List[Any]:
+        """
+        Получает кабели.
+
+        Args:
+            device_id: Фильтр по устройству
+            **filters: Дополнительные фильтры
+
+        Returns:
+            List: Список кабелей
+        """
+        params = {}
+        if device_id:
+            params["device_id"] = device_id
+        params.update(filters)
+
+        cables = list(self.api.dcim.cables.filter(**params))
+        logger.debug(f"Получено кабелей: {len(cables)}")
+        return cables
+
     def create_ip_address(
         self,
         address: str,
@@ -499,14 +576,16 @@ class NetBoxClient:
             site: Сайт (name или slug, опционально)
 
         Returns:
-            VLAN или None
+            VLAN или None (первый найденный если несколько)
         """
         params = {"vid": vid}
         if site:
             # Конвертируем name в slug
             site_slug = site.lower().replace(" ", "-")
             params["site"] = site_slug
-        return self.api.ipam.vlans.get(**params)
+        # Используем filter вместо get чтобы избежать ошибки при дубликатах VID
+        vlans = list(self.api.ipam.vlans.filter(**params))
+        return vlans[0] if vlans else None
 
     def create_vlan(
         self,
@@ -693,16 +772,56 @@ class NetBoxClient:
 
         Args:
             item_id: ID inventory item
-            **updates: Поля для обновления
+            **updates: Поля для обновления (manufacturer может быть строкой)
 
         Returns:
             Обновлённый inventory item
         """
         item = self.api.dcim.inventory_items.get(item_id)
         if item:
+            # Обработка manufacturer
+            if "manufacturer" in updates:
+                mfr_value = updates["manufacturer"]
+                if mfr_value is None:
+                    # Очистка manufacturer
+                    updates["manufacturer"] = None
+                elif isinstance(mfr_value, str):
+                    # Конвертируем имя в ID
+                    mfr = self.api.dcim.manufacturers.get(slug=mfr_value.lower())
+                    if not mfr:
+                        mfr = self.api.dcim.manufacturers.get(name=mfr_value)
+                    if mfr:
+                        updates["manufacturer"] = mfr.id
+                    else:
+                        # Создаём manufacturer если не найден
+                        import re
+                        slug = re.sub(r'[^a-z0-9-]', '-', mfr_value.lower()).strip('-')
+                        mfr = self.api.dcim.manufacturers.create({"name": mfr_value, "slug": slug})
+                        if mfr:
+                            updates["manufacturer"] = mfr.id
+                        else:
+                            del updates["manufacturer"]  # Не удалось создать
             item.update(updates)
             logger.debug(f"Обновлён inventory item: {item.name}")
         return item
+
+    def delete_inventory_item(self, item_id: int) -> bool:
+        """
+        Удаляет inventory item.
+
+        Args:
+            item_id: ID inventory item
+
+        Returns:
+            bool: True если удалён
+        """
+        item = self.api.dcim.inventory_items.get(item_id)
+        if item:
+            name = item.name
+            item.delete()
+            logger.info(f"Удалён inventory item: {name}")
+            return True
+        return False
 
     # ==================== MAC-АДРЕСА (NetBox 4.x) ====================
 

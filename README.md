@@ -7,6 +7,8 @@
 - Сбор MAC-адресов, LLDP/CDP соседей, интерфейсов, inventory
 - Экспорт в Excel, CSV, JSON
 - Синхронизация с NetBox (устройства, интерфейсы, IP, кабели, VLAN)
+- Web интерфейс (Vue.js) и REST API (FastAPI)
+- Pipeline: автоматизация сбора и синхронизации
 - Поддержка Cisco IOS/IOS-XE/NX-OS, Arista EOS, Juniper JunOS, QTech
 
 ## Быстрый старт

@@ -5,9 +5,10 @@ netmiko>=4.0.0              # SSH для конфигурационных изм
 # Парсинг вывода сетевых команд
 ntc-templates>=6.0.0        # NTC Templates для парсинга (использует parse_output)
 
-# Экспорт данных
+# Экспорт данных и конфигурация
 openpyxl>=3.0.0             # Экспорт/импорт Excel
 pandas>=2.0.0               # Работа с данными, сопоставление MAC
+pyyaml>=6.0                 # Парсинг YAML конфигов (fields.yaml, config.yaml)
 
 # NetBox интеграция (опционально)
 pynetbox>=7.4.0             # NetBox API клиент (совместим с NetBox 4.x)
@@ -22,6 +23,7 @@ ssh2-python>=1.0.0          # SSH2 транспорт для Scrapli (быстр
 # Web API (опционально - для веб-интерфейса)
 fastapi>=0.104.0            # REST API framework
 uvicorn[standard]>=0.24.0   # ASGI сервер для FastAPI
+python-multipart>=0.0.6     # Обработка multipart/form-data (загрузка файлов)
 
 # Тестирование
 pytest>=8.0.0               # Фреймворк тестирования

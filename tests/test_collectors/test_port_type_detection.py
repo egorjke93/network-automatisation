@@ -1,5 +1,7 @@
 """
-Тесты для _detect_port_type() - нормализация типа порта в коллекторе.
+Тесты для detect_port_type() - нормализация типа порта.
+
+Логика перенесена в Domain Layer: InterfaceNormalizer.detect_port_type()
 
 Проверяет что данные с разных платформ нормализуются в единый формат:
 - "10g-sfp+", "1g-rj45", "25g-sfp28", "lag", "virtual" и т.д.
@@ -10,13 +12,13 @@
 """
 
 import pytest
-from network_collector.collectors.interfaces import InterfaceCollector
+from network_collector.core.domain.interface import InterfaceNormalizer
 
 
 @pytest.fixture
-def collector():
-    """Создаём InterfaceCollector для тестирования."""
-    return InterfaceCollector()
+def normalizer():
+    """Создаём InterfaceNormalizer для тестирования."""
+    return InterfaceNormalizer()
 
 
 @pytest.mark.unit
@@ -255,7 +257,7 @@ class TestPortTypeDetection:
             "1g-sfp",  # SFP, не RJ45
         ),
     ])
-    def test_detect_port_type(self, collector, interface_data, expected_port_type):
+    def test_detect_port_type(self, normalizer, interface_data, expected_port_type):
         """
         Тест определения port_type на основе данных интерфейса.
 
@@ -266,7 +268,7 @@ class TestPortTypeDetection:
         4. Имя интерфейса (IOS формат)
         """
         iface_lower = interface_data["interface"].lower()
-        result = collector._detect_port_type(interface_data, iface_lower)
+        result = normalizer.detect_port_type(interface_data, iface_lower)
 
         assert result == expected_port_type, (
             f"Interface: {interface_data['interface']}\n"
@@ -275,7 +277,7 @@ class TestPortTypeDetection:
             f"Expected: {expected_port_type}, Got: {result}"
         )
 
-    def test_production_bug_25g_port_with_10g_sfp(self, collector, sample_interface_data):
+    def test_production_bug_25g_port_with_10g_sfp(self, normalizer, sample_interface_data):
         """
         Регрессионный тест для Проблемы 1 из прода.
 
@@ -285,7 +287,7 @@ class TestPortTypeDetection:
         data = sample_interface_data["c9500_25g_with_10g_sfp"]
         iface_lower = data["interface"].lower()
 
-        result = collector._detect_port_type(data, iface_lower)
+        result = normalizer.detect_port_type(data, iface_lower)
 
         assert result == "10g-sfp+", (
             f"Проблема 1 из прода: 25G порт с 10G SFP-10GBase-LR\n"
@@ -293,23 +295,23 @@ class TestPortTypeDetection:
             f"Expected: '10g-sfp+', Got: '{result}'"
         )
 
-    def test_empty_data(self, collector):
+    def test_empty_data(self, normalizer):
         """Тест с пустыми данными."""
         data = {"interface": "Ethernet1/1", "hardware_type": "", "media_type": ""}
-        result = collector._detect_port_type(data, "ethernet1/1")
+        result = normalizer.detect_port_type(data, "ethernet1/1")
 
         # Не удалось определить тип
         assert result == ""
 
-    def test_case_insensitivity(self, collector):
+    def test_case_insensitivity(self, normalizer):
         """Тест что поиск не зависит от регистра."""
         # Media type в разных регистрах
         data1 = {"interface": "Eth1/1", "hardware_type": "", "media_type": "SFP-10GBase-LR"}
         data2 = {"interface": "Eth1/1", "hardware_type": "", "media_type": "sfp-10gbase-lr"}
         data3 = {"interface": "Eth1/1", "hardware_type": "", "media_type": "SFP-10GBASE-LR"}
 
-        result1 = collector._detect_port_type(data1, "eth1/1")
-        result2 = collector._detect_port_type(data2, "eth1/1")
-        result3 = collector._detect_port_type(data3, "eth1/1")
+        result1 = normalizer.detect_port_type(data1, "eth1/1")
+        result2 = normalizer.detect_port_type(data2, "eth1/1")
+        result3 = normalizer.detect_port_type(data3, "eth1/1")
 
         assert result1 == result2 == result3 == "10g-sfp+"

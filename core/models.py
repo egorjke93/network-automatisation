@@ -61,12 +61,16 @@ class Interface:
         description: Описание интерфейса
         status: Статус (up/down)
         ip_address: IP-адрес (если есть)
+        prefix_length: Длина префикса/маска (24, 255.255.255.0)
         mac: MAC-адрес интерфейса
         speed: Скорость (1 Gbit, 10 Gbit)
         duplex: Дуплекс (full, half, auto)
         mtu: MTU
         vlan: VLAN ID (для access портов)
         mode: Режим switchport (access, tagged, tagged-all)
+        native_vlan: Native VLAN (для trunk портов)
+        tagged_vlans: Список tagged VLAN (для trunk портов)
+        access_vlan: Access VLAN (для access портов)
         port_type: Тип порта (1g-rj45, 10g-sfp+, lag, virtual)
         media_type: Тип трансивера (SFP-10GBase-LR)
         hardware_type: Hardware тип (Gigabit Ethernet)
@@ -78,12 +82,16 @@ class Interface:
     description: str = ""
     status: str = "unknown"
     ip_address: str = ""
+    prefix_length: str = ""
     mac: str = ""
     speed: str = ""
     duplex: str = ""
     mtu: Optional[int] = None
     vlan: str = ""
     mode: str = ""
+    native_vlan: str = ""
+    tagged_vlans: str = ""
+    access_vlan: str = ""
     port_type: str = ""
     media_type: str = ""
     hardware_type: str = ""
@@ -99,12 +107,16 @@ class Interface:
             description=data.get("description") or "",
             status=data.get("status") or data.get("link_status") or "unknown",
             ip_address=data.get("ip_address") or "",
+            prefix_length=str(data.get("prefix_length") or data.get("mask") or ""),
             mac=data.get("mac") or data.get("mac_address") or "",
             speed=data.get("speed") or data.get("bandwidth") or "",
             duplex=data.get("duplex") or "",
             mtu=int(data["mtu"]) if data.get("mtu") else None,
-            vlan=str(data.get("vlan") or data.get("access_vlan") or ""),
+            vlan=str(data.get("vlan") or ""),
             mode=data.get("mode") or "",
+            native_vlan=str(data.get("native_vlan") or ""),
+            tagged_vlans=str(data.get("tagged_vlans") or ""),
+            access_vlan=str(data.get("access_vlan") or ""),
             port_type=data.get("port_type") or "",
             media_type=data.get("media_type") or "",
             hardware_type=data.get("hardware_type") or "",
@@ -192,7 +204,7 @@ class LLDPNeighbor:
         hostname: Hostname локального устройства
         device_ip: IP локального устройства
         capabilities: Capabilities соседа (Router, Switch)
-        platform: Платформа соседа
+        remote_platform: Платформа соседа
     """
     local_interface: str
     remote_hostname: str = ""
@@ -204,7 +216,7 @@ class LLDPNeighbor:
     hostname: str = ""
     device_ip: str = ""
     capabilities: str = ""
-    platform: str = ""
+    remote_platform: str = ""
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "LLDPNeighbor":
@@ -220,7 +232,7 @@ class LLDPNeighbor:
             hostname=data.get("hostname", ""),
             device_ip=data.get("device_ip", ""),
             capabilities=data.get("capabilities", data.get("capability", "")),
-            platform=data.get("platform", data.get("neighbor_platform", "")),
+            remote_platform=data.get("remote_platform", data.get("platform", "")),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -310,9 +322,11 @@ class IPAddressEntry:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "IPAddressEntry":
         """Создаёт IPAddressEntry из словаря."""
+        # interface может быть в поле "interface" или "name" (из Interface dict)
+        interface = data.get("interface") or data.get("name", "")
         return cls(
             ip_address=data.get("ip_address", ""),
-            interface=data.get("interface", ""),
+            interface=interface,
             mask=data.get("mask", data.get("prefix_length", "")),
             hostname=data.get("hostname", ""),
             device_ip=data.get("device_ip", ""),
