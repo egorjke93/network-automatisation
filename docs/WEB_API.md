@@ -2,6 +2,18 @@
 
 > REST API и веб-интерфейс для сбора данных с сетевого оборудования и синхронизации с NetBox
 
+## Содержание
+
+1. [Запуск](#запуск)
+2. [Архитектура Frontend ↔ Backend](#архитектура-frontend--backend)
+3. [Полная цепочка: от клика до результата](#полная-цепочка-от-клика-до-результата)
+4. [Credentials и авторизация](#credentials-и-авторизация)
+5. [Async Mode и Progress Bar](#async-mode-и-progress-bar)
+6. [REST API Endpoints](#rest-api-endpoints)
+7. [Web UI Страницы](#web-ui-страницы)
+
+---
+
 ## Запуск
 
 ### Backend (FastAPI)
@@ -65,6 +77,649 @@ uvicorn network_collector.api.main:app \
 
 - **Swagger UI:** http://localhost:8080/docs
 - **ReDoc:** http://localhost:8080/redoc
+
+---
+
+## Архитектура Frontend ↔ Backend
+
+### Общая схема
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              BROWSER                                          │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                     Vue.js 3 (SPA)                                       │ │
+│  │                     http://localhost:5173                                │ │
+│  │                                                                          │ │
+│  │  ┌────────────┐   ┌────────────┐   ┌────────────┐   ┌────────────┐     │ │
+│  │  │ App.vue    │   │ Sync.vue   │   │Pipelines.vue│  │History.vue │     │ │
+│  │  │ (навигация)│   │ (sync)     │   │ (pipeline) │   │ (журнал)   │     │ │
+│  │  └────────────┘   └────────────┘   └────────────┘   └────────────┘     │ │
+│  │                          │                                               │ │
+│  │                          ▼                                               │ │
+│  │  ┌───────────────────────────────────────────────────────────────────┐  │ │
+│  │  │                      axios (HTTP Client)                           │  │ │
+│  │  │                                                                    │  │ │
+│  │  │  interceptor: добавляет X-SSH-Username, X-SSH-Password,           │  │ │
+│  │  │               X-NetBox-URL, X-NetBox-Token из sessionStorage      │  │ │
+│  │  └───────────────────────────────────────────────────────────────────┘  │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                    │                                          │
+│                          HTTP POST/GET (JSON)                                 │
+│                                    │                                          │
+└────────────────────────────────────┼──────────────────────────────────────────┘
+                                     │
+                          ┌──────────┴──────────┐
+                          │  vite proxy         │
+                          │  /api/* → :8080     │
+                          └──────────┬──────────┘
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           BACKEND (FastAPI)                                   │
+│                           http://localhost:8080                               │
+│                                                                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         api/routes/*.py                                  │ │
+│  │                                                                          │ │
+│  │  /api/sync/netbox    → sync.py     → SyncService                        │ │
+│  │  /api/pipelines      → pipelines.py → PipelineExecutor                  │ │
+│  │  /api/tasks/{id}     → tasks.py    → TaskManager                        │ │
+│  │  /api/history        → history.py  → HistoryService                     │ │
+│  │  /api/devices/collect → devices.py → CollectorService                   │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                    │                                          │
+│                                    ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                        api/services/*.py                                 │ │
+│  │                                                                          │ │
+│  │  SyncService      → создаёт Task, запускает sync, обновляет progress    │ │
+│  │  TaskManager      → хранит задачи in-memory, отдаёт статус              │ │
+│  │  HistoryService   → сохраняет результаты в data/history.json            │ │
+│  │  CollectorService → собирает данные с устройств                         │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                    │                                          │
+│                                    ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐ │
+│  │                         CORE LAYER                                       │ │
+│  │                                                                          │ │
+│  │  collectors/*.py    → SSH подключение, парсинг                          │ │
+│  │  netbox/sync/*.py   → API вызовы к NetBox                               │ │
+│  │  core/pipeline/*    → оркестрация шагов                                 │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                    │                                          │
+│                    ┌───────────────┴───────────────┐                          │
+│                    ▼                               ▼                          │
+│           ┌──────────────┐               ┌──────────────┐                     │
+│           │ SSH (Scrapli)│               │ NetBox API   │                     │
+│           │ → устройства │               │ (pynetbox)   │                     │
+│           └──────────────┘               └──────────────┘                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Ключевые файлы
+
+| Слой | Файл | Описание |
+|------|------|----------|
+| **Frontend** | `frontend/src/main.js` | Настройка Vue, роутер, axios interceptor |
+| | `frontend/src/App.vue` | Главный компонент, навигация |
+| | `frontend/src/views/*.vue` | Страницы (Sync, Pipelines, History) |
+| | `frontend/src/components/*.vue` | Переиспользуемые компоненты |
+| | `frontend/vite.config.js` | Proxy настройка `/api → :8080` |
+| **Backend** | `api/main.py` | FastAPI app, подключение роутеров |
+| | `api/routes/*.py` | HTTP endpoints |
+| | `api/services/*.py` | Бизнес-логика |
+| | `api/schemas/*.py` | Pydantic модели (request/response) |
+
+---
+
+## Полная цепочка: от клика до результата
+
+### Пример: Sync NetBox (пошагово)
+
+Разберём что происходит когда пользователь нажимает "Preview Changes" на странице Sync.
+
+#### Шаг 1: Пользователь заполняет форму и нажимает кнопку
+
+**Файл:** `frontend/src/views/Sync.vue`
+
+```vue
+<template>
+  <form @submit.prevent="runSync">
+    <DeviceSelector v-model="selectedDevices" />
+    <input v-model="site" type="text" />
+    <label><input type="checkbox" v-model="interfaces" /> Interfaces</label>
+    <button type="submit">Preview Changes</button>
+  </form>
+</template>
+```
+
+**Что происходит:**
+1. Пользователь выбирает устройства через `DeviceSelector`
+2. Отмечает галочки (interfaces, cables, etc.)
+3. Нажимает кнопку — срабатывает `@submit.prevent="runSync"`
+
+#### Шаг 2: Vue компонент формирует и отправляет запрос
+
+**Файл:** `frontend/src/views/Sync.vue`
+
+```javascript
+methods: {
+  buildRequest() {
+    return {
+      devices: this.selectedDevices,        // ["10.0.0.1", "10.0.0.2"]
+      site: this.site || null,              // "Office"
+      interfaces: this.interfaces,           // true
+      cables: this.cables,                   // false
+      dry_run: true,                         // только предпросмотр
+      async_mode: true,                      // async режим
+    }
+  },
+
+  async runSync() {
+    this.loading = true
+    this.taskId = null
+
+    const res = await axios.post('/api/sync/netbox', {
+      ...this.buildRequest(),
+      dry_run: true,
+      async_mode: true,
+    })
+
+    // Получаем task_id для отслеживания прогресса
+    this.taskId = res.data.task_id   // "a1b2c3d4"
+  }
+}
+```
+
+**Что происходит:**
+1. `buildRequest()` собирает данные из формы в объект
+2. `axios.post()` отправляет POST запрос на `/api/sync/netbox`
+3. Благодаря axios interceptor, автоматически добавляются headers с credentials
+
+#### Шаг 3: Axios interceptor добавляет credentials
+
+**Файл:** `frontend/src/main.js`
+
+```javascript
+// Axios interceptor — выполняется ПЕРЕД каждым запросом
+axios.interceptors.request.use((config) => {
+  // Берём credentials из sessionStorage
+  const sshUsername = sessionStorage.getItem('ssh_username')
+  const sshPassword = sessionStorage.getItem('ssh_password')
+  const netboxUrl = sessionStorage.getItem('netbox_url')
+  const netboxToken = sessionStorage.getItem('netbox_token')
+
+  // Добавляем в headers
+  if (sshUsername) config.headers['X-SSH-Username'] = sshUsername
+  if (sshPassword) config.headers['X-SSH-Password'] = sshPassword
+  if (netboxUrl) config.headers['X-NetBox-URL'] = netboxUrl
+  if (netboxToken) config.headers['X-NetBox-Token'] = netboxToken
+
+  return config
+})
+```
+
+**Что происходит:**
+1. Перед отправкой запроса срабатывает interceptor
+2. Достаёт credentials из sessionStorage браузера
+3. Добавляет их в HTTP headers запроса
+
+**Итоговый HTTP запрос:**
+```http
+POST /api/sync/netbox HTTP/1.1
+Host: localhost:8080
+Content-Type: application/json
+X-SSH-Username: admin
+X-SSH-Password: secret123
+X-NetBox-URL: http://netbox:8000
+X-NetBox-Token: abc123token
+
+{
+  "devices": ["10.0.0.1", "10.0.0.2"],
+  "site": "Office",
+  "interfaces": true,
+  "dry_run": true,
+  "async_mode": true
+}
+```
+
+#### Шаг 4: Vite proxy перенаправляет запрос на backend
+
+**Файл:** `frontend/vite.config.js`
+
+```javascript
+export default defineConfig({
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8080',  // Backend
+        changeOrigin: true,
+      },
+    },
+  },
+})
+```
+
+**Что происходит:**
+1. Браузер отправляет запрос на `localhost:5173/api/sync/netbox`
+2. Vite dev server видит путь `/api/*`
+3. Проксирует запрос на `localhost:8080/api/sync/netbox`
+
+#### Шаг 5: FastAPI route принимает запрос
+
+**Файл:** `api/routes/sync.py`
+
+```python
+@router.post("/netbox", response_model=SyncResponse)
+async def sync_netbox(request: Request, body: SyncRequest):
+    # Извлекаем credentials из headers
+    credentials = get_credentials_from_headers(request)
+    # credentials = Credentials(username="admin", password="secret123")
+
+    netbox = get_netbox_config_from_headers(request)
+    # netbox = NetBoxConfig(url="http://netbox:8000", token="abc123")
+
+    # Создаём сервис
+    service = SyncService(credentials, netbox)
+
+    # Запускаем синхронизацию
+    return await service.sync(body)
+```
+
+**Что происходит:**
+1. FastAPI парсит JSON body в `SyncRequest` (Pydantic модель)
+2. `get_credentials_from_headers()` достаёт credentials из headers
+3. Создаётся `SyncService` с credentials
+4. Вызывается `service.sync(body)`
+
+#### Шаг 6: SyncService создаёт Task и запускает синхронизацию
+
+**Файл:** `api/services/sync_service.py`
+
+```python
+class SyncService:
+    async def sync(self, request: SyncRequest) -> SyncResponse:
+        devices = self._get_devices(request.devices)
+        steps = self._calculate_steps(request)  # ["collect", "sync_interfaces", ...]
+
+        if request.async_mode:
+            # Создаём задачу для отслеживания прогресса
+            task = task_manager.create_task(
+                task_type="sync",
+                total_steps=len(steps),
+                total_items=len(devices),
+                steps=steps,
+            )
+
+            # Сразу возвращаем task_id клиенту
+            # Синхронизация продолжится в фоне
+            asyncio.create_task(self._run_sync_async(request, devices, task))
+
+            return SyncResponse(
+                success=True,
+                task_id=task.id,  # "a1b2c3d4"
+                dry_run=request.dry_run,
+            )
+```
+
+**Что происходит:**
+1. Получаем список устройств для синхронизации
+2. Вычисляем шаги (collect, sync_interfaces, sync_cables, ...)
+3. В async_mode создаём Task для отслеживания
+4. Сразу возвращаем response с `task_id`
+5. Синхронизация продолжается в background через `asyncio.create_task()`
+
+#### Шаг 7: Frontend получает task_id и начинает polling
+
+**Файл:** `frontend/src/views/Sync.vue`
+
+```javascript
+async runSync() {
+  const res = await axios.post('/api/sync/netbox', {...})
+
+  // Получаем task_id
+  this.taskId = res.data.task_id  // "a1b2c3d4"
+
+  // ProgressBar автоматически начинает polling
+  // (см. watch на taskId)
+}
+```
+
+**Файл:** `frontend/src/components/ProgressBar.vue`
+
+```javascript
+watch: {
+  taskId: {
+    immediate: true,
+    handler(newId) {
+      if (newId) {
+        this.startPolling()  // Начинаем опрашивать статус
+      }
+    },
+  },
+},
+
+methods: {
+  async startPolling() {
+    this.visible = true
+    await this.fetchTaskStatus()
+
+    // Опрашиваем каждые 500ms
+    this.pollTimer = setInterval(this.fetchTaskStatus, 500)
+  },
+
+  async fetchTaskStatus() {
+    const res = await axios.get(`/api/tasks/${this.taskId}`)
+    const task = res.data
+
+    this.status = task.status           // "running"
+    this.progress = task.progress_percent  // 45
+    this.message = task.message         // "Обработка 10.0.0.1 (2/5)"
+    this.steps = task.steps             // [{name: "collect", status: "completed"}, ...]
+
+    // Если завершено — останавливаем polling
+    if (task.status === 'completed' || task.status === 'failed') {
+      this.stopPolling()
+      this.$emit('complete', task)  // Уведомляем родителя
+    }
+  }
+}
+```
+
+**Что происходит:**
+1. Vue компонент получает `task_id`
+2. ProgressBar.vue видит изменение taskId через `watch`
+3. Начинает опрашивать `/api/tasks/{task_id}` каждые 500ms
+4. Обновляет progress bar на основе ответа
+5. Когда status='completed' — останавливает polling и emit'ит событие
+
+#### Шаг 8: TaskManager обновляется в процессе синхронизации
+
+**Файл:** `api/services/sync_service.py`
+
+```python
+def _do_sync(self, request, devices, task_id, steps):
+    # Шаг 1: Collect interfaces
+    task_manager.start_step(task_id, step_index=0, total_items=len(devices))
+    task_manager.update_task(task_id, message="Collecting interfaces...")
+
+    for i, device in enumerate(devices):
+        task_manager.update_item(task_id, current=i+1, name=device.host)
+        # ... сбор данных ...
+
+    task_manager.complete_step(task_id, step_index=0)
+
+    # Шаг 2: Sync interfaces
+    task_manager.start_step(task_id, step_index=1, total_items=len(interfaces))
+    task_manager.update_task(task_id, message="Syncing interfaces...")
+
+    for i, intf in enumerate(interfaces):
+        task_manager.update_item(task_id, current=i+1, name=intf.name)
+        # ... синхронизация ...
+
+    task_manager.complete_step(task_id, step_index=1)
+
+    # Завершение
+    task_manager.complete_task(task_id, result={...}, message="Sync completed")
+```
+
+**Что происходит:**
+1. В процессе работы SyncService постоянно обновляет TaskManager
+2. `start_step()` — начинает новый шаг
+3. `update_item()` — обновляет прогресс внутри шага
+4. `complete_step()` — завершает шаг
+5. `complete_task()` — завершает всю задачу с результатом
+
+#### Шаг 9: Frontend получает результат
+
+**Файл:** `frontend/src/views/Sync.vue`
+
+```javascript
+// ProgressBar emit'ит событие когда задача завершена
+<ProgressBar :task-id="taskId" @complete="onTaskComplete" />
+
+methods: {
+  onTaskComplete(task) {
+    this.loading = false
+
+    // Получаем результат из task.result
+    this.result = {
+      success: task.result.success,
+      dry_run: task.result.dry_run,
+      devices: task.result.stats?.devices,     // {created: 2, updated: 0}
+      interfaces: task.result.stats?.interfaces, // {created: 15, updated: 3}
+      diff: task.result.diff,                  // [{action: "create", ...}]
+      errors: task.result.errors,
+    }
+
+    // Теперь result отображается в template
+  }
+}
+```
+
+**Что происходит:**
+1. ProgressBar завершает polling и emit'ит событие `complete`
+2. Sync.vue получает task с результатом в `onTaskComplete()`
+3. Извлекает данные из `task.result`
+4. Vue реактивно обновляет template с результатами
+
+#### Шаг 10: Результат записывается в историю
+
+**Файл:** `api/services/sync_service.py`
+
+```python
+# После завершения sync (не dry_run)
+if not result["dry_run"]:
+    history_service.add_entry(
+        operation="sync",
+        status="success",
+        devices=[d.host for d in devices],
+        stats={
+            "devices": result["stats"]["devices"],
+            "interfaces": result["stats"]["interfaces"],
+            ...
+        },
+        details=diff_list,  # Полный diff изменений
+        duration_ms=duration_ms,
+    )
+```
+
+**Файл:** `api/services/history_service.py`
+
+```python
+def add_entry(self, operation, status, devices, stats, details, duration_ms):
+    entry = {
+        "id": str(uuid.uuid4())[:8],
+        "operation": operation,
+        "status": status,
+        "timestamp": datetime.now().isoformat(),
+        "devices": devices,
+        "stats": stats,
+        "details": details,
+        "duration_ms": duration_ms,
+    }
+
+    # Добавляем в начало списка
+    self._history.insert(0, entry)
+
+    # Ограничиваем до 1000 записей
+    if len(self._history) > 1000:
+        self._history = self._history[:1000]
+
+    # Сохраняем в файл
+    self._save()  # → data/history.json
+```
+
+**Что происходит:**
+1. После успешной синхронизации (не preview)
+2. `history_service.add_entry()` создаёт запись
+3. Сохраняет в `data/history.json`
+4. Ограничивает историю 1000 записями
+
+---
+
+## Credentials и авторизация
+
+### Где хранятся credentials?
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         BROWSER                                       │
+│                                                                       │
+│  ┌─────────────────────────────────────────────────────────────────┐ │
+│  │                    sessionStorage                                │ │
+│  │                                                                  │ │
+│  │  ssh_username: "admin"                                           │ │
+│  │  ssh_password: "secret123"                                       │ │
+│  │  netbox_url: "http://netbox:8000"                               │ │
+│  │  netbox_token: "abc123token"                                    │ │
+│  │                                                                  │ │
+│  │  (Удаляются при закрытии вкладки)                               │ │
+│  └─────────────────────────────────────────────────────────────────┘ │
+│                                                                       │
+│  ИЛИ                                                                  │
+│                                                                       │
+│  ┌─────────────────────────────────────────────────────────────────┐ │
+│  │                    localStorage                                  │ │
+│  │                                                                  │ │
+│  │  (То же, но сохраняется между сессиями)                         │ │
+│  └─────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Как credentials попадают в запрос?
+
+**Страница Credentials (`/credentials`):**
+
+```javascript
+// frontend/src/views/Credentials.vue
+saveCredentials() {
+  // Сохраняем в sessionStorage (или localStorage если "Remember me")
+  sessionStorage.setItem('ssh_username', this.sshUsername)
+  sessionStorage.setItem('ssh_password', this.sshPassword)
+  sessionStorage.setItem('netbox_url', this.netboxUrl)
+  sessionStorage.setItem('netbox_token', this.netboxToken)
+}
+```
+
+**Axios interceptor (автоматически):**
+
+```javascript
+// frontend/src/main.js
+axios.interceptors.request.use((config) => {
+  const username = sessionStorage.getItem('ssh_username')
+  if (username) config.headers['X-SSH-Username'] = username
+  // ... остальные
+  return config
+})
+```
+
+**Backend извлекает из headers:**
+
+```python
+# api/routes/auth.py
+def get_credentials_from_headers(request: Request) -> Credentials:
+    username = request.headers.get("X-SSH-Username")
+    password = request.headers.get("X-SSH-Password")
+
+    if not username or not password:
+        raise HTTPException(401, "SSH credentials required")
+
+    return Credentials(username=username, password=password)
+```
+
+### Важно: Сервер НЕ хранит пароли!
+
+- Пароли хранятся только в браузере (sessionStorage)
+- Передаются в каждом запросе через headers
+- Backend использует их только для текущего запроса
+- После ответа — забывает
+
+---
+
+## Async Mode и Progress Bar
+
+### Зачем async mode?
+
+Синхронизация может занять несколько минут:
+- SSH подключения к устройствам
+- Парсинг данных
+- API вызовы к NetBox
+
+Без async mode браузер бы ждал ответа минутами — плохой UX.
+
+### Как работает async mode
+
+```
+Sync Mode (без async):
+─────────────────────────────────────────────────────────────────
+Browser ──POST──▶ Backend ─────работа─────▶ ◀──Response── Browser
+                            (5 минут)
+         (браузер ждёт 5 минут)
+
+
+Async Mode (с async):
+─────────────────────────────────────────────────────────────────
+Browser ──POST──▶ Backend
+                    │
+                    ├──▶ создаёт Task
+                    ├──▶ возвращает task_id (100ms)
+                    │
+Browser ◀─task_id──┘
+
+Browser ──GET /tasks/{id}──▶ Backend ──▶ {status: "running", progress: 10%}
+Browser ──GET /tasks/{id}──▶ Backend ──▶ {status: "running", progress: 45%}
+Browser ──GET /tasks/{id}──▶ Backend ──▶ {status: "running", progress: 80%}
+Browser ──GET /tasks/{id}──▶ Backend ──▶ {status: "completed", result: {...}}
+```
+
+### Компоненты async mode
+
+| Компонент | Файл | Описание |
+|-----------|------|----------|
+| `TaskManager` | `api/services/task_manager.py` | Хранит задачи in-memory |
+| `Task` | там же | Dataclass с прогрессом |
+| `ProgressBar` | `frontend/src/components/ProgressBar.vue` | Polling и отображение |
+| `/api/tasks/{id}` | `api/routes/tasks.py` | Endpoint для статуса |
+
+### TaskManager API
+
+```python
+# Создание задачи
+task = task_manager.create_task(
+    task_type="sync",
+    total_steps=4,
+    total_items=10,
+    steps=["collect", "sync_interfaces", "sync_cables", "sync_inventory"],
+)
+
+# Начало шага
+task_manager.start_step(task.id, step_index=0, total_items=10)
+
+# Обновление прогресса
+task_manager.update_item(task.id, current=5, name="10.0.0.5")
+
+# Завершение шага
+task_manager.complete_step(task.id, step_index=0)
+
+# Завершение задачи
+task_manager.complete_task(task.id, result={...}, message="Done")
+```
+
+### ProgressBar props
+
+```vue
+<ProgressBar
+  :task-id="taskId"           <!-- ID задачи для polling -->
+  :poll-interval="500"        <!-- Интервал polling (ms) -->
+  :auto-hide="true"           <!-- Скрыть после завершения -->
+  :hide-delay="3000"          <!-- Через сколько скрыть (ms) -->
+  @complete="onTaskComplete"  <!-- Событие завершения -->
+/>
+```
 
 ---
 
