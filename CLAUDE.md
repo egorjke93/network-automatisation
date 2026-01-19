@@ -26,6 +26,7 @@ python -m network_collector --help
 | **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** | Разработка, добавление платформ |
 | **[docs/TESTING.md](docs/TESTING.md)** | Тестирование: структура, запуск, написание тестов |
 | **[docs/SYNC_PIPELINE_INTERNALS.md](docs/SYNC_PIPELINE_INTERNALS.md)** | **Для начинающих:** подробно о Sync и Pipeline |
+| **[docs/CLI_INTERNALS.md](docs/CLI_INTERNALS.md)** | **Для начинающих:** подробно о CLI |
 | **[docs/DATA_FLOW_LLDP.md](docs/DATA_FLOW_LLDP.md)** | Детальный поток данных LLDP/CDP |
 | **[docs/TODO.md](docs/TODO.md)** | План развития проекта |
 
