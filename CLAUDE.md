@@ -23,7 +23,8 @@ python -m network_collector --help
 | **[docs/MANUAL.md](docs/MANUAL.md)** | Полное руководство: CLI, Web UI, API, Pipeline |
 | **[docs/WEB_API.md](docs/WEB_API.md)** | REST API документация, endpoints, примеры |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Архитектура, слои, поток данных |
-| **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** | Разработка, тесты, добавление платформ |
+| **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** | Разработка, добавление платформ |
+| **[docs/TESTING.md](docs/TESTING.md)** | Тестирование: структура, запуск, написание тестов |
 | **[docs/DATA_FLOW_LLDP.md](docs/DATA_FLOW_LLDP.md)** | Детальный поток данных LLDP/CDP |
 | **[docs/TODO.md](docs/TODO.md)** | План развития проекта |
 
