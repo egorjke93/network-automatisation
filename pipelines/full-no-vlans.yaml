@@ -1,0 +1,49 @@
+id: full-no-vlans
+name: Full Sync (no VLANs)
+description: 'Полная синхронизация без VLAN: devices → interfaces → IP → inventory → cables'
+enabled: true
+steps:
+- id: sync_devices
+  type: sync
+  target: devices
+  enabled: true
+  options:
+    update_existing: true
+  depends_on: []
+
+- id: sync_interfaces
+  type: sync
+  target: interfaces
+  enabled: true
+  options:
+    cleanup: true
+  depends_on:
+  - sync_devices
+
+- id: sync_ip_addresses
+  type: sync
+  target: ip_addresses
+  enabled: true
+  options:
+    cleanup: true
+    update_existing: true
+  depends_on:
+  - sync_interfaces
+
+- id: sync_inventory
+  type: sync
+  target: inventory
+  enabled: true
+  options:
+    cleanup: true
+  depends_on:
+  - sync_devices
+
+- id: sync_cables
+  type: sync
+  target: cables
+  enabled: true
+  options:
+    cleanup: true
+  depends_on:
+  - sync_interfaces
