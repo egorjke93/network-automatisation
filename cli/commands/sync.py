@@ -64,6 +64,16 @@ def cmd_sync_netbox(args, ctx=None) -> None:
         "inventory": {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "failed": 0},
     }
 
+    # Детали изменений для вывода в конце
+    all_details = {
+        "devices": {"create": [], "update": [], "delete": []},
+        "interfaces": {"create": [], "update": [], "delete": []},
+        "ip_addresses": {"create": [], "update": [], "delete": []},
+        "vlans": {"create": [], "update": [], "delete": []},
+        "cables": {"create": [], "delete": []},
+        "inventory": {"create": [], "update": [], "delete": []},
+    }
+
     # Создание/обновление устройств в NetBox из инвентаризации
     if getattr(args, "create_devices", False):
         from ...collectors import DeviceInventoryCollector
@@ -123,6 +133,10 @@ def cmd_sync_netbox(args, ctx=None) -> None:
             )
             for key in ("created", "updated", "deleted", "skipped", "failed"):
                 summary["devices"][key] += stats.get(key, 0)
+            # Собираем детали
+            if stats.get("details"):
+                for action in ("create", "update", "delete"):
+                    all_details["devices"][action].extend(stats["details"].get(action, []))
         else:
             logger.warning("Нет данных инвентаризации")
 
@@ -154,6 +168,12 @@ def cmd_sync_netbox(args, ctx=None) -> None:
                 stats = sync.sync_interfaces(hostname, data, cleanup=cleanup_interfaces)
                 for key in ("created", "updated", "deleted", "skipped", "failed"):
                     summary["interfaces"][key] += stats.get(key, 0)
+                # Собираем детали с hostname
+                if stats.get("details"):
+                    for action in ("create", "update", "delete"):
+                        for item in stats["details"].get(action, []):
+                            item["device"] = hostname
+                            all_details["interfaces"][action].append(item)
 
     # Синхронизация кабелей из LLDP/CDP
     if getattr(args, "cables", False):
@@ -181,6 +201,10 @@ def cmd_sync_netbox(args, ctx=None) -> None:
             )
             for key in ("created", "deleted", "skipped", "failed", "already_exists"):
                 summary["cables"][key] += stats.get(key, 0)
+            # Собираем детали
+            if stats.get("details"):
+                all_details["cables"]["create"].extend(stats["details"].get("create", []))
+                all_details["cables"]["delete"].extend(stats["details"].get("delete", []))
         else:
             logger.warning("LLDP/CDP данные не найдены")
 
@@ -232,6 +256,12 @@ def cmd_sync_netbox(args, ctx=None) -> None:
                     )
                     for key in ("created", "updated", "deleted", "skipped", "failed"):
                         summary["ip_addresses"][key] += stats.get(key, 0)
+                    # Собираем детали с hostname
+                    if stats.get("details"):
+                        for action in ("create", "update", "delete"):
+                            for item in stats["details"].get(action, []):
+                                item["device"] = hostname
+                                all_details["ip_addresses"][action].append(item)
 
     # Синхронизация VLAN из SVI интерфейсов
     if getattr(args, "vlans", False):
@@ -252,6 +282,10 @@ def cmd_sync_netbox(args, ctx=None) -> None:
                 )
                 for key in ("created", "updated", "deleted", "skipped", "failed"):
                     summary["vlans"][key] += stats.get(key, 0)
+                # Собираем детали
+                if stats.get("details"):
+                    for action in ("create", "update", "delete"):
+                        all_details["vlans"][action].extend(stats["details"].get(action, []))
 
     # Синхронизация inventory (модули, SFP, PSU)
     if getattr(args, "inventory", False):
@@ -272,12 +306,89 @@ def cmd_sync_netbox(args, ctx=None) -> None:
                 stats = sync.sync_inventory(hostname, items, cleanup=cleanup_inventory)
                 for key in ("created", "updated", "deleted", "skipped", "failed"):
                     summary["inventory"][key] += stats.get(key, 0)
+                # Собираем детали с hostname
+                if stats.get("details"):
+                    for action in ("create", "update", "delete"):
+                        for item in stats["details"].get(action, []):
+                            item["device"] = hostname
+                            all_details["inventory"][action].append(item)
 
     # === СВОДКА В КОНЦЕ ===
-    _print_sync_summary(summary, args)
+    _print_changes_details(all_details, args)
+    _print_sync_summary(summary, all_details, args)
 
 
-def _print_sync_summary(summary: dict, args) -> None:
+def _print_changes_details(all_details: dict, args) -> None:
+    """Выводит детали изменений перед сводкой."""
+    # В JSON режиме пропускаем — детали будут в summary
+    if getattr(args, "format", None) == "json":
+        return
+
+    # Проверяем есть ли вообще изменения
+    has_any = False
+    for category_details in all_details.values():
+        for items in category_details.values():
+            if items:
+                has_any = True
+                break
+
+    if not has_any:
+        return
+
+    category_names = {
+        "devices": "DEVICES",
+        "interfaces": "INTERFACES",
+        "ip_addresses": "IP ADDRESSES",
+        "vlans": "VLANS",
+        "cables": "CABLES",
+        "inventory": "INVENTORY",
+    }
+
+    action_icons = {"create": "+", "update": "~", "delete": "-"}
+
+    mode = "[DRY-RUN] " if getattr(args, "dry_run", False) else ""
+    print(f"\n{'='*60}")
+    print(f"{mode}ДЕТАЛИ ИЗМЕНЕНИЙ")
+    print(f"{'='*60}")
+
+    for category, details in all_details.items():
+        # Проверяем есть ли изменения в этой категории
+        if not any(details.values()):
+            continue
+
+        print(f"\n{category_names.get(category, category.upper())}:")
+
+        for action in ("create", "update", "delete"):
+            items = details.get(action, [])
+            if not items:
+                continue
+
+            icon = action_icons.get(action, "•")
+
+            for item in items:
+                name = item.get("name", "")
+                device = item.get("device", "")
+                changes = item.get("changes", [])
+
+                # Форматируем вывод в зависимости от типа
+                if category == "cables":
+                    # Кабели: + switch1:Gi0/1 ↔ switch2:Gi0/1
+                    print(f"  {icon} {name}")
+                elif device:
+                    # С устройством: + switch1: Gi0/1
+                    if changes:
+                        print(f"  {icon} {device}: {name} ({', '.join(changes)})")
+                    else:
+                        print(f"  {icon} {device}: {name}")
+                else:
+                    # Без устройства: + switch1
+                    if changes:
+                        print(f"  {icon} {name} ({', '.join(changes)})")
+                    else:
+                        print(f"  {icon} {name}")
+
+
+def _print_sync_summary(summary: dict, all_details: dict, args) -> None:
     """Выводит сводку синхронизации в конце."""
     import json
 
@@ -294,6 +405,7 @@ def _print_sync_summary(summary: dict, args) -> None:
             "dry_run": getattr(args, "dry_run", False),
             "has_changes": has_changes,
             "summary": summary,
+            "details": all_details,
             "totals": {
                 "created": total_created,
                 "updated": total_updated,

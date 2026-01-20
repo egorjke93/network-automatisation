@@ -31,7 +31,8 @@ class TestPrintSyncSummary:
         args.format = None
 
         # Не должно падать
-        _print_sync_summary(summary, args)
+        all_details = {k: {"create": [], "update": [], "delete": []} for k in summary}
+        _print_sync_summary(summary, all_details, args)
 
     def test_summary_with_missing_keys(self):
         """Сводка с отсутствующими ключами (регрессия KeyError)."""
@@ -52,7 +53,8 @@ class TestPrintSyncSummary:
         args.format = None
 
         # Не должно падать с KeyError
-        _print_sync_summary(summary, args)
+        all_details = {k: {"create": [], "update": [], "delete": []} for k in summary}
+        _print_sync_summary(summary, all_details, args)
 
     def test_summary_empty(self):
         """Пустая сводка."""
@@ -72,7 +74,8 @@ class TestPrintSyncSummary:
         args.format = None
 
         # Не должно падать
-        _print_sync_summary(summary, args)
+        all_details = {k: {"create": [], "update": [], "delete": []} for k in summary}
+        _print_sync_summary(summary, all_details, args)
 
     def test_summary_dry_run_mode(self):
         """Сводка в режиме dry-run."""
@@ -96,7 +99,8 @@ class TestPrintSyncSummary:
         sys.stdout = captured
 
         try:
-            _print_sync_summary(summary, args)
+            all_details = {k: {"create": [], "update": [], "delete": []} for k in summary}
+            _print_sync_summary(summary, all_details, args)
         finally:
             sys.stdout = sys.__stdout__
 
@@ -128,7 +132,8 @@ class TestPrintSyncSummary:
         sys.stdout = captured
 
         try:
-            _print_sync_summary(summary, args)
+            all_details = {k: {"create": [], "update": [], "delete": []} for k in summary}
+            _print_sync_summary(summary, all_details, args)
         finally:
             sys.stdout = sys.__stdout__
 
@@ -162,7 +167,8 @@ class TestPrintSyncSummary:
         sys.stdout = captured
 
         try:
-            _print_sync_summary(summary, args)
+            all_details = {k: {"create": [], "update": [], "delete": []} for k in summary}
+            _print_sync_summary(summary, all_details, args)
         finally:
             sys.stdout = sys.__stdout__
 

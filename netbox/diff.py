@@ -306,6 +306,10 @@ class DiffCalculator:
         """Сравнивает существующий интерфейс с новыми данными."""
         changes = []
 
+        # Читаем enabled_mode из конфига
+        sync_cfg = get_sync_config("interfaces")
+        enabled_mode = sync_cfg.get_option("enabled_mode", "admin")
+
         # Description
         new_desc = new_data.get("description", "")
         if new_desc and new_desc != (existing.description or ""):
@@ -316,11 +320,15 @@ class DiffCalculator:
             ))
 
         # Enabled/Status
-        # disabled = administratively down, error = err-disabled
-        # up/down = порт включён (down = нет линка, но порт активен)
+        # enabled_mode="admin": disabled/error = выключен, up/down = включён
+        # enabled_mode="link": только up = включён, остальное = выключен
         new_status = new_data.get("status", "")
         if new_status:
-            new_enabled = new_status.lower() not in ("disabled", "error")
+            status_lower = new_status.lower()
+            if enabled_mode == "link":
+                new_enabled = status_lower == "up"
+            else:  # admin mode
+                new_enabled = status_lower not in ("disabled", "error")
             if new_enabled != existing.enabled:
                 changes.append(FieldChange(
                     field="enabled",

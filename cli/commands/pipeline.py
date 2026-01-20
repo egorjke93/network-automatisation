@@ -136,6 +136,12 @@ def _print_run_result(result: PipelineResult, format_: str = "table") -> None:
         StepStatus.PENDING: "·",
     }
 
+    action_icons = {"create": "+", "update": "~", "delete": "-"}
+
+    # Сначала выводим детали изменений
+    _print_run_changes(result, action_icons)
+
+    # Затем сводку
     print(f"\n{'='*60}")
     print(f"Pipeline Run Result: {result.pipeline_id}")
     print(f"{'='*60}")
@@ -149,11 +155,77 @@ def _print_run_result(result: PipelineResult, format_: str = "table") -> None:
     print("-" * 60)
     for step in result.steps:
         icon = status_icons.get(step.status, "?")
-        print(f"  {icon} {step.step_id:<30} {step.duration_ms:>6}ms")
+        # Добавляем счётчики к каждому шагу
+        stats_str = ""
+        if step.data and isinstance(step.data, dict):
+            parts = []
+            if step.data.get("created", 0) > 0:
+                parts.append(f"+{step.data['created']}")
+            if step.data.get("updated", 0) > 0:
+                parts.append(f"~{step.data['updated']}")
+            if step.data.get("deleted", 0) > 0:
+                parts.append(f"-{step.data['deleted']}")
+            if parts:
+                stats_str = f" ({', '.join(parts)})"
+
+        print(f"  {icon} {step.step_id:<30} {step.duration_ms:>6}ms{stats_str}")
         if step.error:
             print(f"      Error: {step.error}")
 
     print(f"{'='*60}\n")
+
+
+def _print_run_changes(result: PipelineResult, action_icons: dict) -> None:
+    """Выводит детали изменений из результатов pipeline."""
+    # Собираем все детали из шагов
+    has_details = False
+    for step in result.steps:
+        if step.data and isinstance(step.data, dict) and step.data.get("details"):
+            has_details = True
+            break
+
+    if not has_details:
+        return
+
+    print(f"\n{'='*60}")
+    print("ДЕТАЛИ ИЗМЕНЕНИЙ")
+    print(f"{'='*60}")
+
+    for step in result.steps:
+        if not step.data or not isinstance(step.data, dict):
+            continue
+
+        details = step.data.get("details", {})
+        if not details or not any(details.values()):
+            continue
+
+        print(f"\n{step.step_id.upper()}:")
+
+        for action in ("create", "update", "delete"):
+            items = details.get(action, [])
+            if not items:
+                continue
+
+            icon = action_icons.get(action, "•")
+
+            for item in items:
+                if isinstance(item, dict):
+                    name = item.get("name", "")
+                    device = item.get("device", "")
+                    changes = item.get("changes", [])
+
+                    if device:
+                        if changes:
+                            print(f"  {icon} {device}: {name} ({', '.join(changes)})")
+                        else:
+                            print(f"  {icon} {device}: {name}")
+                    else:
+                        if changes:
+                            print(f"  {icon} {name} ({', '.join(changes)})")
+                        else:
+                            print(f"  {icon} {name}")
+                else:
+                    print(f"  {icon} {item}")
 
 
 def cmd_pipeline(args, ctx=None) -> None:
@@ -258,7 +330,7 @@ def _cmd_run(args, ctx=None) -> None:
         return
 
     # Получаем credentials
-    credentials = get_credentials(args)
+    credentials = get_credentials()
 
     # NetBox config
     netbox_config = {}
