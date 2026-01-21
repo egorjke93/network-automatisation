@@ -312,3 +312,68 @@ class TestInventorySyncManufacturer:
         result = sync.sync_inventory("switch-01", items)
 
         assert isinstance(result, dict)
+
+
+class TestInventoryNameTruncation:
+    """Тесты обрезки имени inventory до 64 символов (лимит NetBox API)."""
+
+    @pytest.fixture
+    def mock_client(self):
+        """Мокированный NetBox клиент."""
+        client = Mock()
+        mock_device = Mock()
+        mock_device.id = 1
+        mock_device.name = "switch-01"
+        client.get_device_by_name.return_value = mock_device
+        client.get_inventory_items.return_value = []
+        client.get_inventory_item.return_value = None
+        return client
+
+    def test_name_exactly_64_chars_not_truncated(self, mock_client):
+        """Имя ровно 64 символа - не обрезается."""
+        name_64 = "A" * 64
+        items = [
+            InventoryItem(name=name_64, serial="SN123", pid="PID"),
+        ]
+
+        sync = NetBoxSync(mock_client, dry_run=False)
+        sync.sync_inventory("switch-01", items)
+
+        # Проверяем что create_inventory_item вызван с оригинальным именем
+        mock_client.create_inventory_item.assert_called_once()
+        call_kwargs = mock_client.create_inventory_item.call_args
+        assert call_kwargs[1]["name"] == name_64
+
+    def test_name_65_chars_truncated_to_64(self, mock_client):
+        """Имя 65 символов - обрезается до 64."""
+        name_65 = "A" * 65
+        items = [
+            InventoryItem(name=name_65, serial="SN123", pid="PID"),
+        ]
+
+        sync = NetBoxSync(mock_client, dry_run=False)
+        sync.sync_inventory("switch-01", items)
+
+        mock_client.create_inventory_item.assert_called_once()
+        call_kwargs = mock_client.create_inventory_item.call_args
+        created_name = call_kwargs[1]["name"]
+        assert len(created_name) == 64
+        assert created_name.endswith("...")
+
+    def test_long_name_truncated_preserves_start(self, mock_client):
+        """Длинное имя обрезается с сохранением начала и '...' в конце."""
+        long_name = "WS-F6700-DFC3C Distributed Forwarding Card 3 EARL sub-module of 1"
+        items = [
+            InventoryItem(name=long_name, serial="SN123", pid="PID"),
+        ]
+
+        sync = NetBoxSync(mock_client, dry_run=False)
+        sync.sync_inventory("switch-01", items)
+
+        mock_client.create_inventory_item.assert_called_once()
+        call_kwargs = mock_client.create_inventory_item.call_args
+        created_name = call_kwargs[1]["name"]
+
+        assert len(created_name) == 64
+        assert created_name.startswith("WS-F6700-DFC3C")
+        assert created_name.endswith("...")
