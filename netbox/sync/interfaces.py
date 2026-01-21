@@ -192,6 +192,9 @@ class InterfacesSyncMixin:
             **kwargs,
         )
 
+        if interface:
+            logger.info(f"Создан интерфейс: {intf.name}")
+
         if mac_to_assign and interface:
             self.client.assign_mac_to_interface(interface.id, mac_to_assign)
 
@@ -286,8 +289,10 @@ class InterfacesSyncMixin:
 
         if updates:
             self.client.update_interface(nb_interface.id, **updates)
+            logger.info(f"Обновлён интерфейс: {nb_interface.name} ({list(updates.keys())})")
 
         if mac_to_assign:
             self.client.assign_mac_to_interface(nb_interface.id, mac_to_assign)
+            logger.info(f"Назначен MAC: {mac_to_assign} на {nb_interface.name}")
 
         return True

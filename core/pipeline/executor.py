@@ -509,23 +509,35 @@ class PipelineExecutor:
             total_created = 0
             total_updated = 0
             total_skipped = 0
+            total_deleted = 0
             total_failed = 0
             all_errors = []
+            all_details = {"create": [], "update": [], "delete": []}
 
             for hostname, items in by_device.items():
-                sync_result = sync.sync_inventory(hostname, items)
+                sync_result = sync.sync_inventory(hostname, items, cleanup=options.get("cleanup", False))
                 total_created += sync_result.get("created", 0)
                 total_updated += sync_result.get("updated", 0)
                 total_skipped += sync_result.get("skipped", 0)
+                total_deleted += sync_result.get("deleted", 0)
                 total_failed += sync_result.get("failed", 0)
                 if sync_result.get("errors"):
                     all_errors.extend(sync_result["errors"])
+                # Собираем details
+                if sync_result.get("details"):
+                    for key in all_details:
+                        items_list = sync_result["details"].get(key, [])
+                        for item in items_list:
+                            item["device"] = hostname
+                            all_details[key].append(item)
 
             result = {
                 "created": total_created,
                 "updated": total_updated,
+                "deleted": total_deleted,
                 "skipped": total_skipped,
                 "failed": total_failed,
+                "details": all_details,
             }
             if all_errors:
                 result["errors"] = all_errors

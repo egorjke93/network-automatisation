@@ -398,7 +398,7 @@ class NetBoxClient:
         }
 
         interface = self.api.dcim.interfaces.create(data)
-        logger.info(f"Создан интерфейс: {name} на устройстве {device_id}")
+        logger.debug(f"Создан интерфейс: {name} на устройстве {device_id}")
         return interface
 
     def update_interface(
@@ -419,7 +419,7 @@ class NetBoxClient:
         interface = self.api.dcim.interfaces.get(interface_id)
         if interface:
             interface.update(updates)
-            logger.info(f"Обновлён интерфейс: {interface.name}")
+            logger.debug(f"Обновлён интерфейс: {interface.name}")
         return interface
 
     # ==================== IP-АДРЕСА ====================
@@ -538,7 +538,7 @@ class NetBoxClient:
             data["assigned_object_id"] = interface_id
 
         ip = self.api.ipam.ip_addresses.create(data)
-        logger.info(f"Создан IP-адрес: {address}")
+        logger.debug(f"Создан IP-адрес: {address}")
         return ip
 
     # ==================== VLAN ====================
@@ -759,7 +759,7 @@ class NetBoxClient:
                 data["manufacturer"] = mfr.id
 
         item = self.api.dcim.inventory_items.create(data)
-        logger.info(f"Создан inventory item: {name} (serial={serial})")
+        logger.debug(f"Создан inventory item: {name} (serial={serial})")
         return item
 
     def update_inventory_item(
@@ -819,7 +819,7 @@ class NetBoxClient:
         if item:
             name = item.name
             item.delete()
-            logger.info(f"Удалён inventory item: {name}")
+            logger.debug(f"Удалён inventory item: {name}")
             return True
         return False
 

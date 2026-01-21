@@ -36,7 +36,7 @@ class InventorySyncMixin:
             Dict: Статистика {created, updated, deleted, skipped, failed}
         """
         stats = {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "failed": 0}
-        details = {"created": [], "updated": [], "deleted": []}
+        details = {"create": [], "update": [], "delete": []}
 
         device = self._find_device(device_name)
         if not device:
@@ -74,6 +74,12 @@ class InventorySyncMixin:
 
             if not name:
                 continue
+
+            # NetBox ограничивает name до 64 символов
+            if len(name) > 64:
+                original_name = name
+                name = name[:61] + "..."
+                logger.debug(f"Имя inventory обрезано: '{original_name}' → '{name}'")
 
             processed_names.add(name)
 
@@ -118,12 +124,13 @@ class InventorySyncMixin:
                     if self.dry_run:
                         logger.info(f"[DRY-RUN] Обновление inventory: {name} ({changes})")
                         stats["updated"] += 1
-                        details["updated"].append({"name": name, "changes": changes})
+                        details["update"].append({"name": name, "changes": changes})
                     else:
                         try:
                             self.client.update_inventory_item(existing.id, **updates)
+                            logger.info(f"Обновлён inventory: {name} ({changes})")
                             stats["updated"] += 1
-                            details["updated"].append({"name": name, "changes": changes})
+                            details["update"].append({"name": name, "changes": changes})
                         except NetBoxError as e:
                             logger.error(f"Ошибка NetBox обновления {name}: {format_error_for_log(e)}")
                             stats["failed"] += 1
@@ -137,7 +144,7 @@ class InventorySyncMixin:
             if self.dry_run:
                 logger.info(f"[DRY-RUN] Создание inventory: {name} (pid={pid}, serial={serial})")
                 stats["created"] += 1
-                details["created"].append({"name": name})
+                details["create"].append({"name": name})
                 continue
 
             try:
@@ -156,8 +163,9 @@ class InventorySyncMixin:
                     name=name,
                     **kwargs,
                 )
+                logger.info(f"Создан inventory: {name}")
                 stats["created"] += 1
-                details["created"].append({"name": name})
+                details["create"].append({"name": name})
             except NetBoxValidationError as e:
                 logger.error(f"Ошибка валидации inventory {name}: {format_error_for_log(e)}")
                 stats["failed"] += 1
@@ -175,12 +183,13 @@ class InventorySyncMixin:
                     if self.dry_run:
                         logger.info(f"[DRY-RUN] Удаление inventory: {nb_name}")
                         stats["deleted"] += 1
-                        details["deleted"].append({"name": nb_name})
+                        details["delete"].append({"name": nb_name})
                     else:
                         try:
                             self.client.delete_inventory_item(nb_item.id)
+                            logger.info(f"Удалён inventory: {nb_name}")
                             stats["deleted"] += 1
-                            details["deleted"].append({"name": nb_name})
+                            details["delete"].append({"name": nb_name})
                         except Exception as e:
                             logger.error(f"Ошибка удаления inventory {nb_name}: {e}")
                             stats["failed"] += 1
