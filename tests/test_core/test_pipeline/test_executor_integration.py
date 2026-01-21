@@ -160,7 +160,7 @@ class TestPipelineExecutorSyncIntegration:
         # Sync должен упасть
         assert result.status == StepStatus.FAILED
         sync_step = next(s for s in result.steps if s.step_id == "sync_devices")
-        assert "NetBox URL and token are required" in sync_step.error
+        assert "NetBox URL is required" in sync_step.error
 
     def test_sync_calls_netbox_sync(self, sync_pipeline):
         """Sync вызывает NetBox sync."""

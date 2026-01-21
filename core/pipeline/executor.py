@@ -370,12 +370,12 @@ class PipelineExecutor:
 
         logger.info(f"Syncing {target} to NetBox (dry_run={dry_run})...")
 
-        # Проверяем NetBox config
+        # Проверяем NetBox config (только URL, token получит NetBoxClient из keyring)
         netbox_url = netbox_config.get("url")
-        netbox_token = netbox_config.get("token")
+        netbox_token = netbox_config.get("token")  # Может быть None - NetBoxClient проверит keyring
 
-        if not netbox_url or not netbox_token:
-            raise ValueError("NetBox URL and token are required for sync")
+        if not netbox_url:
+            raise ValueError("NetBox URL is required for sync")
 
         # Определяем какой collect нужен для этого sync
         required_collects = SYNC_COLLECT_MAPPING.get(target, [target])

@@ -300,7 +300,6 @@ def _cmd_run(args, ctx=None) -> None:
     """Запустить pipeline."""
     from ..utils import load_devices, get_credentials
     from ...config import config
-    from ...core.credentials import get_netbox_token
 
     name = getattr(args, "name", None)
     if not name:
@@ -333,12 +332,11 @@ def _cmd_run(args, ctx=None) -> None:
     # Получаем credentials
     credentials = get_credentials()
 
-    # NetBox config - используем get_netbox_token для поддержки keyring/Credential Manager
+    # NetBox config (token может быть None - NetBoxClient получит из keyring)
     netbox_config = {}
     if config.netbox:
         netbox_config["url"] = config.netbox.url
-        # get_netbox_token проверяет: env NETBOX_TOKEN → keyring → config.yaml
-        netbox_config["token"] = get_netbox_token(config.netbox.token)
+        netbox_config["token"] = config.netbox.token
 
     # Переопределение из аргументов (приоритет выше)
     if getattr(args, "netbox_url", None):
