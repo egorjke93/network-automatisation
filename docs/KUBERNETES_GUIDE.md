@@ -818,3 +818,1722 @@ kubectl explain <resource>              # Документация по ресу
 - [ ] Знаю что такое Ingress
 
 **Если все галочки стоят — ты готов к курсу по Observability!**
+
+---
+
+# ЧАСТЬ 2: Продвинутые концепции
+
+---
+
+## 12. Полный каталог объектов Kubernetes
+
+### Карта всех сущностей
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        KUBERNETES OBJECTS                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                         WORKLOADS (Нагрузки)                        │    │
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────────┐  │    │
+│  │  │    Pod       │ │  Deployment  │ │  StatefulSet │ │  DaemonSet │  │    │
+│  │  │  (базовый)   │ │  (stateless) │ │  (stateful)  │ │  (на ноду) │  │    │
+│  │  └──────────────┘ └──────────────┘ └──────────────┘ └────────────┘  │    │
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐                 │    │
+│  │  │  ReplicaSet  │ │     Job      │ │   CronJob    │                 │    │
+│  │  │  (реплики)   │ │ (однократно) │ │ (по расписан)│                 │    │
+│  │  └──────────────┘ └──────────────┘ └──────────────┘                 │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                          NETWORKING (Сеть)                          │    │
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────────┐  │    │
+│  │  │   Service    │ │   Ingress    │ │ NetworkPolicy│ │  Endpoints │  │    │
+│  │  │  (доступ)    │ │  (HTTP роут) │ │  (firewall)  │ │  (адреса)  │  │    │
+│  │  └──────────────┘ └──────────────┘ └──────────────┘ └────────────┘  │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                      CONFIGURATION (Конфигурация)                   │    │
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐                 │    │
+│  │  │  ConfigMap   │ │    Secret    │ │ ServiceAccount│                │    │
+│  │  │ (настройки)  │ │  (секреты)   │ │  (identity)  │                 │    │
+│  │  └──────────────┘ └──────────────┘ └──────────────┘                 │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                         STORAGE (Хранение)                          │    │
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐                 │    │
+│  │  │PersistentVol │ │     PVC      │ │ StorageClass │                 │    │
+│  │  │   (диск)     │ │  (заявка)    │ │  (тип диска) │                 │    │
+│  │  └──────────────┘ └──────────────┘ └──────────────┘                 │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                           RBAC (Доступ)                             │    │
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────────┐  │    │
+│  │  │     Role     │ │ ClusterRole  │ │ RoleBinding  │ │ClusterRole │  │    │
+│  │  │ (namespace)  │ │  (кластер)   │ │  (привязка)  │ │  Binding   │  │    │
+│  │  └──────────────┘ └──────────────┘ └──────────────┘ └────────────┘  │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                      CLUSTER (Кластер)                              │    │
+│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌────────────┐  │    │
+│  │  │  Namespace   │ │    Node      │ │ResourceQuota │ │ LimitRange │  │    │
+│  │  │ (изоляция)   │ │  (сервер)    │ │  (лимиты)    │ │ (дефолты)  │  │    │
+│  │  └──────────────┘ └──────────────┘ └──────────────┘ └────────────┘  │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Таблица всех объектов
+
+| Объект | Сокращение | Описание | Scope |
+|--------|------------|----------|-------|
+| **Pod** | po | Минимальная единица, один или несколько контейнеров | Namespace |
+| **ReplicaSet** | rs | Поддерживает N копий Pod'ов | Namespace |
+| **Deployment** | deploy | Управляет ReplicaSet, rolling updates | Namespace |
+| **StatefulSet** | sts | Для stateful приложений (БД) | Namespace |
+| **DaemonSet** | ds | По одному Pod на каждую ноду | Namespace |
+| **Job** | job | Однократное выполнение задачи | Namespace |
+| **CronJob** | cj | Задачи по расписанию | Namespace |
+| **Service** | svc | Стабильный доступ к Pod'ам | Namespace |
+| **Endpoints** | ep | Список IP адресов для Service | Namespace |
+| **Ingress** | ing | HTTP/HTTPS роутинг | Namespace |
+| **NetworkPolicy** | netpol | Сетевые правила (firewall) | Namespace |
+| **ConfigMap** | cm | Конфигурация (не секретная) | Namespace |
+| **Secret** | secret | Секретные данные (base64) | Namespace |
+| **PersistentVolume** | pv | Физический/виртуальный диск | Cluster |
+| **PersistentVolumeClaim** | pvc | Запрос на storage | Namespace |
+| **StorageClass** | sc | Тип storage (SSD, HDD, etc.) | Cluster |
+| **ServiceAccount** | sa | Identity для Pod'ов | Namespace |
+| **Role** | role | Права в namespace | Namespace |
+| **ClusterRole** | clusterrole | Права на весь кластер | Cluster |
+| **RoleBinding** | rolebinding | Привязка Role к пользователю | Namespace |
+| **ClusterRoleBinding** | clusterrolebinding | Привязка ClusterRole | Cluster |
+| **Namespace** | ns | Изоляция ресурсов | Cluster |
+| **Node** | no | Сервер в кластере | Cluster |
+| **ResourceQuota** | quota | Лимиты на namespace | Namespace |
+| **LimitRange** | limits | Дефолтные лимиты для Pod'ов | Namespace |
+
+```bash
+# Посмотреть все доступные ресурсы
+kubectl api-resources
+
+# Документация по любому ресурсу
+kubectl explain pod
+kubectl explain pod.spec.containers
+```
+
+---
+
+## 13. Типы Workloads — подробно
+
+### Deployment vs StatefulSet vs DaemonSet
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              WORKLOAD TYPES                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  DEPLOYMENT (Stateless)              STATEFULSET (Stateful)                 │
+│  ┌─────────────────────┐             ┌─────────────────────┐                │
+│  │ nginx-abc123        │             │ postgres-0          │ ← Стабильное   │
+│  │ nginx-def456        │             │ postgres-1          │   имя!         │
+│  │ nginx-ghi789        │             │ postgres-2          │                │
+│  └─────────────────────┘             └─────────────────────┘                │
+│  • Случайные имена                   • Порядковые имена (0, 1, 2)           │
+│  • Взаимозаменяемые                  • Уникальная идентичность              │
+│  • Любой порядок запуска             • Строгий порядок (0→1→2)              │
+│  • Shared storage (или нет)          • Персональный PVC для каждого         │
+│                                                                              │
+│  DAEMONSET (На каждой ноде)          JOB / CRONJOB (Задачи)                 │
+│  ┌─────────────────────┐             ┌─────────────────────┐                │
+│  │ Node1: fluentd      │             │ Job: backup-db      │                │
+│  │ Node2: fluentd      │             │   └─ Pod (завершён) │                │
+│  │ Node3: fluentd      │             │                     │                │
+│  └─────────────────────┘             │ CronJob: "0 2 * * *"│                │
+│  • Ровно 1 Pod на ноду               │   └─ Job (каждую    │                │
+│  • Мониторинг, логи, сеть            │       ночь в 2:00)  │                │
+│                                      └─────────────────────┘                │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### StatefulSet — для баз данных
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: "postgres"      # Headless Service
+  replicas: 3
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:14
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:        # Каждому Pod свой PVC!
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 10Gi
+```
+
+**Особенности StatefulSet:**
+- Pod'ы: `postgres-0`, `postgres-1`, `postgres-2` (стабильные имена)
+- DNS: `postgres-0.postgres.default.svc.cluster.local`
+- Запуск строго по порядку: 0 → 1 → 2
+- Удаление в обратном порядке: 2 → 1 → 0
+- Каждый Pod получает свой PVC
+
+### DaemonSet — на каждую ноду
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluentd
+  namespace: logging
+spec:
+  selector:
+    matchLabels:
+      name: fluentd
+  template:
+    metadata:
+      labels:
+        name: fluentd
+    spec:
+      containers:
+      - name: fluentd
+        image: fluentd:latest
+        volumeMounts:
+        - name: varlog
+          mountPath: /var/log
+      volumes:
+      - name: varlog
+        hostPath:
+          path: /var/log
+```
+
+**Используется для:**
+- Сбор логов (Fluentd, Filebeat)
+- Мониторинг нод (node-exporter)
+- Сетевые плагины (CNI)
+- Storage драйверы
+
+### Job и CronJob
+
+```yaml
+# Однократная задача
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backup-database
+spec:
+  template:
+    spec:
+      containers:
+      - name: backup
+        image: postgres:14
+        command: ["pg_dump", "-h", "postgres", "-U", "admin", "mydb"]
+      restartPolicy: Never    # Важно!
+  backoffLimit: 3             # Попытки при ошибке
+---
+# По расписанию (cron синтаксис)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nightly-backup
+spec:
+  schedule: "0 2 * * *"       # Каждый день в 2:00
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: postgres:14
+            command: ["pg_dump", "-h", "postgres", "-U", "admin", "mydb"]
+          restartPolicy: Never
+```
+
+---
+
+## 14. Labels и Selectors — система связей
+
+### Как объекты находят друг друга
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         LABELS & SELECTORS                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────────┐                                                    │
+│  │     Deployment      │                                                    │
+│  │  selector:          │                                                    │
+│  │    app: nginx ──────┼──────────────┐                                    │
+│  │    env: prod        │              │                                    │
+│  └─────────────────────┘              │ matchLabels                        │
+│                                       ▼                                    │
+│  ┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐ │
+│  │       Pod 1         │  │       Pod 2         │  │       Pod 3         │ │
+│  │  labels:            │  │  labels:            │  │  labels:            │ │
+│  │    app: nginx  ✓    │  │    app: nginx  ✓    │  │    app: redis  ✗    │ │
+│  │    env: prod   ✓    │  │    env: prod   ✓    │  │    env: prod   ✓    │ │
+│  └─────────────────────┘  └─────────────────────┘  └─────────────────────┘ │
+│         ▲                        ▲                                         │
+│         │                        │                                         │
+│         └────────────────────────┘                                         │
+│                      │                                                      │
+│  ┌─────────────────────┐                                                    │
+│  │      Service        │                                                    │
+│  │  selector:          │                                                    │
+│  │    app: nginx ──────┘                                                    │
+│  └─────────────────────┘                                                    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Практика с labels
+
+```yaml
+# Pod с labels
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-prod
+  labels:
+    app: nginx
+    env: production
+    team: backend
+    version: v1.21
+```
+
+```bash
+# Фильтрация по labels
+kubectl get pods -l app=nginx                    # app=nginx
+kubectl get pods -l app=nginx,env=prod           # AND
+kubectl get pods -l 'app in (nginx, redis)'      # OR
+kubectl get pods -l app!=nginx                   # NOT
+kubectl get pods -l 'env in (prod, staging)'     # IN
+kubectl get pods -l '!env'                       # Без label env
+
+# Показать labels
+kubectl get pods --show-labels
+
+# Добавить label
+kubectl label pods nginx-prod tier=frontend
+
+# Удалить label
+kubectl label pods nginx-prod tier-
+```
+
+### Annotations vs Labels
+
+| Labels | Annotations |
+|--------|-------------|
+| Для **выбора** объектов | Для **метаданных** |
+| Короткие значения | Любой размер |
+| Используются selectors | Не используются для выбора |
+| `app: nginx` | `description: "Main web server"` |
+
+```yaml
+metadata:
+  labels:
+    app: nginx                    # Для селекторов
+  annotations:
+    description: "Production nginx"
+    prometheus.io/scrape: "true"  # Для Prometheus
+    helm.sh/chart: "nginx-1.0"    # Для Helm
+```
+
+---
+
+## 15. Resource Limits — управление ресурсами
+
+### Requests vs Limits
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         RESOURCE MANAGEMENT                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  requests: Сколько ГАРАНТИРОВАННО получит контейнер                         │
+│  limits:   Сколько МАКСИМУМ может использовать                              │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                           NODE (8 CPU, 16GB RAM)                    │    │
+│  │                                                                      │    │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐     │    │
+│  │  │     Pod A       │  │     Pod B       │  │     Pod C       │     │    │
+│  │  │ requests:       │  │ requests:       │  │ requests:       │     │    │
+│  │  │   cpu: 1        │  │   cpu: 2        │  │   cpu: 1        │     │    │
+│  │  │   memory: 2Gi   │  │   memory: 4Gi   │  │   memory: 2Gi   │     │    │
+│  │  │ limits:         │  │ limits:         │  │ limits:         │     │    │
+│  │  │   cpu: 2        │  │   cpu: 4        │  │   cpu: 2        │     │    │
+│  │  │   memory: 4Gi   │  │   memory: 8Gi   │  │   memory: 4Gi   │     │    │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────┘     │    │
+│  │                                                                      │    │
+│  │  Используемые requests: 4 CPU, 8GB (из 8 CPU, 16GB)                 │    │
+│  │  Scheduler разместит Pod если requests помещаются!                   │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  Что происходит при превышении:                                             │
+│  • CPU limit:    Throttling (замедление)                                    │
+│  • Memory limit: OOMKilled (контейнер убивается)                            │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Пример с resources
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.21
+        resources:
+          requests:
+            memory: "128Mi"   # 128 мегабайт гарантированно
+            cpu: "250m"       # 250 millicpu = 0.25 CPU
+          limits:
+            memory: "256Mi"   # Максимум 256 мегабайт
+            cpu: "500m"       # Максимум 0.5 CPU
+```
+
+### Единицы измерения
+
+| Ресурс | Единицы | Примеры |
+|--------|---------|---------|
+| **CPU** | millicpu (m) | `100m` = 0.1 CPU, `1000m` = 1 CPU, `1` = 1 CPU |
+| **Memory** | bytes | `128Mi` = 128 MiB, `1Gi` = 1 GiB, `500M` = 500 MB |
+
+### LimitRange — дефолтные лимиты
+
+```yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: default-limits
+  namespace: production
+spec:
+  limits:
+  - default:          # Дефолтные limits
+      cpu: "500m"
+      memory: "512Mi"
+    defaultRequest:   # Дефолтные requests
+      cpu: "100m"
+      memory: "128Mi"
+    max:              # Максимально допустимые limits
+      cpu: "2"
+      memory: "2Gi"
+    min:              # Минимально допустимые requests
+      cpu: "50m"
+      memory: "64Mi"
+    type: Container
+```
+
+### ResourceQuota — лимиты на namespace
+
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: team-quota
+  namespace: team-a
+spec:
+  hard:
+    requests.cpu: "10"        # Всего 10 CPU requests
+    requests.memory: "20Gi"   # Всего 20GB memory requests
+    limits.cpu: "20"          # Всего 20 CPU limits
+    limits.memory: "40Gi"     # Всего 40GB memory limits
+    pods: "50"                # Максимум 50 Pod'ов
+    services: "10"            # Максимум 10 Service'ов
+```
+
+---
+
+## 16. Probes — проверки здоровья
+
+### Три типа проверок
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              PROBES                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. STARTUP PROBE (только при старте)                                       │
+│     "Приложение запустилось?"                                               │
+│     ┌───────────────────────────────────────────────────────┐              │
+│     │  Container Starting ──► Startup Probe ──► Ready       │              │
+│     │                              │                         │              │
+│     │                         FAIL │ (перезапуск)            │              │
+│     └───────────────────────────────────────────────────────┘              │
+│                                                                              │
+│  2. READINESS PROBE (постоянно)                                             │
+│     "Готов принимать трафик?"                                               │
+│     ┌───────────────────────────────────────────────────────┐              │
+│     │  Pod Ready ──► Readiness OK ──► Service включает      │              │
+│     │                     │                                   │              │
+│     │               FAIL  │ (убирает из Service,             │              │
+│     │                     │  Pod продолжает работать)        │              │
+│     └───────────────────────────────────────────────────────┘              │
+│                                                                              │
+│  3. LIVENESS PROBE (постоянно)                                              │
+│     "Приложение живо?"                                                      │
+│     ┌───────────────────────────────────────────────────────┐              │
+│     │  Pod Running ──► Liveness OK ──► Всё хорошо           │              │
+│     │                      │                                  │              │
+│     │                FAIL  │ (ПЕРЕЗАПУСК контейнера!)        │              │
+│     └───────────────────────────────────────────────────────┘              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Полный пример с probes
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: web
+        image: myapp:1.0
+        ports:
+        - containerPort: 8080
+
+        # Startup: ждём пока приложение запустится
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          failureThreshold: 30      # 30 попыток
+          periodSeconds: 10         # каждые 10 сек = 5 минут на запуск
+
+        # Readiness: готов к трафику?
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5    # Ждать 5 сек после старта
+          periodSeconds: 5          # Проверять каждые 5 сек
+          failureThreshold: 3       # 3 ошибки = не готов
+
+        # Liveness: жив?
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          failureThreshold: 3       # 3 ошибки = перезапуск
+```
+
+### Типы проверок
+
+```yaml
+# HTTP GET
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+    httpHeaders:
+    - name: Custom-Header
+      value: "check"
+
+# TCP Socket
+livenessProbe:
+  tcpSocket:
+    port: 3306          # Для MySQL, Postgres
+
+# Exec Command
+livenessProbe:
+  exec:
+    command:
+    - cat
+    - /tmp/healthy
+```
+
+---
+
+## 17. RBAC — управление доступом
+
+### Модель безопасности
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              RBAC MODEL                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  WHO (Кто)              WHAT (Что может делать)      WHERE (Где)            │
+│  ┌──────────────┐       ┌──────────────────────┐     ┌───────────────┐      │
+│  │    User      │       │        Role          │     │   Namespace   │      │
+│  │ ServiceAcct  │ ───── │  • get pods          │ ─── │   (default)   │      │
+│  │    Group     │       │  • list deployments  │     │               │      │
+│  └──────────────┘       │  • create secrets    │     └───────────────┘      │
+│        │                └──────────────────────┘            │               │
+│        │                         │                          │               │
+│        └─────────────────────────┼──────────────────────────┘               │
+│                                  │                                          │
+│                         ┌────────▼────────┐                                 │
+│                         │   RoleBinding   │                                 │
+│                         │ (связывает)     │                                 │
+│                         └─────────────────┘                                 │
+│                                                                              │
+│  ClusterRole + ClusterRoleBinding = права на весь кластер                   │
+│  Role + RoleBinding = права только в namespace                              │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Role и RoleBinding
+
+```yaml
+# Role — определяет права
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-reader
+  namespace: default
+rules:
+- apiGroups: [""]           # "" = core API group
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list"]
+---
+# RoleBinding — привязывает права к пользователю/сервису
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: read-pods
+  namespace: default
+subjects:
+- kind: User
+  name: developer
+  apiGroup: rbac.authorization.k8s.io
+- kind: ServiceAccount
+  name: my-app
+  namespace: default
+roleRef:
+  kind: Role
+  name: pod-reader
+  apiGroup: rbac.authorization.k8s.io
+```
+
+### ServiceAccount для Pod'ов
+
+```yaml
+# ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+---
+# Deployment использует ServiceAccount
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  template:
+    spec:
+      serviceAccountName: prometheus    # Привязываем!
+      containers:
+      - name: prometheus
+        image: prom/prometheus
+```
+
+### Verbs (действия)
+
+| Verb | Описание |
+|------|----------|
+| `get` | Получить один ресурс |
+| `list` | Получить список |
+| `watch` | Следить за изменениями |
+| `create` | Создать |
+| `update` | Обновить |
+| `patch` | Частичное обновление |
+| `delete` | Удалить |
+| `deletecollection` | Удалить коллекцию |
+
+---
+
+## 18. Network Policies — сетевой firewall
+
+### Изоляция трафика
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          NETWORK POLICIES                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Без NetworkPolicy:              С NetworkPolicy:                           │
+│  ┌─────────────────────┐         ┌─────────────────────┐                   │
+│  │  All traffic allowed │         │  Only allowed traffic│                   │
+│  │                      │         │                      │                   │
+│  │  frontend ←→ backend │         │  frontend ──► backend│                   │
+│  │  frontend ←→ db      │         │  backend ──► db      │                   │
+│  │  backend ←→ db       │         │  frontend ✗─► db     │                   │
+│  └─────────────────────┘         └─────────────────────┘                   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Пример: разрешить только frontend → backend
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-allow-frontend
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: backend           # Применяется к backend Pod'ам
+  policyTypes:
+  - Ingress                  # Входящий трафик
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: frontend      # Разрешить только от frontend
+    ports:
+    - protocol: TCP
+      port: 8080
+```
+
+### Пример: запретить весь входящий трафик
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-all
+  namespace: production
+spec:
+  podSelector: {}            # Все Pod'ы в namespace
+  policyTypes:
+  - Ingress
+  ingress: []                # Пустой список = всё запрещено
+```
+
+---
+
+## 19. Helm — пакетный менеджер
+
+### Что такое Helm
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              HELM                                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Без Helm:                          С Helm:                                 │
+│  ┌─────────────────────────┐        ┌─────────────────────────┐            │
+│  │  kubectl apply -f       │        │  helm install prometheus│            │
+│  │    deployment.yaml      │        │    prometheus/prometheus│            │
+│  │    service.yaml         │        │                         │            │
+│  │    configmap.yaml       │        │  (автоматически создаёт │            │
+│  │    secret.yaml          │        │   все нужные ресурсы)   │            │
+│  │    ingress.yaml         │        └─────────────────────────┘            │
+│  │    ...                  │                                                │
+│  └─────────────────────────┘                                                │
+│                                                                              │
+│  Chart = пакет с шаблонами                                                  │
+│  Release = установленный Chart                                              │
+│  Repository = место хранения Charts                                         │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Основные команды Helm
+
+```bash
+# Установка Helm
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# Добавить репозиторий
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo add grafana https://grafana.github.io/helm-charts
+helm repo update
+
+# Поиск Charts
+helm search repo prometheus
+helm search hub grafana          # Искать во всех репозиториях
+
+# Установка
+helm install my-prometheus prometheus-community/prometheus
+helm install my-grafana grafana/grafana -n monitoring --create-namespace
+
+# С кастомными значениями
+helm install my-prometheus prometheus-community/prometheus \
+  --set server.persistentVolume.size=50Gi \
+  --set alertmanager.enabled=true
+
+# Или из файла
+helm install my-prometheus prometheus-community/prometheus -f values.yaml
+
+# Список установленных
+helm list
+helm list -A                     # Все namespace
+
+# Обновление
+helm upgrade my-prometheus prometheus-community/prometheus
+
+# Откат
+helm rollback my-prometheus 1    # К версии 1
+
+# Удаление
+helm uninstall my-prometheus
+
+# Посмотреть values (настройки)
+helm show values prometheus-community/prometheus
+
+# Посмотреть что будет создано (dry-run)
+helm install my-prometheus prometheus-community/prometheus --dry-run
+```
+
+### Структура Helm Chart
+
+```
+mychart/
+├── Chart.yaml          # Метаданные chart
+├── values.yaml         # Дефолтные значения
+├── templates/          # Шаблоны K8s манифестов
+│   ├── deployment.yaml
+│   ├── service.yaml
+│   ├── configmap.yaml
+│   └── _helpers.tpl    # Вспомогательные функции
+├── charts/             # Зависимости
+└── README.md
+```
+
+---
+
+## 20. Troubleshooting — поиск проблем
+
+### Алгоритм диагностики
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         TROUBLESHOOTING FLOW                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1. Pod не запускается                                                      │
+│     │                                                                        │
+│     ├──► kubectl get pods              # Статус?                            │
+│     ├──► kubectl describe pod <name>   # Events?                            │
+│     └──► kubectl logs <name>           # Логи?                              │
+│                                                                              │
+│  2. Возможные статусы Pod                                                   │
+│     │                                                                        │
+│     ├── Pending      → Нет ресурсов или PVC не привязан                    │
+│     ├── ImagePullBackOff → Проблема с image (имя, registry, credentials)   │
+│     ├── CrashLoopBackOff → Приложение падает (смотри логи!)                │
+│     ├── CreateContainerError → Проблема с конфигом                         │
+│     ├── OOMKilled    → Не хватило памяти (увеличь limits)                  │
+│     └── Evicted      → Нода под нагрузкой (ресурсы кончились)              │
+│                                                                              │
+│  3. Service не работает                                                     │
+│     │                                                                        │
+│     ├──► kubectl get endpoints <svc>   # Есть ли endpoints?                │
+│     ├──► kubectl get pods -l <selector># Labels совпадают?                 │
+│     └──► kubectl port-forward          # Проверь Pod напрямую              │
+│                                                                              │
+│  4. Ingress не работает                                                     │
+│     │                                                                        │
+│     ├──► kubectl get ingress           # Создан?                           │
+│     ├──► kubectl describe ingress      # Backend?                          │
+│     └──► kubectl logs -n ingress-nginx # Логи контроллера                  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Полезные команды для диагностики
+
+```bash
+# ===== POD ДИАГНОСТИКА =====
+kubectl get pods                          # Статус всех Pod'ов
+kubectl get pods -o wide                  # + IP и Node
+kubectl describe pod <name>               # Детали + Events
+kubectl logs <pod> [-c container]         # Логи
+kubectl logs <pod> --previous             # Логи упавшего контейнера
+kubectl logs -f <pod>                     # Follow
+kubectl exec -it <pod> -- sh              # Зайти внутрь
+
+# ===== EVENTS =====
+kubectl get events                        # Все события
+kubectl get events --sort-by='.lastTimestamp'
+kubectl get events --field-selector type=Warning
+
+# ===== SERVICE ДИАГНОСТИКА =====
+kubectl get svc                           # Список сервисов
+kubectl get endpoints                     # IP Pod'ов за сервисами
+kubectl describe svc <name>               # Детали
+
+# ===== DNS ТЕСТ =====
+kubectl run -it --rm debug --image=busybox -- nslookup <service>
+
+# ===== СЕТЬ ТЕСТ =====
+kubectl run -it --rm debug --image=nicolaka/netshoot -- bash
+# Внутри: curl, ping, dig, tcpdump, etc.
+
+# ===== РЕСУРСЫ =====
+kubectl top nodes                         # CPU/Memory по нодам
+kubectl top pods                          # CPU/Memory по Pod'ам
+kubectl describe node <name>              # Allocatable vs Requests
+
+# ===== RBAC ТЕСТ =====
+kubectl auth can-i create pods            # Могу ли я?
+kubectl auth can-i create pods --as=system:serviceaccount:default:myapp
+```
+
+### Частые ошибки и решения
+
+| Ошибка | Причина | Решение |
+|--------|---------|---------|
+| `ImagePullBackOff` | Image не найден | Проверь имя image, registry credentials |
+| `CrashLoopBackOff` | Приложение падает | `kubectl logs --previous`, проверь команду запуска |
+| `Pending` (долго) | Нет ресурсов | `kubectl describe pod` → Events, увеличь кластер |
+| `OOMKilled` | Memory limit | Увеличь `limits.memory` |
+| `Evicted` | Node под давлением | Добавь ноды или оптимизируй приложения |
+| `CreateContainerConfigError` | Ошибка в ConfigMap/Secret | Проверь что ConfigMap/Secret существует |
+| Service без Endpoints | Label mismatch | Сравни selector в Service и labels в Pod |
+
+---
+
+## 21. Реальные сценарии развёртывания
+
+### Сценарий 1: Web-приложение + БД
+
+```yaml
+# namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: myapp
+---
+# postgres-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: myapp
+type: Opaque
+stringData:
+  POSTGRES_USER: myapp
+  POSTGRES_PASSWORD: secretpassword
+  POSTGRES_DB: myapp_db
+---
+# postgres-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: myapp
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+# postgres-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: myapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:14
+        envFrom:
+        - secretRef:
+            name: postgres-secret
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: postgres-pvc
+---
+# postgres-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: myapp
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+---
+# web-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-config
+  namespace: myapp
+data:
+  DATABASE_HOST: postgres.myapp.svc.cluster.local
+  DATABASE_PORT: "5432"
+---
+# web-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: myapp
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: web
+        image: myregistry/myapp:1.0
+        envFrom:
+        - configMapRef:
+            name: web-config
+        - secretRef:
+            name: postgres-secret
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+---
+# web-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: myapp
+spec:
+  selector:
+    app: web
+  ports:
+  - port: 80
+    targetPort: 8080
+---
+# web-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: myapp
+spec:
+  rules:
+  - host: myapp.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: web
+            port:
+              number: 80
+```
+
+```bash
+# Развернуть всё
+kubectl apply -f namespace.yaml
+kubectl apply -f .
+
+# Проверить
+kubectl get all -n myapp
+kubectl get pvc -n myapp
+kubectl logs -l app=web -n myapp
+```
+
+---
+
+## 22. Подготовка к курсу Observability
+
+### Минимальный стек для практики
+
+```bash
+# 1. Установить Prometheus + Grafana через Helm
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo add grafana https://grafana.github.io/helm-charts
+helm repo update
+
+# Prometheus (метрики)
+helm install prometheus prometheus-community/prometheus \
+  --namespace monitoring --create-namespace
+
+# Grafana (визуализация)
+helm install grafana grafana/grafana \
+  --namespace monitoring \
+  --set adminPassword=admin123
+
+# 2. Доступ к Grafana
+kubectl port-forward svc/grafana 3000:80 -n monitoring
+# Открой http://localhost:3000 (admin / admin123)
+
+# 3. Проверить что всё работает
+kubectl get pods -n monitoring
+```
+
+### Что учить дальше
+
+| Тема | Для курса |
+|------|-----------|
+| Prometheus Queries (PromQL) | Модуль 2: Метрики |
+| Grafana Dashboards | Модуль 2: Метрики |
+| Alertmanager | Модуль 2: Метрики |
+| Elasticsearch + Kibana | Модуль 3: Логи |
+| Fluentd / Filebeat | Модуль 3: Логи |
+| Jaeger + OpenTelemetry | Модуль 4: Трассировки |
+
+---
+
+## Итоговый чек-лист (расширенный)
+
+### Базовый уровень
+- [ ] Архитектура: Control Plane, Workers, etcd
+- [ ] Объекты: Pod, Deployment, Service, ConfigMap, Secret
+- [ ] kubectl: get, describe, logs, exec, apply
+- [ ] Namespaces и изоляция
+
+### Средний уровень
+- [ ] StatefulSet, DaemonSet, Job, CronJob
+- [ ] Labels, Selectors, Annotations
+- [ ] Resources: requests, limits
+- [ ] Probes: startup, readiness, liveness
+- [ ] PV, PVC, StorageClass
+- [ ] Ingress и DNS
+
+### Продвинутый уровень
+- [ ] RBAC: Role, ClusterRole, Bindings
+- [ ] NetworkPolicy
+- [ ] Helm: install, upgrade, values
+- [ ] Troubleshooting
+
+### Для курса Observability
+- [ ] Prometheus установлен и работает
+- [ ] Grafana подключена к Prometheus
+- [ ] Понимаю annotations для scraping метрик
+- [ ] Знаю как смотреть логи Pod'ов
+
+**Удачи на курсе!**
+
+---
+
+## 23. Сети Kubernetes — глубокое погружение
+
+### Базовые принципы сети K8s
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    KUBERNETES NETWORKING MODEL                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ПРАВИЛА:                                                                    │
+│  1. Все Pod'ы могут общаться друг с другом БЕЗ NAT                          │
+│  2. Все ноды могут общаться со всеми Pod'ами БЕЗ NAT                        │
+│  3. IP, который Pod видит у себя = IP, который видят другие                │
+│                                                                              │
+│  Это называется "flat network" — плоская сеть                               │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Сетевые уровни в Kubernetes
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         NETWORK LAYERS                                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  УРОВЕНЬ 4: INGRESS (L7 - HTTP/HTTPS)                                       │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  Internet → Ingress Controller → myapp.com/api → Service → Pod     │    │
+│  │                                  myapp.com/web → Service → Pod     │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  УРОВЕНЬ 3: SERVICE (L4 - TCP/UDP)                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  ClusterIP: 10.96.0.1:80 ──► Pod 10.244.1.5:8080                   │    │
+│  │                          ──► Pod 10.244.2.3:8080                   │    │
+│  │                          ──► Pod 10.244.3.7:8080                   │    │
+│  │  (kube-proxy делает балансировку через iptables/IPVS)             │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  УРОВЕНЬ 2: POD NETWORK (L3 - IP)                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  Pod 10.244.1.5 ←──────────────────────────→ Pod 10.244.2.3        │    │
+│  │       (Node 1)            CNI Plugin              (Node 2)          │    │
+│  │                     (Calico/Flannel/Cilium)                        │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  УРОВЕНЬ 1: NODE NETWORK (физическая сеть)                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  Node 1 (192.168.1.10) ←───── Switch ────→ Node 2 (192.168.1.11)  │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### IP-адресация в кластере
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          IP ADDRESSING                                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ТРИ РАЗНЫХ IP-ДИАПАЗОНА:                                                   │
+│                                                                              │
+│  1. NODE IPs (физические/облачные)                                          │
+│     └─ 192.168.1.0/24                                                       │
+│        ├─ node-1: 192.168.1.10                                              │
+│        ├─ node-2: 192.168.1.11                                              │
+│        └─ node-3: 192.168.1.12                                              │
+│                                                                              │
+│  2. POD IPs (виртуальные, CNI выделяет)                                     │
+│     └─ 10.244.0.0/16 (Pod CIDR)                                             │
+│        ├─ node-1 pods: 10.244.1.0/24                                        │
+│        ├─ node-2 pods: 10.244.2.0/24                                        │
+│        └─ node-3 pods: 10.244.3.0/24                                        │
+│                                                                              │
+│  3. SERVICE IPs (виртуальные, kube-proxy)                                   │
+│     └─ 10.96.0.0/12 (Service CIDR)                                          │
+│        ├─ kubernetes: 10.96.0.1                                             │
+│        ├─ kube-dns: 10.96.0.10                                              │
+│        └─ my-service: 10.96.45.123                                          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Pod-to-Pod коммуникация
+
+#### На одной ноде
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    POD-TO-POD (Same Node)                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────── NODE 1 ───────────────────────────────────────────────┐       │
+│  │                                                                    │       │
+│  │  ┌─────────┐     veth pair      ┌──────────────┐     veth pair   │       │
+│  │  │  Pod A  │ ◄──────────────────┤              ├─────────────────►│       │
+│  │  │10.244.1.2│     eth0          │    cbr0     │         eth0    │       │
+│  │  └─────────┘                    │  (bridge)   │                  │       │
+│  │                                 │ 10.244.1.1  │                  │       │
+│  │  ┌─────────┐     veth pair      │              │     veth pair   │       │
+│  │  │  Pod B  │ ◄──────────────────┤              ├─────────────────►│       │
+│  │  │10.244.1.3│     eth0          └──────────────┘         eth0    │       │
+│  │  └─────────┘                                                      │       │
+│  │                                                                    │       │
+│  │  Пакет: 10.244.1.2 → 10.244.1.3 (через bridge напрямую)          │       │
+│  │                                                                    │       │
+│  └────────────────────────────────────────────────────────────────────┘       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### На разных нодах
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    POD-TO-POD (Different Nodes)                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────── NODE 1 ───────┐                    ┌─────── NODE 2 ───────┐       │
+│  │                       │                    │                       │       │
+│  │  ┌─────────┐         │                    │         ┌─────────┐  │       │
+│  │  │  Pod A  │         │                    │         │  Pod B  │  │       │
+│  │  │10.244.1.2│        │                    │        │10.244.2.3│  │       │
+│  │  └────┬────┘         │                    │         └────┬────┘  │       │
+│  │       │ eth0         │                    │              │ eth0  │       │
+│  │       ▼              │                    │              ▼       │       │
+│  │  ┌─────────┐         │                    │         ┌─────────┐  │       │
+│  │  │  cbr0   │         │                    │         │  cbr0   │  │       │
+│  │  │10.244.1.1│        │                    │        │10.244.2.1│  │       │
+│  │  └────┬────┘         │                    │         └────┬────┘  │       │
+│  │       │              │                    │              │       │       │
+│  │       ▼              │                    │              ▼       │       │
+│  │  ┌─────────┐         │                    │         ┌─────────┐  │       │
+│  │  │  eth0   │         │                    │         │  eth0   │  │       │
+│  │  │192.168.1.10│◄─────┼─── Overlay/VXLAN ──┼────────►│192.168.1.11│ │       │
+│  │  └─────────┘         │    или routing     │         └─────────┘  │       │
+│  │                       │                    │                       │       │
+│  └───────────────────────┘                    └───────────────────────┘       │
+│                                                                              │
+│  Маршрут: 10.244.1.2 → cbr0 → eth0 → [overlay] → eth0 → cbr0 → 10.244.2.3  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### CNI — Container Network Interface
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CNI PLUGINS                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  CNI = стандарт для настройки сети контейнеров                              │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │  kubelet                                                            │     │
+│  │     │                                                               │     │
+│  │     │ "Создай Pod"                                                  │     │
+│  │     ▼                                                               │     │
+│  │  CNI Plugin (Calico/Flannel/Cilium/Weave)                          │     │
+│  │     │                                                               │     │
+│  │     ├── Создаёт veth pair                                          │     │
+│  │     ├── Назначает IP из CIDR                                       │     │
+│  │     ├── Настраивает маршруты                                       │     │
+│  │     └── Настраивает iptables/eBPF                                  │     │
+│  │                                                                     │     │
+│  └────────────────────────────────────────────────────────────────────┘     │
+│                                                                              │
+│  Популярные CNI:                                                            │
+│  ┌─────────────┬─────────────┬──────────────┬─────────────────────────┐     │
+│  │   Calico    │   Flannel   │    Cilium    │        Weave           │     │
+│  ├─────────────┼─────────────┼──────────────┼─────────────────────────┤     │
+│  │ BGP routing │ VXLAN/UDP   │ eBPF         │ Mesh overlay           │     │
+│  │ Network     │ Простой     │ Network      │ Encryption             │     │
+│  │ Policies    │ Без policies│ Policies L7  │ Network Policies       │     │
+│  │ Production  │ Небольшие   │ High perf    │ Простой setup          │     │
+│  │ grade       │ кластеры    │ Observability│                        │     │
+│  └─────────────┴─────────────┴──────────────┴─────────────────────────┘     │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Service — как работает внутри
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         SERVICE INTERNALS                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Service (ClusterIP: 10.96.45.123)                                          │
+│                                                                              │
+│  1. kube-proxy (на каждой ноде) создаёт правила:                            │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                          IPTABLES MODE                              │    │
+│  │                                                                      │    │
+│  │  -A KUBE-SERVICES -d 10.96.45.123/32 -p tcp --dport 80              │    │
+│  │      -j KUBE-SVC-XXXX                                               │    │
+│  │                                                                      │    │
+│  │  -A KUBE-SVC-XXXX -m statistic --mode random --probability 0.333    │    │
+│  │      -j KUBE-SEP-AAAA (Pod 1)                                       │    │
+│  │  -A KUBE-SVC-XXXX -m statistic --mode random --probability 0.500    │    │
+│  │      -j KUBE-SEP-BBBB (Pod 2)                                       │    │
+│  │  -A KUBE-SVC-XXXX                                                   │    │
+│  │      -j KUBE-SEP-CCCC (Pod 3)                                       │    │
+│  │                                                                      │    │
+│  │  -A KUBE-SEP-AAAA -p tcp -j DNAT --to-destination 10.244.1.5:8080  │    │
+│  │  -A KUBE-SEP-BBBB -p tcp -j DNAT --to-destination 10.244.2.3:8080  │    │
+│  │  -A KUBE-SEP-CCCC -p tcp -j DNAT --to-destination 10.244.3.7:8080  │    │
+│  │                                                                      │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  2. Пакет к Service:                                                        │
+│     Client → 10.96.45.123:80 → [DNAT] → 10.244.1.5:8080 → Pod              │
+│                                                                              │
+│  3. IPVS MODE (более производительный для больших кластеров):              │
+│     ipvsadm -L -n                                                           │
+│     TCP 10.96.45.123:80 rr                                                  │
+│       -> 10.244.1.5:8080    Masq   1      0          0                      │
+│       -> 10.244.2.3:8080    Masq   1      0          0                      │
+│       -> 10.244.3.7:8080    Masq   1      0          0                      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### DNS в Kubernetes
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           KUBERNETES DNS                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  CoreDNS (kube-dns) — DNS-сервер кластера                                   │
+│  ClusterIP: 10.96.0.10                                                      │
+│                                                                              │
+│  DNS-записи автоматически создаются для:                                    │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  SERVICES:                                                          │    │
+│  │                                                                      │    │
+│  │  <service>.<namespace>.svc.cluster.local                            │    │
+│  │                                                                      │    │
+│  │  Примеры:                                                           │    │
+│  │  • nginx.default.svc.cluster.local      → 10.96.45.123             │    │
+│  │  • postgres.database.svc.cluster.local  → 10.96.78.45              │    │
+│  │  • prometheus.monitoring.svc.cluster.local → 10.96.12.34           │    │
+│  │                                                                      │    │
+│  │  Короткие имена (внутри namespace):                                 │    │
+│  │  • nginx              → nginx.default.svc.cluster.local            │    │
+│  │  • nginx.default      → nginx.default.svc.cluster.local            │    │
+│  │                                                                      │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  PODS (только для StatefulSet с headless service):                  │    │
+│  │                                                                      │    │
+│  │  <pod-name>.<service>.<namespace>.svc.cluster.local                 │    │
+│  │                                                                      │    │
+│  │  Примеры (StatefulSet "postgres" с headless service):               │    │
+│  │  • postgres-0.postgres.default.svc.cluster.local → 10.244.1.5      │    │
+│  │  • postgres-1.postgres.default.svc.cluster.local → 10.244.2.3      │    │
+│  │  • postgres-2.postgres.default.svc.cluster.local → 10.244.3.7      │    │
+│  │                                                                      │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  /etc/resolv.conf в каждом Pod:                                             │
+│  nameserver 10.96.0.10                                                      │
+│  search default.svc.cluster.local svc.cluster.local cluster.local          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Headless Service — для StatefulSet
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         HEADLESS SERVICE                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Обычный Service:                    Headless Service:                      │
+│  clusterIP: 10.96.45.123            clusterIP: None                        │
+│                                                                              │
+│  DNS → один IP (VIP)                 DNS → список IP всех Pod'ов           │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                                                                      │    │
+│  │  nslookup nginx.default           nslookup postgres.default         │    │
+│  │  → 10.96.45.123                   → 10.244.1.5                      │    │
+│  │                                   → 10.244.2.3                      │    │
+│  │                                   → 10.244.3.7                      │    │
+│  │                                                                      │    │
+│  │  Клиент обращается к VIP,         Клиент сам выбирает Pod           │    │
+│  │  kube-proxy балансирует           или обращается по имени:          │    │
+│  │                                   postgres-0.postgres.default       │    │
+│  │                                                                      │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  apiVersion: v1                                                             │
+│  kind: Service                                                              │
+│  metadata:                                                                   │
+│    name: postgres                                                           │
+│  spec:                                                                       │
+│    clusterIP: None          # ← Headless!                                   │
+│    selector:                                                                 │
+│      app: postgres                                                          │
+│    ports:                                                                    │
+│    - port: 5432                                                             │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### NodePort и LoadBalancer
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      EXTERNAL ACCESS                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  NODEPORT (type: NodePort)                                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                                                                      │    │
+│  │  Внешний клиент → любая_нода:30080 → Service → Pod                  │    │
+│  │                                                                      │    │
+│  │  Node 1 (192.168.1.10)  ─┐                                          │    │
+│  │  Node 2 (192.168.1.11)  ─┼─ Все слушают порт 30080                  │    │
+│  │  Node 3 (192.168.1.12)  ─┘                                          │    │
+│  │                                                                      │    │
+│  │  spec:                                                               │    │
+│  │    type: NodePort                                                    │    │
+│  │    ports:                                                            │    │
+│  │    - port: 80                                                        │    │
+│  │      targetPort: 8080                                                │    │
+│  │      nodePort: 30080      # 30000-32767                             │    │
+│  │                                                                      │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  LOADBALANCER (type: LoadBalancer) — только в облаке                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                                                                      │    │
+│  │  Внешний клиент → Cloud LB (external IP) → NodePort → Service → Pod │    │
+│  │                                                                      │    │
+│  │                   ┌──────────────────┐                               │    │
+│  │  Internet ───────►│ Cloud Load      │                               │    │
+│  │                   │ Balancer        │                               │    │
+│  │                   │ (AWS ELB/       │                               │    │
+│  │                   │  GCP LB/Azure)  │                               │    │
+│  │                   └────────┬─────────┘                               │    │
+│  │                            │                                         │    │
+│  │               ┌────────────┼────────────┐                            │    │
+│  │               ▼            ▼            ▼                            │    │
+│  │            Node 1       Node 2       Node 3                          │    │
+│  │           :30080       :30080       :30080                           │    │
+│  │                                                                      │    │
+│  │  kubectl get svc                                                     │    │
+│  │  NAME    TYPE           EXTERNAL-IP      PORT(S)                     │    │
+│  │  nginx   LoadBalancer   52.123.45.67     80:30080/TCP               │    │
+│  │                                                                      │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Ingress Controller — HTTP роутинг
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        INGRESS ARCHITECTURE                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│                              Internet                                        │
+│                                  │                                           │
+│                                  ▼                                           │
+│                   ┌──────────────────────────────┐                          │
+│                   │     Load Balancer            │                          │
+│                   │   (Cloud или MetalLB)        │                          │
+│                   └──────────────┬───────────────┘                          │
+│                                  │                                           │
+│                                  ▼                                           │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                    INGRESS CONTROLLER                                  │  │
+│  │              (nginx-ingress / traefik / contour)                      │  │
+│  │                                                                        │  │
+│  │  ┌──────────────────────────────────────────────────────────────────┐ │  │
+│  │  │  Ingress Resource:                                                │ │  │
+│  │  │                                                                   │ │  │
+│  │  │  rules:                                                           │ │  │
+│  │  │  - host: api.example.com                                         │ │  │
+│  │  │    http:                                                          │ │  │
+│  │  │      paths:                                                       │ │  │
+│  │  │      - path: /v1    →  api-v1-service:8080                       │ │  │
+│  │  │      - path: /v2    →  api-v2-service:8080                       │ │  │
+│  │  │                                                                   │ │  │
+│  │  │  - host: web.example.com                                         │ │  │
+│  │  │    http:                                                          │ │  │
+│  │  │      paths:                                                       │ │  │
+│  │  │      - path: /      →  frontend-service:80                       │ │  │
+│  │  │                                                                   │ │  │
+│  │  └──────────────────────────────────────────────────────────────────┘ │  │
+│  │                                                                        │  │
+│  │  Ingress Controller читает Ingress ресурсы и настраивает              │  │
+│  │  свой reverse proxy (nginx.conf / traefik config)                     │  │
+│  │                                                                        │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                         │              │              │                      │
+│                         ▼              ▼              ▼                      │
+│                   ┌─────────┐    ┌─────────┐    ┌─────────┐                 │
+│                   │Service A│    │Service B│    │Service C│                 │
+│                   └─────────┘    └─────────┘    └─────────┘                 │
+│                         │              │              │                      │
+│                         ▼              ▼              ▼                      │
+│                   ┌─────────┐    ┌─────────┐    ┌─────────┐                 │
+│                   │  Pods   │    │  Pods   │    │  Pods   │                 │
+│                   └─────────┘    └─────────┘    └─────────┘                 │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Практика: диагностика сети
+
+```bash
+# ===== ПРОВЕРКА POD СЕТИ =====
+
+# IP Pod'а
+kubectl get pod <name> -o wide
+
+# Зайти в Pod и проверить сеть
+kubectl exec -it <pod> -- sh
+# Внутри:
+ip addr                    # IP адреса
+ip route                   # Маршруты
+cat /etc/resolv.conf       # DNS
+nslookup <service>         # Резолв имени
+curl http://<service>      # HTTP запрос
+
+# Дебаг-контейнер с сетевыми утилитами
+kubectl run debug --rm -it --image=nicolaka/netshoot -- bash
+# Внутри:
+ping 10.244.1.5           # Ping Pod
+traceroute 10.244.2.3     # Трассировка
+dig <service>.default.svc.cluster.local  # DNS lookup
+tcpdump -i eth0           # Захват пакетов
+
+# ===== ПРОВЕРКА SERVICE =====
+
+# Endpoints (реальные IP Pod'ов)
+kubectl get endpoints <service>
+
+# Детали Service
+kubectl describe svc <service>
+
+# Проверить iptables правила (на ноде)
+sudo iptables -t nat -L KUBE-SERVICES -n
+sudo iptables -t nat -L KUBE-SVC-XXXX -n
+
+# Проверить IPVS (если используется)
+sudo ipvsadm -L -n
+
+# ===== ПРОВЕРКА DNS =====
+
+# Тест DNS из Pod'а
+kubectl run dnstest --rm -it --image=busybox -- nslookup kubernetes
+
+# Логи CoreDNS
+kubectl logs -n kube-system -l k8s-app=kube-dns
+
+# ===== ПРОВЕРКА CNI =====
+
+# Конфигурация CNI
+cat /etc/cni/net.d/*.conf
+
+# Логи CNI (зависит от плагина)
+kubectl logs -n kube-system -l k8s-app=calico-node
+```
+
+### Сетевая политика — пример
+
+```yaml
+# Разрешить только frontend → backend на порту 8080
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-policy
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: frontend
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: database
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:                    # Разрешить DNS
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  frontend ──────► backend ──────► database                                  │
+│     ✓               │                ✓                                      │
+│                     │                                                        │
+│  other-pod ──✗──────┘                                                       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
