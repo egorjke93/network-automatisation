@@ -344,20 +344,30 @@ alias kaf='kubectl apply -f'
 
 ## 5. Практика: первое приложение
 
-### Шаг 1: Установка minikube (локальный кластер)
+### Шаг 1: Установка K3s (лёгкий production-ready кластер)
 
 ```bash
-# Установка minikube
-curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
-sudo install minikube-linux-amd64 /usr/local/bin/minikube
+# Установка K3s (один узел, все роли)
+curl -sfL https://get.k3s.io | sh -
 
-# Запуск кластера
-minikube start
+# K3s автоматически установит kubectl
+# Kubeconfig находится в /etc/rancher/k3s/k3s.yaml
+
+# Настройка kubectl для обычного пользователя
+mkdir -p ~/.kube
+sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+sudo chown $(id -u):$(id -g) ~/.kube/config
 
 # Проверка
 kubectl cluster-info
 kubectl get nodes
 ```
+
+**Почему K3s, а не Minikube:**
+- K3s — production-ready, сертифицирован CNCF
+- Бинарник < 100MB, потребляет ~512MB RAM
+- Включает Traefik (Ingress), CoreDNS, local-path-provisioner
+- Используется в Rancher для управления кластерами
 
 ### Шаг 2: Создание приложения
 
@@ -417,8 +427,14 @@ kubectl get all
 # Смотрим логи
 kubectl logs -l app=hello
 
-# Получаем URL для доступа
-minikube service hello-service --url
+# Получаем URL для доступа (NodePort)
+kubectl get svc hello-service
+# Будет показан порт типа 80:3XXXX/TCP
+# Доступ: http://<NODE-IP>:<NodePort>
+
+# Или через port-forward (удобнее для разработки)
+kubectl port-forward svc/hello-service 8080:80 &
+curl http://localhost:8080
 ```
 
 ### Шаг 4: Эксперименты
@@ -2537,3 +2553,818 @@ spec:
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+# Часть 3: Практика с Rancher
+
+## 24. Установка Rancher
+
+### Почему Rancher, а не Minikube?
+
+| Критерий | Minikube | Rancher + K3s |
+|----------|----------|---------------|
+| Production-ready | Нет | Да |
+| Multi-cluster | Нет | Да |
+| UI для управления | Базовый | Полноценный |
+| RBAC управление | Командная строка | Веб-интерфейс |
+| Мониторинг | Нужно ставить | Встроен |
+| Ресурсы | Много | K3s очень лёгкий |
+
+### Варианты установки Rancher
+
+**Вариант A: Docker (для обучения) — рекомендуется для старта**
+```bash
+# Запуск Rancher в Docker
+docker run -d --restart=unless-stopped \
+  -p 80:80 -p 443:443 \
+  --privileged \
+  --name rancher \
+  rancher/rancher:latest
+
+# Получить начальный пароль
+docker logs rancher 2>&1 | grep "Bootstrap Password:"
+```
+
+**Вариант B: На существующем K8s кластере (production)**
+```bash
+# Добавить Helm repo
+helm repo add rancher-stable https://releases.rancher.com/server-charts/stable
+helm repo update
+
+# Установить cert-manager (требуется)
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.13.0/cert-manager.yaml
+
+# Установить Rancher
+helm install rancher rancher-stable/rancher \
+  --namespace cattle-system \
+  --create-namespace \
+  --set hostname=rancher.example.com \
+  --set bootstrapPassword=admin
+```
+
+### Первый вход в Rancher
+
+1. Откройте `https://localhost` (или IP сервера)
+2. Примите самоподписанный сертификат
+3. Введите bootstrap password из логов
+4. Установите новый пароль администратора
+5. Укажите Server URL (как кластеры будут подключаться)
+
+## 25. Создание кластера K3s через Rancher
+
+### Что такое K3s?
+
+K3s — лёгкий Kubernetes от Rancher:
+- Бинарник < 100MB
+- Потребляет ~512MB RAM
+- Сертифицирован CNCF
+- Идеален для Edge, IoT, обучения
+
+### Создание кластера в Rancher UI
+
+```
+1. Cluster Management → Create
+2. Выбрать "Custom" (свои серверы)
+3. Задать имя кластера: "lab-cluster"
+4. Kubernetes Version: выбрать последнюю стабильную
+5. Нажать Create
+```
+
+### Добавление нод
+
+После создания кластера Rancher даст команду регистрации:
+
+```bash
+# На сервере который станет Control Plane + Worker
+curl -fL https://rancher.example.com/system-agent-install.sh | \
+  sudo sh -s - \
+  --server https://rancher.example.com \
+  --label 'cattle.io/os=linux' \
+  --token <TOKEN> \
+  --etcd --controlplane --worker
+```
+
+**Роли нод:**
+- `--etcd` — хранилище состояния
+- `--controlplane` — API server, scheduler, controller
+- `--worker` — запуск подов
+
+### Минимальные конфигурации
+
+**Для обучения (1 нода):**
+```bash
+# Все роли на одной машине
+--etcd --controlplane --worker
+```
+
+**Для production (минимум 3 ноды):**
+```
+Node 1: --etcd --controlplane
+Node 2: --etcd --controlplane
+Node 3: --etcd --controlplane
+Node 4+: --worker
+```
+
+## 26. Практическое упражнение 1: Развёртывание приложения
+
+### Задача
+Развернуть веб-приложение с базой данных через Rancher UI.
+
+### Шаг 1: Создание Namespace
+
+```
+Rancher UI → Cluster → Projects/Namespaces → Create Namespace
+Name: practice-app
+```
+
+Или через kubectl:
+```bash
+kubectl create namespace practice-app
+```
+
+### Шаг 2: Развёртывание PostgreSQL
+
+**Через Rancher UI:**
+```
+Workload → Deployments → Create
+
+Name: postgres
+Namespace: practice-app
+Container Image: postgres:15-alpine
+
+Environment Variables:
+  POSTGRES_DB: appdb
+  POSTGRES_USER: appuser
+  POSTGRES_PASSWORD: secretpass
+
+Ports:
+  Container Port: 5432
+  Protocol: TCP
+```
+
+**Или YAML (сохранить как postgres.yaml):**
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: practice-app
+type: Opaque
+stringData:
+  POSTGRES_DB: appdb
+  POSTGRES_USER: appuser
+  POSTGRES_PASSWORD: secretpass
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: practice-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+        envFrom:
+        - secretRef:
+            name: postgres-secret
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: practice-app
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+  type: ClusterIP
+```
+
+```bash
+kubectl apply -f postgres.yaml
+```
+
+### Шаг 3: Развёртывание веб-приложения
+
+```yaml
+# app.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp
+  namespace: practice-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: webapp
+  template:
+    metadata:
+      labels:
+        app: webapp
+    spec:
+      containers:
+      - name: webapp
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webapp
+  namespace: practice-app
+spec:
+  selector:
+    app: webapp
+  ports:
+  - port: 80
+    targetPort: 80
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: webapp-ingress
+  namespace: practice-app
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+  - host: webapp.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: webapp
+            port:
+              number: 80
+```
+
+```bash
+kubectl apply -f app.yaml
+```
+
+### Шаг 4: Проверка в Rancher UI
+
+```
+Cluster → Workload → Deployments
+  ✓ postgres    1/1 Running
+  ✓ webapp      3/3 Running
+
+Cluster → Service Discovery → Services
+  ✓ postgres    ClusterIP
+  ✓ webapp      ClusterIP
+
+Cluster → Service Discovery → Ingresses
+  ✓ webapp-ingress   webapp.local
+```
+
+### Шаг 5: Тестирование
+
+```bash
+# Проверить поды
+kubectl get pods -n practice-app
+
+# Проверить логи
+kubectl logs -n practice-app -l app=webapp
+
+# Exec в под
+kubectl exec -it -n practice-app deploy/webapp -- sh
+
+# Проверить связность с postgres
+kubectl exec -it -n practice-app deploy/webapp -- \
+  sh -c "nc -zv postgres 5432"
+```
+
+## 27. Практическое упражнение 2: Масштабирование и обновление
+
+### Задача
+Научиться масштабировать и обновлять приложения без простоя.
+
+### Масштабирование через UI
+
+```
+Workload → Deployments → webapp → ⋮ → Edit Config
+  Replicas: 5
+  Save
+```
+
+### Масштабирование через kubectl
+
+```bash
+# Увеличить до 5 реплик
+kubectl scale deployment webapp -n practice-app --replicas=5
+
+# Проверить
+kubectl get pods -n practice-app -l app=webapp
+
+# Автоскейлинг (HPA)
+kubectl autoscale deployment webapp -n practice-app \
+  --min=3 --max=10 --cpu-percent=70
+```
+
+### Rolling Update
+
+```bash
+# Обновить образ
+kubectl set image deployment/webapp webapp=nginx:1.25-alpine \
+  -n practice-app
+
+# Следить за обновлением
+kubectl rollout status deployment/webapp -n practice-app
+
+# История обновлений
+kubectl rollout history deployment/webapp -n practice-app
+
+# Откатиться на предыдущую версию
+kubectl rollout undo deployment/webapp -n practice-app
+```
+
+### Стратегии обновления
+
+```yaml
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1        # Макс. дополнительных подов
+      maxUnavailable: 0  # Не допускать недоступность
+```
+
+## 28. Практическое упражнение 3: Мониторинг в Rancher
+
+### Включение мониторинга
+
+```
+Cluster → Apps → Charts → Monitoring → Install
+
+Prometheus: ✓
+Grafana: ✓
+Alertmanager: ✓
+```
+
+### Просмотр метрик
+
+```
+Cluster → Monitoring → Grafana
+
+Dashboards:
+  - Kubernetes / Compute Resources / Cluster
+  - Kubernetes / Compute Resources / Namespace (Pods)
+  - Kubernetes / Networking / Cluster
+```
+
+### Создание алерта
+
+```yaml
+# alert-rule.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: webapp-alerts
+  namespace: cattle-monitoring-system
+  labels:
+    app: rancher-monitoring
+spec:
+  groups:
+  - name: webapp
+    rules:
+    - alert: WebappDown
+      expr: kube_deployment_status_replicas_available{deployment="webapp",namespace="practice-app"} < 1
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Webapp is down"
+        description: "No available replicas for webapp"
+    - alert: WebappHighMemory
+      expr: |
+        sum(container_memory_usage_bytes{pod=~"webapp-.*",namespace="practice-app"})
+        / sum(kube_pod_container_resource_limits{pod=~"webapp-.*",namespace="practice-app",resource="memory"})
+        > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Webapp memory usage > 80%"
+```
+
+## 29. Практическое упражнение 4: Хранилище данных
+
+### Задача
+Настроить persistent storage для PostgreSQL.
+
+### Шаг 1: Проверить StorageClass
+
+```bash
+kubectl get storageclass
+
+# K3s по умолчанию использует local-path
+NAME                   PROVISIONER             RECLAIMPOLICY
+local-path (default)   rancher.io/local-path   Delete
+```
+
+### Шаг 2: Создать PVC
+
+```yaml
+# postgres-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: practice-app
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+```
+
+### Шаг 3: Обновить Deployment PostgreSQL
+
+```yaml
+# postgres-with-storage.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: practice-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+        envFrom:
+        - secretRef:
+            name: postgres-secret
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: postgres-data
+```
+
+### Шаг 4: Проверка
+
+```bash
+# Проверить PVC
+kubectl get pvc -n practice-app
+
+# Проверить что данные сохраняются
+kubectl exec -it -n practice-app deploy/postgres -- psql -U appuser -d appdb -c "CREATE TABLE test(id int);"
+
+# Удалить под (он пересоздастся)
+kubectl delete pod -n practice-app -l app=postgres
+
+# Проверить что таблица осталась
+kubectl exec -it -n practice-app deploy/postgres -- psql -U appuser -d appdb -c "\dt"
+```
+
+## 30. Практическое упражнение 5: RBAC и пользователи
+
+### Задача
+Создать пользователя с ограниченным доступом.
+
+### Шаг 1: Создать ServiceAccount
+
+```yaml
+# developer-sa.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: developer
+  namespace: practice-app
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: developer-role
+  namespace: practice-app
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "services", "configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create"]  # Разрешить exec в поды
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: developer-binding
+  namespace: practice-app
+subjects:
+- kind: ServiceAccount
+  name: developer
+  namespace: practice-app
+roleRef:
+  kind: Role
+  name: developer-role
+  apiGroup: rbac.authorization.k8s.io
+```
+
+```bash
+kubectl apply -f developer-sa.yaml
+```
+
+### Шаг 2: Получить токен
+
+```bash
+# Создать токен для ServiceAccount
+kubectl create token developer -n practice-app --duration=24h
+```
+
+### Шаг 3: Создать kubeconfig
+
+```bash
+# Получить CA сертификат
+kubectl config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > ca.crt
+
+# Создать kubeconfig
+cat > developer-kubeconfig.yaml << EOF
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    certificate-authority-data: $(cat ca.crt | base64 -w0)
+    server: https://<CLUSTER-IP>:6443
+  name: lab-cluster
+contexts:
+- context:
+    cluster: lab-cluster
+    namespace: practice-app
+    user: developer
+  name: developer-context
+current-context: developer-context
+users:
+- name: developer
+  user:
+    token: <TOKEN-FROM-STEP-2>
+EOF
+```
+
+### Шаг 4: Тестирование ограничений
+
+```bash
+# Использовать kubeconfig разработчика
+export KUBECONFIG=developer-kubeconfig.yaml
+
+# Это работает
+kubectl get pods
+kubectl logs deploy/webapp
+kubectl exec -it deploy/webapp -- sh
+
+# Это НЕ работает (нет прав)
+kubectl delete pod webapp-xxx
+# Error: pods "webapp-xxx" is forbidden
+
+kubectl get pods -n kube-system
+# Error: pods is forbidden in namespace "kube-system"
+```
+
+### Управление пользователями в Rancher UI
+
+```
+Rancher → Users & Authentication → Users → Create
+
+Username: developer
+Password: ***
+Global Permissions: User (базовые права)
+
+Затем:
+Cluster → Members → Add
+  Member: developer
+  Role: Read-Only или Custom
+```
+
+## 31. Практическое упражнение 6: CI/CD интеграция
+
+### Задача
+Настроить автоматический деплой из Git.
+
+### Rancher Fleet (GitOps)
+
+```
+Cluster → Continuous Delivery → Git Repos → Add Repository
+
+Name: practice-app-repo
+Repository URL: https://github.com/user/k8s-manifests.git
+Branch: main
+Paths: /practice-app
+```
+
+**Структура репозитория:**
+```
+k8s-manifests/
+└── practice-app/
+    ├── fleet.yaml
+    ├── deployment.yaml
+    ├── service.yaml
+    └── ingress.yaml
+```
+
+**fleet.yaml:**
+```yaml
+defaultNamespace: practice-app
+helm:
+  releaseName: webapp
+```
+
+### Webhook для автоматического деплоя
+
+```bash
+# При push в репозиторий Fleet автоматически применит изменения
+git add .
+git commit -m "Update webapp to v2"
+git push
+
+# Rancher Fleet обнаружит изменения и применит их
+```
+
+## 32. Чек-лист практических навыков
+
+После выполнения упражнений вы должны уметь:
+
+### Базовые операции
+- [ ] Установить Rancher в Docker
+- [ ] Создать K3s кластер через Rancher
+- [ ] Добавить ноды в кластер
+- [ ] Работать с kubectl и Rancher UI параллельно
+
+### Workloads
+- [ ] Создавать Deployments (UI и YAML)
+- [ ] Настраивать Services (ClusterIP, NodePort)
+- [ ] Создавать Ingress для внешнего доступа
+- [ ] Масштабировать приложения
+- [ ] Выполнять rolling updates
+- [ ] Откатывать неудачные обновления
+
+### Конфигурация
+- [ ] Создавать ConfigMaps и Secrets
+- [ ] Использовать переменные окружения из Secrets
+- [ ] Настраивать resource requests/limits
+- [ ] Настраивать liveness/readiness probes
+
+### Storage
+- [ ] Создавать PVC
+- [ ] Подключать volumes к подам
+- [ ] Проверять persistence данных
+
+### Безопасность
+- [ ] Создавать ServiceAccount
+- [ ] Настраивать Role и RoleBinding
+- [ ] Ограничивать доступ по namespace
+- [ ] Создавать пользователей в Rancher
+
+### Мониторинг
+- [ ] Включать Monitoring stack в Rancher
+- [ ] Просматривать метрики в Grafana
+- [ ] Создавать alert rules
+- [ ] Просматривать логи подов
+
+### Troubleshooting
+- [ ] Диагностировать failing pods
+- [ ] Читать события (`kubectl get events`)
+- [ ] Проверять сетевую связность между подами
+- [ ] Использовать `kubectl describe` для отладки
+
+## 33. Полезные команды для ежедневной работы
+
+```bash
+# === Статус кластера ===
+kubectl get nodes -o wide
+kubectl top nodes
+kubectl get all -A | head -50
+
+# === Быстрая диагностика ===
+kubectl get events -n <namespace> --sort-by='.lastTimestamp'
+kubectl describe pod <pod> -n <namespace> | tail -30
+kubectl logs <pod> -n <namespace> --tail=100 -f
+
+# === Работа с ресурсами ===
+kubectl get pods -n <namespace> -o wide
+kubectl get svc,ing -n <namespace>
+kubectl get pvc -n <namespace>
+
+# === Отладка сети ===
+kubectl run debug --rm -it --image=nicolaka/netshoot -- bash
+# Внутри: curl, nslookup, ping, traceroute, tcpdump
+
+# === Управление контекстами ===
+kubectl config get-contexts
+kubectl config use-context <context>
+kubectl config set-context --current --namespace=<namespace>
+
+# === Rancher CLI (опционально) ===
+# Установка: https://github.com/rancher/cli/releases
+rancher login https://rancher.example.com --token <token>
+rancher kubectl get pods
+```
+
+## 34. Архитектура тестового стенда
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              Rancher Server                                  │
+│                           (Docker container)                                 │
+│                              Port 443                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │ Manages
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            K3s Cluster "lab"                                 │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │                        Node 1 (All-in-one)                             │ │
+│  │  Roles: etcd + controlplane + worker                                   │ │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐      │ │
+│  │  │  API Server │ │  Scheduler  │ │ Controller  │ │    etcd     │      │ │
+│  │  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘      │ │
+│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐                      │ │
+│  │  │   kubelet   │ │ kube-proxy  │ │  Traefik    │                      │ │
+│  │  └─────────────┘ └─────────────┘ └─────────────┘                      │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  Namespaces:                                                                 │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐          │
+│  │   kube-system    │  │  cattle-system   │  │   practice-app   │          │
+│  │ CoreDNS, Metrics │  │ Rancher Agent    │  │ webapp, postgres │          │
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## 35. Следующие шаги после практики
+
+1. **Добавить второй worker node** — понять распределение подов
+2. **Настроить Longhorn** — distributed storage от Rancher
+3. **Попробовать Helm charts** — установить готовые приложения
+4. **Настроить внешний LoadBalancer** — MetalLB для bare-metal
+5. **Изучить Service Mesh** — Istio или Linkerd через Rancher
+6. **Настроить backup** — Velero для бэкапа кластера
