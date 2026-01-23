@@ -18,9 +18,12 @@ Domain Layer для Sync операций.
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Set, Callable, Tuple
 from enum import Enum
+import logging
 import re
 
 from ..constants import mask_to_prefix
+
+logger = logging.getLogger(__name__)
 
 
 def get_cable_endpoints(cable: Any) -> Optional[Tuple[str, str]]:
@@ -629,6 +632,9 @@ class SyncComparator:
                     local_prefix = int(raw_prefix)
 
         # Сравниваем prefix только если локальная маска известна
+        if local_prefix is None:
+            logger.debug(f"IP {local_ip}: маска не указана, пропускаем сравнение prefix")
+
         if local_prefix is not None:
             remote_addr = getattr(remote, "address", "") if hasattr(remote, "address") else ""
             if "/" in str(remote_addr):
