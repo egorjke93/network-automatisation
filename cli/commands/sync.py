@@ -366,7 +366,8 @@ def _print_changes_details(all_details: dict, args) -> None:
             icon = action_icons.get(action, "•")
 
             for item in items:
-                name = item.get("name", "")
+                # Поддержка разных форматов: "name" для интерфейсов, "address" для IP
+                name = item.get("name") or item.get("address", "")
                 device = item.get("device", "")
                 changes = item.get("changes", [])
 

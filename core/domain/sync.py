@@ -20,6 +20,8 @@ from typing import List, Dict, Any, Optional, Set, Callable, Tuple
 from enum import Enum
 import re
 
+from ..constants import mask_to_prefix
+
 
 def get_cable_endpoints(cable: Any) -> Optional[Tuple[str, str]]:
     """
@@ -610,24 +612,36 @@ class SyncComparator:
         changes = []
 
         # Prefix length (маска)
+        # Поддержка обоих форматов: "prefix_length" и "mask"
         local_ip = local.get("ip_address", "")
+        local_prefix = None
+
         if "/" in local_ip:
             local_prefix = int(local_ip.split("/")[1])
         else:
-            local_prefix = local.get("prefix_length", 24)
+            # Проверяем prefix_length, затем mask
+            raw_prefix = local.get("prefix_length") or local.get("mask")
+            if raw_prefix:
+                # Конвертируем если это маска в формате 255.255.255.0
+                if isinstance(raw_prefix, str) and "." in raw_prefix:
+                    local_prefix = mask_to_prefix(raw_prefix)
+                elif str(raw_prefix).isdigit():
+                    local_prefix = int(raw_prefix)
 
-        remote_addr = getattr(remote, "address", "") if hasattr(remote, "address") else ""
-        if "/" in str(remote_addr):
-            remote_prefix = int(str(remote_addr).split("/")[1])
-        else:
-            remote_prefix = 32  # NetBox default
+        # Сравниваем prefix только если локальная маска известна
+        if local_prefix is not None:
+            remote_addr = getattr(remote, "address", "") if hasattr(remote, "address") else ""
+            if "/" in str(remote_addr):
+                remote_prefix = int(str(remote_addr).split("/")[1])
+            else:
+                remote_prefix = 32  # NetBox default
 
-        if local_prefix != remote_prefix:
-            changes.append(FieldChange(
-                field="prefix_length",
-                old_value=remote_prefix,
-                new_value=local_prefix,
-            ))
+            if local_prefix != remote_prefix:
+                changes.append(FieldChange(
+                    field="prefix_length",
+                    old_value=remote_prefix,
+                    new_value=local_prefix,
+                ))
 
         # Description
         local_desc = local.get("description", "")

@@ -153,10 +153,13 @@ class IPAddressesSyncMixin:
         stats["skipped"] += len(diff.to_skip)
 
         # Установка primary IP (работает и в dry_run)
+        # Перезагружаем device чтобы получить актуальное состояние primary_ip
         if device_ip:
-            primary_set = self._set_primary_ip(device, device_ip)
-            if primary_set:
-                details["primary_ip"] = {"address": device_ip, "device": device_name}
+            device = self.client.get_device_by_name(device_name)
+            if device:
+                primary_set = self._set_primary_ip(device, device_ip)
+                if primary_set:
+                    details["primary_ip"] = {"address": device_ip, "device": device_name}
 
         logger.info(
             f"Синхронизация IP {device_name}: создано={stats['created']}, "
@@ -223,11 +226,12 @@ class IPAddressesSyncMixin:
                 logger.debug(f"Удалён старый IP: {old_address}")
 
                 # Создаём новый IP с правильной маской
-                self.client.api.ipam.ip_addresses.create(new_ip_data)
+                new_ip = self.client.api.ipam.ip_addresses.create(new_ip_data)
                 logger.info(
                     f"Пересоздан IP: {old_address} → {new_address} "
                     f"(маска: /{prefix_change.old_value} → /{prefix_change.new_value})"
                 )
+
                 return True
 
             except NetBoxError as e:

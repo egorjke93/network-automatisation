@@ -645,3 +645,100 @@ class TestEnabledModeOption:
 
         assert len(diff.to_skip) == 1
         assert diff.to_skip[0].reason == "no changes"
+
+
+class TestIPAddressPrefixComparison:
+    """Тесты для сравнения prefix_length IP-адресов (Bug #2 fix)."""
+
+    @pytest.fixture
+    def comparator(self):
+        return SyncComparator()
+
+    def test_ip_with_mask_field_detected(self, comparator):
+        """IP с полем mask корректно определяет prefix."""
+        local = [{"ip_address": "10.1.1.1", "mask": "30"}]
+        remote_ip = Mock()
+        remote_ip.address = "10.1.1.1/30"
+
+        diff = comparator.compare_ip_addresses(
+            local=local, remote=[remote_ip], update_existing=True
+        )
+
+        # Маски совпадают - не должно быть изменений
+        assert len(diff.to_update) == 0
+        assert len(diff.to_skip) == 1
+
+    def test_ip_with_prefix_length_field_detected(self, comparator):
+        """IP с полем prefix_length корректно определяет prefix."""
+        local = [{"ip_address": "10.1.1.1", "prefix_length": "32"}]
+        remote_ip = Mock()
+        remote_ip.address = "10.1.1.1/32"
+
+        diff = comparator.compare_ip_addresses(
+            local=local, remote=[remote_ip], update_existing=True
+        )
+
+        # Маски совпадают - не должно быть изменений
+        assert len(diff.to_update) == 0
+        assert len(diff.to_skip) == 1
+
+    def test_ip_with_slash_in_address(self, comparator):
+        """IP с маской в самом адресе (10.1.1.1/24) корректно парсится."""
+        local = [{"ip_address": "10.1.1.1/24"}]
+        remote_ip = Mock()
+        remote_ip.address = "10.1.1.1/24"
+
+        diff = comparator.compare_ip_addresses(
+            local=local, remote=[remote_ip], update_existing=True
+        )
+
+        # Маски совпадают
+        assert len(diff.to_update) == 0
+        assert len(diff.to_skip) == 1
+
+    def test_ip_without_mask_no_prefix_change_reported(self, comparator):
+        """IP без маски не должен вызывать изменение prefix."""
+        local = [{"ip_address": "10.1.1.1"}]  # Нет mask и нет /
+        remote_ip = Mock()
+        remote_ip.address = "10.1.1.1/30"
+
+        diff = comparator.compare_ip_addresses(
+            local=local, remote=[remote_ip], update_existing=True
+        )
+
+        # Нет маски в local - не должно быть изменения prefix
+        if diff.to_update:
+            changes = diff.to_update[0].changes
+            prefix_changes = [c for c in changes if c.field == "prefix_length"]
+            assert len(prefix_changes) == 0, "Не должно быть изменения prefix если маска не указана"
+
+    def test_ip_different_prefix_detected(self, comparator):
+        """Разные маски корректно определяются как изменение."""
+        local = [{"ip_address": "10.1.1.1", "mask": "24"}]
+        remote_ip = Mock()
+        remote_ip.address = "10.1.1.1/30"
+
+        diff = comparator.compare_ip_addresses(
+            local=local, remote=[remote_ip], update_existing=True
+        )
+
+        assert len(diff.to_update) == 1
+        changes = diff.to_update[0].changes
+        prefix_change = next((c for c in changes if c.field == "prefix_length"), None)
+        assert prefix_change is not None
+        assert prefix_change.old_value == 30
+        assert prefix_change.new_value == 24
+
+    def test_ip_with_dotted_mask_converted(self, comparator):
+        """Маска в формате 255.255.255.0 конвертируется в prefix."""
+        local = [{"ip_address": "10.1.1.1", "mask": "255.255.255.0"}]
+        remote_ip = Mock()
+        remote_ip.address = "10.1.1.1/24"
+
+        diff = comparator.compare_ip_addresses(
+            local=local, remote=[remote_ip], update_existing=True
+        )
+
+        # 255.255.255.0 = /24, совпадает с remote /24
+        assert len(diff.to_update) == 0
+        assert len(diff.to_skip) == 1
