@@ -633,7 +633,7 @@ class SyncComparator:
 
         # Сравниваем prefix только если локальная маска известна
         if local_prefix is None:
-            logger.debug(f"IP {local_ip}: маска не указана, пропускаем сравнение prefix")
+            logger.info(f"IP {local_ip}: маска не указана, пропускаем сравнение prefix")
 
         if local_prefix is not None:
             remote_addr = getattr(remote, "address", "") if hasattr(remote, "address") else ""
