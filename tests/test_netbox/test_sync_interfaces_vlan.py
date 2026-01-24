@@ -530,8 +530,10 @@ class TestTaggedVlansSync:
         mock_device.site = MagicMock()
         mock_device.site.name = "Office"
 
-        # В NetBox есть tagged_vlans (ошибка)
-        existing_tagged = [MagicMock(id=200), MagicMock(id=300)]
+        # В NetBox есть tagged_vlans (ошибка - access port не должен иметь tagged)
+        mock_vlan_200 = MagicMock(id=200, vid=20)
+        mock_vlan_300 = MagicMock(id=300, vid=30)
+        existing_tagged = [mock_vlan_200, mock_vlan_300]
 
         nb_interface = MockNBInterface(
             id=1,

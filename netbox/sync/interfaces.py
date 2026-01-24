@@ -105,11 +105,11 @@ class InterfacesSyncMixin:
         for item in diff.to_update:
             intf = next((i for i in sorted_interfaces if i.name == item.name), None)
             if intf and item.remote_data:
-                updated = self._update_interface(item.remote_data, intf)
+                updated, actual_changes = self._update_interface(item.remote_data, intf)
                 if updated:
                     stats["updated"] += 1
-                    changes = [str(c) for c in item.changes]
-                    details["update"].append({"name": item.name, "changes": changes})
+                    # Используем actual_changes из _update_interface (включает VLAN и все реальные изменения)
+                    details["update"].append({"name": item.name, "changes": actual_changes})
                 else:
                     stats["skipped"] += 1
 
@@ -202,14 +202,15 @@ class InterfacesSyncMixin:
         self: SyncBase,
         nb_interface,
         intf: Interface,
-    ) -> bool:
+    ) -> tuple:
         """
         Обновляет интерфейс в NetBox.
 
         Returns:
-            bool: True если были реальные изменения
+            tuple: (bool: были изменения, list: список изменений)
         """
         updates = {}
+        actual_changes = []  # Реальные изменения для логов/diff
         sync_cfg = get_sync_config("interfaces")
 
         if sync_cfg.get_option("auto_detect_type", True):
@@ -217,10 +218,12 @@ class InterfacesSyncMixin:
             current_type = getattr(nb_interface.type, 'value', None) if nb_interface.type else None
             if new_type and new_type != current_type:
                 updates["type"] = new_type
+                actual_changes.append(f"type: {current_type} → {new_type}")
 
         if sync_cfg.is_field_enabled("description"):
             if intf.description != nb_interface.description:
                 updates["description"] = intf.description
+                actual_changes.append(f"description: {nb_interface.description!r} → {intf.description!r}")
 
         if sync_cfg.is_field_enabled("enabled"):
             # Режим определения enabled:
@@ -235,8 +238,10 @@ class InterfacesSyncMixin:
                 enabled = intf.status not in ("disabled", "error")
             if enabled != nb_interface.enabled:
                 updates["enabled"] = enabled
+                actual_changes.append(f"enabled: {nb_interface.enabled} → {enabled}")
 
         mac_to_assign = None
+        current_mac = None
         if sync_cfg.is_field_enabled("mac_address") and intf.mac:
             sync_mac_only_with_ip = sync_cfg.get_option("sync_mac_only_with_ip", False)
             if not (sync_mac_only_with_ip and not intf.ip_address):
@@ -244,26 +249,31 @@ class InterfacesSyncMixin:
                 current_mac = self.client.get_interface_mac(nb_interface.id) if not self.dry_run else None
                 if new_mac and new_mac.upper() != (current_mac or "").upper():
                     mac_to_assign = new_mac
+                    actual_changes.append(f"mac: {current_mac} → {new_mac}")
 
         if sync_cfg.is_field_enabled("mtu") and intf.mtu:
             if intf.mtu != (nb_interface.mtu or 0):
                 updates["mtu"] = intf.mtu
+                actual_changes.append(f"mtu: {nb_interface.mtu} → {intf.mtu}")
 
         if sync_cfg.is_field_enabled("speed") and intf.speed:
             new_speed = self._parse_speed(intf.speed)
             if new_speed and new_speed != (nb_interface.speed or 0):
                 updates["speed"] = new_speed
+                actual_changes.append(f"speed: {nb_interface.speed} → {new_speed}")
 
         if sync_cfg.is_field_enabled("duplex") and intf.duplex:
             new_duplex = self._parse_duplex(intf.duplex)
             current_duplex = getattr(nb_interface.duplex, 'value', None) if nb_interface.duplex else None
             if new_duplex and new_duplex != current_duplex:
                 updates["duplex"] = new_duplex
+                actual_changes.append(f"duplex: {current_duplex} → {new_duplex}")
 
         if sync_cfg.is_field_enabled("mode") and intf.mode:
             current_mode = getattr(nb_interface.mode, 'value', None) if nb_interface.mode else None
             if intf.mode != current_mode:
                 updates["mode"] = intf.mode
+                actual_changes.append(f"mode: {current_mode} → {intf.mode}")
 
         # Sync untagged_vlan (access_vlan для access, native_vlan для trunk)
         if sync_cfg.is_field_enabled("untagged_vlan") and sync_cfg.get_option("sync_vlans", False):
@@ -282,8 +292,10 @@ class InterfacesSyncMixin:
 
             # Получаем текущий untagged_vlan из NetBox
             current_vlan_id = None
+            current_vlan_vid = None
             if nb_interface.untagged_vlan:
                 current_vlan_id = getattr(nb_interface.untagged_vlan, 'id', None)
+                current_vlan_vid = getattr(nb_interface.untagged_vlan, 'vid', None)
 
             if target_vid:
                 # Ищем VLAN в NetBox (в том же сайте что и устройство)
@@ -296,11 +308,13 @@ class InterfacesSyncMixin:
                 if vlan:
                     if vlan.id != current_vlan_id:
                         updates["untagged_vlan"] = vlan.id
+                        actual_changes.append(f"untagged_vlan: {current_vlan_vid} → {target_vid}")
                 else:
                     logger.debug(f"VLAN {target_vid} не найден в NetBox (site={site_name})")
             elif current_vlan_id:
                 # Очищаем если на порте нет VLAN, а в NetBox было
                 updates["untagged_vlan"] = None
+                actual_changes.append(f"untagged_vlan: {current_vlan_vid} → None")
 
         # Sync tagged_vlans (список VLAN на trunk портах)
         if sync_cfg.is_field_enabled("tagged_vlans") and sync_cfg.get_option("sync_vlans", False):
@@ -318,26 +332,33 @@ class InterfacesSyncMixin:
 
                     # Преобразуем VID в ID VLAN из NetBox
                     target_vlan_ids = []
+                    matched_vids = []
                     for vid in target_vids:
                         vlan = self._get_vlan_by_vid(vid, site_name)
                         if vlan:
                             target_vlan_ids.append(vlan.id)
+                            matched_vids.append(vid)
                         else:
                             logger.debug(f"VLAN {vid} не найден в NetBox (site={site_name})")
 
                     # Получаем текущие tagged_vlans из NetBox
                     current_vlan_ids = []
+                    current_vlan_vids = []
                     if nb_interface.tagged_vlans:
                         current_vlan_ids = sorted([v.id for v in nb_interface.tagged_vlans])
+                        current_vlan_vids = sorted([v.vid for v in nb_interface.tagged_vlans])
 
                     # Сравниваем списки
                     if sorted(target_vlan_ids) != current_vlan_ids:
                         updates["tagged_vlans"] = target_vlan_ids
+                        actual_changes.append(f"tagged_vlans: {current_vlan_vids} → {matched_vids}")
 
             elif intf.mode != "tagged":
                 # Если mode не tagged — очищаем tagged_vlans
                 if nb_interface.tagged_vlans:
+                    current_vlan_vids = sorted([v.vid for v in nb_interface.tagged_vlans])
                     updates["tagged_vlans"] = []
+                    actual_changes.append(f"tagged_vlans: {current_vlan_vids} → []")
 
         if intf.lag:
             device_id = getattr(nb_interface.device, 'id', None) if nb_interface.device else None
@@ -345,21 +366,23 @@ class InterfacesSyncMixin:
                 lag_interface = self.client.get_interface_by_name(device_id, intf.lag)
                 if lag_interface:
                     current_lag_id = getattr(nb_interface.lag, 'id', None) if nb_interface.lag else None
+                    current_lag_name = getattr(nb_interface.lag, 'name', None) if nb_interface.lag else None
                     if lag_interface.id != current_lag_id:
                         updates["lag"] = lag_interface.id
+                        actual_changes.append(f"lag: {current_lag_name} → {intf.lag}")
                 else:
                     logger.debug(f"LAG интерфейс {intf.lag} не найден в NetBox")
 
         if not updates and not mac_to_assign:
             logger.debug(f"  → нет изменений для интерфейса {nb_interface.name}")
-            return False
+            return False, []
 
         if self.dry_run:
             if updates:
                 logger.info(f"[DRY-RUN] Обновление интерфейса {nb_interface.name}: {updates}")
             if mac_to_assign:
                 logger.info(f"[DRY-RUN] Назначение MAC {mac_to_assign} на {nb_interface.name}")
-            return True
+            return True, actual_changes
 
         if updates:
             self.client.update_interface(nb_interface.id, **updates)
@@ -369,4 +392,4 @@ class InterfacesSyncMixin:
             self.client.assign_mac_to_interface(nb_interface.id, mac_to_assign)
             logger.info(f"Назначен MAC: {mac_to_assign} на {nb_interface.name}")
 
-        return True
+        return True, actual_changes
