@@ -76,15 +76,22 @@ class InventorySyncMixin:
                 continue
 
             # NetBox ограничивает name до 64 символов
+            was_truncated = False
+            original_name = name
             if len(name) > 64:
-                original_name = name
                 name = name[:61] + "..."
-                logger.info(f"Имя inventory обрезано: '{original_name}' → '{name}'")
+                was_truncated = True
 
             processed_names.add(name)
 
             if not serial:
-                logger.warning(f"Пропущен inventory '{name}' - нет серийного номера")
+                if was_truncated:
+                    logger.warning(
+                        f"Пропущен inventory '{original_name}' - нет серийного номера "
+                        f"(имя было бы обрезано до '{name}')"
+                    )
+                else:
+                    logger.warning(f"Пропущен inventory '{name}' - нет серийного номера")
                 stats["skipped"] += 1
                 continue
 
@@ -121,14 +128,15 @@ class InventorySyncMixin:
 
                 if needs_update:
                     changes = list(updates.keys())
+                    truncate_note = f" [обрезано с '{original_name}']" if was_truncated else ""
                     if self.dry_run:
-                        logger.info(f"[DRY-RUN] Обновление inventory: {name} ({changes})")
+                        logger.info(f"[DRY-RUN] Обновление inventory: {name}{truncate_note} ({changes})")
                         stats["updated"] += 1
                         details["update"].append({"name": name, "changes": changes})
                     else:
                         try:
                             self.client.update_inventory_item(existing.id, **updates)
-                            logger.info(f"Обновлён inventory: {name} ({changes})")
+                            logger.info(f"Обновлён inventory: {name}{truncate_note} ({changes})")
                             stats["updated"] += 1
                             details["update"].append({"name": name, "changes": changes})
                         except NetBoxError as e:
@@ -141,8 +149,10 @@ class InventorySyncMixin:
                     stats["skipped"] += 1
                 continue
 
+            truncate_note = f" [обрезано с '{original_name}']" if was_truncated else ""
+
             if self.dry_run:
-                logger.info(f"[DRY-RUN] Создание inventory: {name} (pid={pid}, serial={serial})")
+                logger.info(f"[DRY-RUN] Создание inventory: {name}{truncate_note} (pid={pid}, serial={serial})")
                 stats["created"] += 1
                 details["create"].append({"name": name})
                 continue
@@ -163,7 +173,7 @@ class InventorySyncMixin:
                     name=name,
                     **kwargs,
                 )
-                logger.info(f"Создан inventory: {name}")
+                logger.info(f"Создан inventory: {name}{truncate_note}")
                 stats["created"] += 1
                 details["create"].append({"name": name})
             except NetBoxValidationError as e:
