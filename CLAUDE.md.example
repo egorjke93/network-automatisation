@@ -1,0 +1,53 @@
+# Network Collector — Контекст для Claude
+
+## Описание
+
+Всегда документируем изменения и актуализируем документацию в папке `docs/`
+
+Утилита для сбора данных с сетевого оборудования (Cisco, Arista, Juniper, QTech) и синхронизации с NetBox.
+
+## Запуск
+
+```bash
+# ВАЖНО: Запускать из родительской папки
+cd /path/to/parent
+source network_collector/myenv/bin/activate
+python -m network_collector --help
+```
+
+## Документация
+
+| Документ | Описание |
+|----------|----------|
+| **[docs/MANUAL.md](docs/MANUAL.md)** | Полное руководство: CLI, Web UI, API, Pipeline |
+| **[docs/WEB_API.md](docs/WEB_API.md)** | REST API документация, endpoints, примеры |
+| **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | Архитектура, слои, поток данных |
+| **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** | Разработка, добавление платформ |
+| **[docs/TESTING.md](docs/TESTING.md)** | Тестирование: структура, запуск |
+
+## Ключевые файлы
+
+| Файл | Описание |
+|------|----------|
+| `cli/` | CLI модуль |
+| `api/` | FastAPI backend |
+| `frontend/` | Vue.js frontend |
+| `core/pipeline/` | Pipeline система |
+| `netbox/sync/` | Синхронизация с NetBox |
+| `fields.yaml` | Поля экспорта/синхронизации |
+| `config.yaml` | Настройки приложения |
+
+## Git: как пушить изменения
+
+**Настрой свои пути и remote в этом файле.**
+
+```bash
+# Пример:
+git add <файлы>
+git commit -m "Описание"
+git push origin main
+```
+
+## Подробности
+
+Смотри документацию в `docs/` для полной информации.
