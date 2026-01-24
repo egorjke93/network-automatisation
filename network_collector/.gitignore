@@ -49,9 +49,12 @@ devices_ips.py
 config.yaml
 config.yml
 
-# Claude Code
+# Claude Code (AI assistant)
 .claude/
+.claude*
 CLAUDE.md
+*claude*.json
+*claude*.jsonl
 
 # OS
 .DS_Store
