@@ -9,7 +9,7 @@
 
 import re
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from ..client import NetBoxClient
 from ...core.context import RunContext, get_current_context
@@ -73,6 +73,8 @@ class SyncBase:
         # Кэш для поиска устройств
         self._device_cache: Dict[str, Any] = {}
         self._mac_cache: Dict[str, Any] = {}
+        # Кэш VLAN: (vid, site) -> VLAN object
+        self._vlan_cache: Dict[Tuple[int, str], Any] = {}
 
     def _log_prefix(self) -> str:
         """Возвращает префикс для логов с run_id."""
@@ -163,6 +165,26 @@ class SyncBase:
             return device
 
         return None
+
+    def _get_vlan_by_vid(self, vid: int, site: Optional[str] = None) -> Optional[Any]:
+        """
+        Находит VLAN по VID с кэшированием.
+
+        Args:
+            vid: Номер VLAN (1-4094)
+            site: Имя сайта (ищем VLAN только в этом сайте)
+
+        Returns:
+            VLAN или None
+        """
+        cache_key = (vid, site or "")
+        if cache_key in self._vlan_cache:
+            return self._vlan_cache[cache_key]
+
+        vlan = self.client.get_vlan_by_vid(vid, site)
+        if vlan:
+            self._vlan_cache[cache_key] = vlan
+        return vlan
 
     # ==================== GET OR CREATE ====================
 

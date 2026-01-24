@@ -421,6 +421,11 @@ sync:
       # Если true - MAC добавляется только на интерфейсы где есть ip_address
       # Если false - MAC добавляется на все интерфейсы
       sync_mac_only_with_ip: true
+      # Синхронизировать VLAN на интерфейсы:
+      # untagged_vlan - для access портов (access_vlan) и trunk (native_vlan)
+      # tagged_vlans - список разрешённых VLAN на trunk (фаза 2)
+      # ВАЖНО: VLAN должен существовать в NetBox, иначе пропускается
+      sync_vlans: false
 
   # --- IP-адреса ---
   ip_addresses:

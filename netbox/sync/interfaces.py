@@ -265,6 +265,43 @@ class InterfacesSyncMixin:
             if intf.mode != current_mode:
                 updates["mode"] = intf.mode
 
+        # Sync untagged_vlan (access_vlan для access, native_vlan для trunk)
+        if sync_cfg.is_field_enabled("untagged_vlan") and sync_cfg.get_option("sync_vlans", False):
+            # Определяем целевой VID
+            target_vid = None
+            if intf.mode == "access" and intf.access_vlan:
+                try:
+                    target_vid = int(intf.access_vlan)
+                except ValueError:
+                    pass
+            elif intf.mode in ("tagged", "tagged-all") and intf.native_vlan:
+                try:
+                    target_vid = int(intf.native_vlan)
+                except ValueError:
+                    pass
+
+            # Получаем текущий untagged_vlan из NetBox
+            current_vlan_id = None
+            if nb_interface.untagged_vlan:
+                current_vlan_id = getattr(nb_interface.untagged_vlan, 'id', None)
+
+            if target_vid:
+                # Ищем VLAN в NetBox (в том же сайте что и устройство)
+                device = nb_interface.device
+                site_name = None
+                if device and hasattr(device, 'site') and device.site:
+                    site_name = getattr(device.site, 'name', None)
+
+                vlan = self._get_vlan_by_vid(target_vid, site_name)
+                if vlan:
+                    if vlan.id != current_vlan_id:
+                        updates["untagged_vlan"] = vlan.id
+                else:
+                    logger.debug(f"VLAN {target_vid} не найден в NetBox (site={site_name})")
+            elif current_vlan_id:
+                # Очищаем если на порте нет VLAN, а в NetBox было
+                updates["untagged_vlan"] = None
+
         if intf.lag:
             device_id = getattr(nb_interface.device, 'id', None) if nb_interface.device else None
             if device_id:

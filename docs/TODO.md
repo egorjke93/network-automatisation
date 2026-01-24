@@ -401,11 +401,9 @@ sync.sync_interfaces(device, interfaces, cleanup=True)
 
 ---
 
-### 8. Синхронизация VLAN на интерфейсы (Средний приоритет)
+### 8. Синхронизация VLAN на интерфейсы ✅ ЧАСТИЧНО
 
-**Проблема:** NetBox поддерживает VLAN на интерфейсах (untagged_vlan, tagged_vlans), но мы не синхронизируем эти поля.
-
-**Текущее состояние:**
+**Фаза 1 (untagged_vlan):** ✅ ВЫПОЛНЕНО
 
 | Компонент | Статус |
 |-----------|--------|
@@ -414,53 +412,41 @@ sync.sync_interfaces(device, interfaces, cleanup=True)
 | Сбор access_vlan | ✅ Есть |
 | Поля в fields.yaml | ✅ Настроены |
 | Sync mode в NetBox | ✅ Работает |
-| **Sync untagged_vlan** | ❌ Не реализовано |
-| **Sync tagged_vlans** | ❌ Не реализовано |
+| **Sync untagged_vlan** | ✅ Реализовано |
+| **Sync tagged_vlans** | ❌ Фаза 2 |
 
-**Что нужно реализовать:**
+**Реализовано:**
+- Опция `sync_vlans: false` в fields.yaml (по умолчанию выключена)
+- Кэш VLAN в SyncBase (`_vlan_cache`, `_get_vlan_by_vid()`)
+- Sync untagged_vlan: access_vlan для access, native_vlan для trunk
+- VLAN ищется только в сайте устройства
+- Если VLAN не найден → пропуск (debug лог)
+- 8 тестов в `tests/test_netbox/test_sync_interfaces_vlan.py`
 
-1. **Сбор списка tagged VLANs:**
-   - Команда: `show interfaces trunk`
-   - Парсинг: "Vlans allowed on trunk: 10,20,30-50,100"
-   - Сохранение в `Interface.tagged_vlans` как список
+**Использование:**
+```yaml
+# fields.yaml
+sync:
+  interfaces:
+    options:
+      sync_vlans: true  # Включить sync untagged_vlan
+```
 
-2. **Поиск VLAN в NetBox:**
-   - Метод `get_vlan_by_vid(vid, site=None)` в NetBox клиенте
-   - Кэширование VID → VLAN ID для производительности
+**Файлы изменены:**
+- `fields.yaml` — опция sync_vlans
+- `netbox/sync/base.py` — кэш VLAN, метод `_get_vlan_by_vid()`
+- `netbox/sync/interfaces.py` — sync untagged_vlan
+- `tests/test_netbox/test_sync_interfaces_vlan.py` — 8 тестов
 
-3. **Синхронизация в `netbox/sync/interfaces.py`:**
-   ```python
-   # Access port
-   if mode == "access" and access_vlan:
-       vlan = client.get_vlan_by_vid(access_vlan, site=device.site)
-       updates["untagged_vlan"] = vlan.id
+---
 
-   # Trunk port
-   if mode in ("tagged", "tagged-all") and native_vlan:
-       vlan = client.get_vlan_by_vid(native_vlan, site=device.site)
-       updates["untagged_vlan"] = vlan.id
+**Фаза 2 (tagged_vlans):** ❌ НЕ РЕАЛИЗОВАНО
 
-   if mode == "tagged" and tagged_vlans:
-       vlan_ids = [client.get_vlan_by_vid(v).id for v in tagged_vlans]
-       updates["tagged_vlans"] = vlan_ids
-   ```
+Для полной поддержки tagged_vlans нужно:
+1. Парсить список VLANs из `trunking_vlans` ("10,20,30-50" → [10,20,30..50])
+2. Синхронизировать список с NetBox
 
-4. **Парсинг диапазонов VLAN:**
-   - "10-20,30,100" → [10,11,12...20,30,100]
-   - Утилита `parse_vlan_range()`
-
-**Сложности:**
-- VLAN должен существовать в NetBox (по VID и site)
-- Для trunk с 1-4094 (tagged-all) — не синхронизировать список
-- Обработка ошибок если VLAN не найден
-
-**Файлы для изменения:**
-- `collectors/interfaces.py` — добавить парсинг `show interfaces trunk`
-- `netbox/client.py` — добавить `get_vlan_by_vid()`
-- `netbox/sync/interfaces.py` — добавить sync untagged_vlan, tagged_vlans
-- `core/models.py` — tagged_vlans как List[int] вместо str
-
-**Оценка:** 6-8 часов
+**Оценка фазы 2:** 3-4 часа
 
 ---
 
@@ -499,7 +485,7 @@ sync.sync_interfaces(device, interfaces, cleanup=True)
 | 4 | ~~Рефакторинг cli.py~~ | ~~4-5ч~~ | ✅ Разбит на модули (cli/*) |
 | 5 | GitHub Actions CI | 2-3ч | Автотесты при push/PR |
 | 6 | Документация | 4-5ч | MANUAL, WEB_API, PIPELINES |
-| 7 | **VLAN sync на интерфейсы** | 6-8ч | untagged_vlan, tagged_vlans → NetBox |
+| 7 | ~~VLAN sync на интерфейсы~~ | ~~6-8ч~~ | ✅ untagged_vlan (tagged_vlans - фаза 2) |
 
 ### 🟢 Низкий приоритет
 
