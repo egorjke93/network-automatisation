@@ -43,6 +43,7 @@ class MockNBInterface:
         enabled: bool = True,
         mode: Optional[str] = None,
         untagged_vlan: Optional[MagicMock] = None,
+        tagged_vlans: Optional[list] = None,
         device: Optional[MagicMock] = None,
     ):
         self.id = id
@@ -63,6 +64,7 @@ class MockNBInterface:
             self.mode = None
 
         self.untagged_vlan = untagged_vlan
+        self.tagged_vlans = tagged_vlans
         self.device = device
 
 
@@ -379,3 +381,207 @@ class TestVlanCache:
         assert vlan10.vid == 10
         assert vlan20.vid == 20
         assert mock_client.get_vlan_by_vid.call_count == 2
+
+
+class TestParseVlanRange:
+    """Тесты парсинга диапазонов VLAN."""
+
+    def test_parse_single_vlan(self):
+        """Одиночный VLAN."""
+        from network_collector.netbox.sync.base import SyncBase
+
+        sync = SyncBase(client=MagicMock(), dry_run=False)
+        result = sync._parse_vlan_range("10")
+        assert result == [10]
+
+    def test_parse_multiple_vlans(self):
+        """Несколько VLAN через запятую."""
+        from network_collector.netbox.sync.base import SyncBase
+
+        sync = SyncBase(client=MagicMock(), dry_run=False)
+        result = sync._parse_vlan_range("10,20,30")
+        assert result == [10, 20, 30]
+
+    def test_parse_vlan_range(self):
+        """Диапазон VLAN."""
+        from network_collector.netbox.sync.base import SyncBase
+
+        sync = SyncBase(client=MagicMock(), dry_run=False)
+        result = sync._parse_vlan_range("10-15")
+        assert result == [10, 11, 12, 13, 14, 15]
+
+    def test_parse_mixed_vlans_and_ranges(self):
+        """Комбинация VLAN и диапазонов."""
+        from network_collector.netbox.sync.base import SyncBase
+
+        sync = SyncBase(client=MagicMock(), dry_run=False)
+        result = sync._parse_vlan_range("10,20-25,30")
+        assert result == [10, 20, 21, 22, 23, 24, 25, 30]
+
+    def test_parse_all_returns_empty(self):
+        """'all' возвращает пустой список."""
+        from network_collector.netbox.sync.base import SyncBase
+
+        sync = SyncBase(client=MagicMock(), dry_run=False)
+        assert sync._parse_vlan_range("all") == []
+        assert sync._parse_vlan_range("ALL") == []
+
+    def test_parse_full_range_returns_empty(self):
+        """Полный диапазон (1-4094) возвращает пустой список."""
+        from network_collector.netbox.sync.base import SyncBase
+
+        sync = SyncBase(client=MagicMock(), dry_run=False)
+        assert sync._parse_vlan_range("1-4094") == []
+        assert sync._parse_vlan_range("1-4093") == []
+
+    def test_parse_empty_string(self):
+        """Пустая строка возвращает пустой список."""
+        from network_collector.netbox.sync.base import SyncBase
+
+        sync = SyncBase(client=MagicMock(), dry_run=False)
+        assert sync._parse_vlan_range("") == []
+        assert sync._parse_vlan_range(None) == []
+
+    def test_parse_removes_duplicates(self):
+        """Удаляет дубликаты."""
+        from network_collector.netbox.sync.base import SyncBase
+
+        sync = SyncBase(client=MagicMock(), dry_run=False)
+        result = sync._parse_vlan_range("10,10,20,10-12")
+        assert result == [10, 11, 12, 20]
+
+
+class TestTaggedVlansSync:
+    """Тесты синхронизации tagged_vlans."""
+
+    @pytest.fixture
+    def mock_sync_cfg_vlans_enabled(self):
+        """Config с включенным sync_vlans."""
+        cfg = MagicMock()
+        cfg.is_field_enabled.return_value = True
+        cfg.get_option.side_effect = lambda key, default=None: {
+            "sync_vlans": True,
+            "auto_detect_type": False,
+            "sync_mac_only_with_ip": False,
+            "enabled_mode": "admin",
+        }.get(key, default)
+        return cfg
+
+    def test_trunk_port_syncs_tagged_vlans(self, mock_sync_cfg_vlans_enabled):
+        """Trunk port с tagged_vlans синхронизирует список VLAN."""
+        from network_collector.netbox.sync.interfaces import InterfacesSyncMixin
+
+        sync = MagicMock(spec=InterfacesSyncMixin)
+        sync.dry_run = False
+        sync.client = MagicMock()
+
+        # VLANs 10, 20, 30 существуют в NetBox
+        def get_vlan(vid, site):
+            return MockVLAN(id=vid * 10, vid=vid)
+
+        sync._get_vlan_by_vid = MagicMock(side_effect=get_vlan)
+        sync._parse_vlan_range = MagicMock(return_value=[10, 20, 30])
+
+        # Trunk интерфейс с tagged_vlans
+        intf = MockInterface(
+            name="Gi0/24",
+            mode="tagged",
+            native_vlan="1",
+            tagged_vlans="10,20,30",
+        )
+
+        mock_device = MagicMock()
+        mock_device.site = MagicMock()
+        mock_device.site.name = "Office"
+
+        nb_interface = MockNBInterface(
+            id=2,
+            name="Gi0/24",
+            mode="tagged",
+            device=mock_device,
+        )
+        nb_interface.tagged_vlans = None  # Нет tagged_vlans
+
+        with patch("network_collector.netbox.sync.interfaces.get_sync_config", return_value=mock_sync_cfg_vlans_enabled):
+            result = InterfacesSyncMixin._update_interface(sync, nb_interface, intf)
+
+        sync.client.update_interface.assert_called_once()
+        call_kwargs = sync.client.update_interface.call_args[1]
+        assert "tagged_vlans" in call_kwargs
+        assert call_kwargs["tagged_vlans"] == [100, 200, 300]  # VID * 10
+
+    def test_access_port_clears_tagged_vlans(self, mock_sync_cfg_vlans_enabled):
+        """Access port очищает tagged_vlans если они были."""
+        from network_collector.netbox.sync.interfaces import InterfacesSyncMixin
+
+        sync = MagicMock(spec=InterfacesSyncMixin)
+        sync.dry_run = False
+        sync.client = MagicMock()
+        sync._get_vlan_by_vid = MagicMock(return_value=MockVLAN(id=100, vid=10))
+
+        # Access интерфейс
+        intf = MockInterface(
+            name="Gi0/1",
+            mode="access",
+            access_vlan="10",
+        )
+
+        mock_device = MagicMock()
+        mock_device.site = MagicMock()
+        mock_device.site.name = "Office"
+
+        # В NetBox есть tagged_vlans (ошибка)
+        existing_tagged = [MagicMock(id=200), MagicMock(id=300)]
+
+        nb_interface = MockNBInterface(
+            id=1,
+            name="Gi0/1",
+            mode="access",
+            device=mock_device,
+        )
+        nb_interface.tagged_vlans = existing_tagged
+
+        with patch("network_collector.netbox.sync.interfaces.get_sync_config", return_value=mock_sync_cfg_vlans_enabled):
+            result = InterfacesSyncMixin._update_interface(sync, nb_interface, intf)
+
+        sync.client.update_interface.assert_called_once()
+        call_kwargs = sync.client.update_interface.call_args[1]
+        assert "tagged_vlans" in call_kwargs
+        assert call_kwargs["tagged_vlans"] == []  # Очищено
+
+    def test_tagged_all_does_not_sync_list(self, mock_sync_cfg_vlans_enabled):
+        """tagged-all не синхронизирует список VLAN (пустой)."""
+        from network_collector.netbox.sync.interfaces import InterfacesSyncMixin
+
+        sync = MagicMock(spec=InterfacesSyncMixin)
+        sync.dry_run = False
+        sync.client = MagicMock()
+        sync._get_vlan_by_vid = MagicMock(return_value=MockVLAN(id=10, vid=1))
+
+        # tagged-all интерфейс
+        intf = MockInterface(
+            name="Gi0/24",
+            mode="tagged-all",
+            native_vlan="1",
+            tagged_vlans="",  # Пусто для tagged-all
+        )
+
+        mock_device = MagicMock()
+        mock_device.site = MagicMock()
+        mock_device.site.name = "Office"
+
+        nb_interface = MockNBInterface(
+            id=2,
+            name="Gi0/24",
+            mode="tagged-all",
+            device=mock_device,
+        )
+        nb_interface.tagged_vlans = None
+
+        with patch("network_collector.netbox.sync.interfaces.get_sync_config", return_value=mock_sync_cfg_vlans_enabled):
+            result = InterfacesSyncMixin._update_interface(sync, nb_interface, intf)
+
+        # tagged_vlans не должен быть в updates
+        if sync.client.update_interface.called:
+            call_kwargs = sync.client.update_interface.call_args[1]
+            assert "tagged_vlans" not in call_kwargs

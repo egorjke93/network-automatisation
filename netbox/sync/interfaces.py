@@ -302,6 +302,43 @@ class InterfacesSyncMixin:
                 # Очищаем если на порте нет VLAN, а в NetBox было
                 updates["untagged_vlan"] = None
 
+        # Sync tagged_vlans (список VLAN на trunk портах)
+        if sync_cfg.is_field_enabled("tagged_vlans") and sync_cfg.get_option("sync_vlans", False):
+            # Только для tagged портов (не tagged-all)
+            if intf.mode == "tagged" and intf.tagged_vlans:
+                # Парсим строку "10,20,30-50" в список VID
+                target_vids = self._parse_vlan_range(intf.tagged_vlans)
+
+                if target_vids:
+                    # Получаем сайт устройства
+                    device = nb_interface.device
+                    site_name = None
+                    if device and hasattr(device, 'site') and device.site:
+                        site_name = getattr(device.site, 'name', None)
+
+                    # Преобразуем VID в ID VLAN из NetBox
+                    target_vlan_ids = []
+                    for vid in target_vids:
+                        vlan = self._get_vlan_by_vid(vid, site_name)
+                        if vlan:
+                            target_vlan_ids.append(vlan.id)
+                        else:
+                            logger.debug(f"VLAN {vid} не найден в NetBox (site={site_name})")
+
+                    # Получаем текущие tagged_vlans из NetBox
+                    current_vlan_ids = []
+                    if nb_interface.tagged_vlans:
+                        current_vlan_ids = sorted([v.id for v in nb_interface.tagged_vlans])
+
+                    # Сравниваем списки
+                    if sorted(target_vlan_ids) != current_vlan_ids:
+                        updates["tagged_vlans"] = target_vlan_ids
+
+            elif intf.mode != "tagged":
+                # Если mode не tagged — очищаем tagged_vlans
+                if nb_interface.tagged_vlans:
+                    updates["tagged_vlans"] = []
+
         if intf.lag:
             device_id = getattr(nb_interface.device, 'id', None) if nb_interface.device else None
             if device_id:

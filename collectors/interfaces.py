@@ -513,6 +513,8 @@ class InterfaceCollector(BaseCollector):
                     "mode": netbox_mode,
                     "native_vlan": str(native_vlan) if native_vlan else "",
                     "access_vlan": str(access_vlan) if access_vlan else "",
+                    # Сохраняем список VLAN для tagged портов (для sync tagged_vlans)
+                    "tagged_vlans": trunking_vlans if netbox_mode == "tagged" else "",
                 }
 
                 # Добавляем альтернативные имена

@@ -401,27 +401,29 @@ sync.sync_interfaces(device, interfaces, cleanup=True)
 
 ---
 
-### 8. Синхронизация VLAN на интерфейсы ✅ ЧАСТИЧНО
-
-**Фаза 1 (untagged_vlan):** ✅ ВЫПОЛНЕНО
+### 8. Синхронизация VLAN на интерфейсы ✅ ВЫПОЛНЕНО
 
 | Компонент | Статус |
 |-----------|--------|
 | Сбор mode (access/trunk) | ✅ Есть |
 | Сбор native_vlan | ✅ Есть |
 | Сбор access_vlan | ✅ Есть |
-| Поля в fields.yaml | ✅ Настроены |
+| Сбор tagged_vlans | ✅ Добавлено |
 | Sync mode в NetBox | ✅ Работает |
 | **Sync untagged_vlan** | ✅ Реализовано |
-| **Sync tagged_vlans** | ❌ Фаза 2 |
+| **Sync tagged_vlans** | ✅ Реализовано |
 
 **Реализовано:**
 - Опция `sync_vlans: false` в fields.yaml (по умолчанию выключена)
 - Кэш VLAN в SyncBase (`_vlan_cache`, `_get_vlan_by_vid()`)
+- Парсинг диапазонов VLAN: "10,20,30-50" → [10,20,30..50] (`_parse_vlan_range()`)
 - Sync untagged_vlan: access_vlan для access, native_vlan для trunk
+- Sync tagged_vlans: список VLAN для tagged портов
 - VLAN ищется только в сайте устройства
 - Если VLAN не найден → пропуск (debug лог)
-- 8 тестов в `tests/test_netbox/test_sync_interfaces_vlan.py`
+- Access port очищает tagged_vlans
+- tagged-all не синхронизирует список (все VLAN разрешены)
+- 19 тестов в `tests/test_netbox/test_sync_interfaces_vlan.py`
 
 **Использование:**
 ```yaml
@@ -429,24 +431,16 @@ sync.sync_interfaces(device, interfaces, cleanup=True)
 sync:
   interfaces:
     options:
-      sync_vlans: true  # Включить sync untagged_vlan
+      sync_vlans: true  # Включить sync VLAN на интерфейсы
 ```
 
 **Файлы изменены:**
 - `fields.yaml` — опция sync_vlans
-- `netbox/sync/base.py` — кэш VLAN, метод `_get_vlan_by_vid()`
-- `netbox/sync/interfaces.py` — sync untagged_vlan
-- `tests/test_netbox/test_sync_interfaces_vlan.py` — 8 тестов
-
----
-
-**Фаза 2 (tagged_vlans):** ❌ НЕ РЕАЛИЗОВАНО
-
-Для полной поддержки tagged_vlans нужно:
-1. Парсить список VLANs из `trunking_vlans` ("10,20,30-50" → [10,20,30..50])
-2. Синхронизировать список с NetBox
-
-**Оценка фазы 2:** 3-4 часа
+- `netbox/sync/base.py` — кэш VLAN, `_get_vlan_by_vid()`, `_parse_vlan_range()`
+- `netbox/sync/interfaces.py` — sync untagged_vlan и tagged_vlans
+- `collectors/interfaces.py` — сохранение tagged_vlans в switchport данных
+- `core/domain/interface.py` — enrich с tagged_vlans
+- `tests/test_netbox/test_sync_interfaces_vlan.py` — 19 тестов
 
 ---
 
@@ -485,7 +479,7 @@ sync:
 | 4 | ~~Рефакторинг cli.py~~ | ~~4-5ч~~ | ✅ Разбит на модули (cli/*) |
 | 5 | GitHub Actions CI | 2-3ч | Автотесты при push/PR |
 | 6 | Документация | 4-5ч | MANUAL, WEB_API, PIPELINES |
-| 7 | ~~VLAN sync на интерфейсы~~ | ~~6-8ч~~ | ✅ untagged_vlan (tagged_vlans - фаза 2) |
+| 7 | ~~VLAN sync на интерфейсы~~ | ~~6-8ч~~ | ✅ untagged_vlan + tagged_vlans |
 
 ### 🟢 Низкий приоритет
 

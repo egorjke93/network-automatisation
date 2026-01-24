@@ -310,6 +310,7 @@ class InterfaceNormalizer:
                 iface["mode"] = sw_data.get("mode", "")
                 iface["native_vlan"] = sw_data.get("native_vlan", "")
                 iface["access_vlan"] = sw_data.get("access_vlan", "")
+                iface["tagged_vlans"] = sw_data.get("tagged_vlans", "")
             elif iface_lower.startswith(("po", "port-channel")):
                 # Для LAG берём mode из members
                 for lag_name, lag_mode in lag_modes.items():
