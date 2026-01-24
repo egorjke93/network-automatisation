@@ -1,0 +1,478 @@
+# =============================================================================
+# КОНФИГУРАЦИЯ ПОЛЕЙ NETWORK COLLECTOR
+# =============================================================================
+# Этот файл определяет какие поля будут экспортироваться и как называться.
+#
+# Структура для каждого типа данных:
+#   source_field:              # Исходное имя поля из коллектора
+#     enabled: true/false      # Включить в экспорт
+#     name: "Display Name"     # Имя для отображения в Excel/CSV
+#     order: 1                 # Порядок колонки (меньше = левее)
+#
+# Поля с enabled: false не будут экспортироваться.
+# Порядок определяется полем order (по возрастанию).
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# LLDP/CDP соседи (python -m network_collector lldp)
+# -----------------------------------------------------------------------------
+# Исходные поля из NTC Templates и коллектора:
+#   NEIGHBOR_NAME, LOCAL_INTERFACE, NEIGHBOR_INTERFACE, MGMT_ADDRESS,
+#   PLATFORM, CAPABILITIES, hostname, device_ip, remote_hostname,
+#   local_interface, remote_port, remote_ip, remote_platform, neighbor_type
+# -----------------------------------------------------------------------------
+lldp:
+  # Локальное устройство
+  hostname:
+    enabled: true
+    name: "Device"
+    order: 1
+  device_ip:
+    enabled: true
+    name: "Device IP"
+    order: 2
+  local_interface:
+    enabled: true
+    name: "Local Port"
+    order: 3
+
+  # Удалённый сосед
+  remote_hostname:
+    enabled: true
+    name: "Neighbor"
+    order: 4
+  remote_port:
+    enabled: true
+    name: "Neighbor Port"
+    order: 5
+  remote_ip:
+    enabled: true
+    name: "Neighbor IP"
+    order: 6
+  remote_platform:
+    enabled: true
+    name: "Platform"
+    order: 7
+
+  # Протокол
+  protocol:
+    enabled: true
+    name: "Protocol"
+    order: 8
+
+  # Дополнительные поля
+  remote_mac:
+    enabled: true
+    name: "Neighbor MAC"
+    order: 9
+  capabilities:
+    enabled: false
+    name: "Capabilities"
+    order: 10
+
+  # Служебные поля (отключены по умолчанию)
+  neighbor_type:
+    enabled: false
+    name: "ID Type"
+    order: 99
+
+  # Дублирующие поля (отключены)
+  neighbor_name:
+    enabled: false
+    name: "Neighbor Name"
+    order: 99
+
+# -----------------------------------------------------------------------------
+# MAC-адреса (python -m network_collector mac)
+# -----------------------------------------------------------------------------
+# Исходные поля из коллектора:
+#   hostname, device_ip, interface, mac, vlan, type, status, description
+# -----------------------------------------------------------------------------
+mac:
+  hostname:
+    enabled: true
+    name: "Device"
+    order: 1
+  device_ip:
+    enabled: true
+    name: "Device IP"
+    order: 2
+  interface:
+    enabled: true
+    name: "Port"
+    order: 3
+  mac:
+    enabled: true
+    name: "MAC Address"
+    order: 4
+  vlan:
+    enabled: true
+    name: "VLAN"
+    order: 5
+  type:
+    enabled: true
+    name: "Type"
+    order: 6
+  status:
+    enabled: true
+    name: "Status"
+    order: 7
+  description:
+    enabled: true
+    name: "Description"
+    order: 8
+
+# -----------------------------------------------------------------------------
+# Устройства (python -m network_collector devices)
+# -----------------------------------------------------------------------------
+# Исходные поля из коллектора:
+#   hostname, ip_address, name, model, serial, version, uptime, platform,
+#   status, manufacturer, site, role, tenant
+# -----------------------------------------------------------------------------
+devices:
+  hostname:
+    enabled: true
+    name: "Hostname"
+    order: 1
+  ip_address:
+    enabled: true
+    name: "IP Address"
+    order: 2
+  model:
+    enabled: true
+    name: "Model"
+    order: 3
+  serial:
+    enabled: true
+    name: "Serial"
+    order: 4
+  version:
+    enabled: true
+    name: "Version"
+    order: 5
+  uptime:
+    enabled: true
+    name: "Uptime"
+    order: 6
+
+  # Дополнительные парсируемые поля
+  manufacturer:
+    enabled: true
+    name: "Manufacturer"
+    order: 11
+  platform:
+    enabled: true
+    name: "Platform"
+    order: 12
+
+  # Поля для CSV-экспорта → импорта в NetBox (не парсятся, заполняются default)
+  name:
+    enabled: false
+    name: "Name"
+    order: 20
+    default: ""  # Будет hostname если пусто
+  status:
+    enabled: false
+    name: "Status"
+    order: 21
+    default: "active"
+  site:
+    enabled: false
+    name: "Site"
+    order: 22
+    default: "SU"
+  role:
+    enabled: false
+    name: "Role"
+    order: 23
+    default: "Switch"
+  tenant:
+    enabled: false
+    name: "Tenant"
+    order: 24
+    default: "Отдел ОИТ"
+
+# -----------------------------------------------------------------------------
+# Интерфейсы (python -m network_collector interfaces)
+# -----------------------------------------------------------------------------
+# Исходные поля из NTC Templates show interfaces:
+#   interface, link_status, protocol_status, description, ip_address, prefix_length,
+#   mac_address, mtu, speed, duplex, hardware_type, media_type, bandwidth,
+#   input_rate, output_rate, input_errors, output_errors, crc, и др.
+# -----------------------------------------------------------------------------
+interfaces:
+  hostname:
+    enabled: true
+    name: "Device"
+    order: 1
+  device_ip:
+    enabled: false
+    name: "Device IP"
+    order: 2
+  interface:
+    enabled: true
+    name: "Interface"
+    order: 3
+  status:
+    enabled: true
+    name: "Status"
+    order: 4
+  protocol:
+    enabled: true
+    name: "Protocol"
+    order: 5
+  description:
+    enabled: true
+    name: "Description"
+    order: 6
+  ip_address:
+    enabled: true
+    name: "IP Address"
+    order: 7
+  prefix_length:
+    enabled: false
+    name: "Prefix"
+    order: 8
+  mac:
+    enabled: true
+    name: "MAC"
+    order: 9
+  mtu:
+    enabled: true
+    name: "MTU"
+    order: 10
+  speed:
+    enabled: true
+    name: "Speed"
+    order: 11
+  duplex:
+    enabled: true
+    name: "Duplex"
+    order: 12
+  bandwidth:
+    enabled: false  # Нет в модели Interface, используйте speed
+    name: "Bandwidth"
+    order: 13
+  hardware_type:
+    enabled: true
+    name: "Hardware Type"
+    order: 14
+  media_type:
+    enabled: true
+    name: "Media Type"
+    order: 15
+
+  # Статистика ошибок (отключены по умолчанию)
+  input_errors:
+    enabled: false
+    name: "Input Errors"
+    order: 20
+  output_errors:
+    enabled: false
+    name: "Output Errors"
+    order: 21
+  crc:
+    enabled: false
+    name: "CRC Errors"
+    order: 22
+  input_rate:
+    enabled: false
+    name: "Input Rate"
+    order: 23
+  output_rate:
+    enabled: false
+    name: "Output Rate"
+    order: 24
+
+# -----------------------------------------------------------------------------
+# Inventory (python -m network_collector inventory)
+# -----------------------------------------------------------------------------
+# Исходные поля из коллектора:
+#   hostname, device_ip, name, pid, vid, serial, description, manufacturer
+# -----------------------------------------------------------------------------
+inventory:
+  hostname:
+    enabled: true
+    name: "Device"
+    order: 1
+  device_ip:
+    enabled: false
+    name: "Device IP"
+    order: 2
+  name:
+    enabled: true
+    name: "Component"
+    order: 3
+  pid:
+    enabled: true
+    name: "Part ID"
+    order: 4
+  vid:
+    enabled: true
+    name: "Version"
+    order: 5
+  serial:
+    enabled: true
+    name: "Serial"
+    order: 6
+  description:
+    enabled: true
+    name: "Description"
+    order: 7
+  manufacturer:
+    enabled: true
+    name: "Manufacturer"
+    order: 8
+
+# =============================================================================
+# НАСТРОЙКИ СИНХРОНИЗАЦИИ С NETBOX
+# =============================================================================
+# Эти настройки определяют какие поля синхронизировать с NetBox
+# и значения по умолчанию.
+# =============================================================================
+
+sync:
+  # --- Устройства ---
+  devices:
+    fields:
+      name:
+        enabled: true
+        source: hostname
+      device_type:
+        enabled: true
+        source: model
+      serial:
+        enabled: true
+        source: serial
+      platform:
+        enabled: true
+        source: platform
+      manufacturer:
+        enabled: true
+        source: manufacturer  # из DeviceInfo.manufacturer (парсится из vendor)
+      asset_tag:
+        enabled: true
+        source: asset_tag
+      comments:
+        enabled: true
+        source: comments
+    defaults:
+      site: "SU"
+      role: "Switch"
+      status: "active"
+      manufacturer: "Cisco"
+      tenant: "Отдел ОИТ"  # Укажите имя tenant если нужно, например: "Сотрудники ОИТ"
+
+  # --- Интерфейсы ---
+  interfaces:
+    fields:
+      enabled:
+        enabled: true
+        source: status
+      description:
+        enabled: true
+        source: description
+      mac_address:
+        enabled: true
+        source: mac
+      mtu:
+        enabled: true
+        source: mtu
+      speed:
+        enabled: true
+        source: speed
+      duplex:
+        enabled: true
+        source: duplex
+      mode:
+        enabled: true
+        source: mode       # access, tagged, tagged-all
+      untagged_vlan:
+        enabled: true
+        source: native_vlan
+      tagged_vlans:
+        enabled: true
+        source: tagged_vlans
+      hardware_type:
+        enabled: true
+        source: hardware_type
+      media_type:
+        enabled: true
+        source: media_type
+    defaults:
+      type: "1000base-t"
+    options:
+      create_missing: true
+      update_existing: true
+      auto_detect_type: true  # Определять тип по hardware_type/media_type/speed
+      # Режим определения enabled для интерфейсов:
+      # "admin" - по административному статусу:
+      #           up/down = enabled (порт включён, down = нет линка)
+      #           disabled/error = disabled (порт выключен администратором)
+      # "link"  - по состоянию линка:
+      #           up = enabled (есть соединение)
+      #           down/disabled/error = disabled (нет соединения)
+      enabled_mode: "admin"
+      # Исключить интерфейсы из синхронизации (regex паттерны)
+      exclude_interfaces:
+        #- "^Vlan1$"          # Vlan1 (дефолтный VLAN)
+        - "^Null\\d+"       # Null интерфейсы
+      # MAC-адрес только на интерфейсы с IP (L3)
+      # Если true - MAC добавляется только на интерфейсы где есть ip_address
+      # Если false - MAC добавляется на все интерфейсы
+      sync_mac_only_with_ip: true
+
+  # --- IP-адреса ---
+  ip_addresses:
+    fields:
+      address:
+        enabled: true
+        source: ip_address
+    defaults:
+      status: "active"
+      prefix_length: 24
+    options:
+      exclude_networks:
+        - "127.0.0.0/8"
+        - "169.254.0.0/16"
+
+  # --- VLAN ---
+  vlans:
+    fields:
+      vid:
+        enabled: true
+        source: vlan_id
+      name:
+        enabled: true
+        source: description
+    defaults:
+      status: "active"
+      name_format: "VLAN {vid}"
+    options:
+      assign_to_site: true
+
+  # --- Кабели ---
+  cables:
+    defaults:
+      status: "connected"
+    options:
+      skip_unknown_neighbors: true
+
+  # --- Inventory ---
+  inventory:
+    fields:
+      name:
+        enabled: true
+        source: name
+      part_id:
+        enabled: true
+        source: pid
+      serial:
+        enabled: true
+        source: serial
+      description:
+        enabled: true
+        source: description
+      manufacturer:
+        enabled: true
+        source: manufacturer
