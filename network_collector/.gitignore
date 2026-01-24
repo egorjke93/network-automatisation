@@ -44,8 +44,14 @@ matched_data.xlsx
 # Logs
 *.log
 
-# Credentials - keep local only
+# Credentials and local config - keep local only
 devices_ips.py
+config.yaml
+config.yml
+
+# Claude Code
+.claude/
+CLAUDE.md
 
 # OS
 .DS_Store
