@@ -68,63 +68,8 @@ class CollectorService:
                         None или [] = использовать все устройства из device management
                         [ip1, ip2] = использовать указанные устройства
         """
-        from .device_service import get_device_service
-
-        # Явно передан непустой список IP адресов - ищем их в device_service
-        if device_list:
-            service = get_device_service()
-            devices = []
-            for ip in device_list:
-                device_data = service.get_device_by_host(ip)
-                if device_data:
-                    # Используем полные данные устройства
-                    devices.append(Device(
-                        host=device_data.get("host", ip),
-                        platform=device_data.get("device_type", "cisco_ios"),
-                    ))
-                else:
-                    # Fallback: устройство не найдено в базе
-                    # Используем cisco_ios по умолчанию
-                    logger.warning(f"Устройство {ip} не найдено в device management, используем platform=cisco_ios")
-                    devices.append(Device(host=ip, platform="cisco_ios"))
-            return devices
-
-        # Из device_service (JSON хранилище) - полные данные
-        service = get_device_service()
-        all_devices = service.get_all_devices()
-        enabled_devices = service.get_enabled_devices()
-
-        logger.info(f"Device Management: всего {len(all_devices)}, enabled {len(enabled_devices)}")
-
-        if not all_devices:
-            logger.warning("В Device Management нет устройств. Добавьте устройства или импортируйте из NetBox.")
-        elif not enabled_devices:
-            logger.warning(
-                f"В Device Management {len(all_devices)} устройств, но все disabled. "
-                "Включите устройства в Device Management (enabled=true)."
-            )
-
-        if enabled_devices:
-            return [
-                Device(
-                    host=d.get("host"),
-                    platform=d.get("device_type", "cisco_ios"),
-                )
-                for d in enabled_devices
-            ]
-
-        # Fallback: из devices_ips.py для обратной совместимости
-        try:
-            from network_collector.devices_ips import devices_list
-            return [
-                Device(
-                    host=d.get("host", d) if isinstance(d, dict) else d,
-                    platform=d.get("device_type", "cisco_ios") if isinstance(d, dict) else "cisco_ios",
-                )
-                for d in devices_list
-            ]
-        except ImportError:
-            return []
+        from .common import get_devices_for_operation
+        return get_devices_for_operation(device_list)
 
     async def _run_in_executor(self, func, *args):
         """Запускает синхронную функцию в executor."""

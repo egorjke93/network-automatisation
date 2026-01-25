@@ -926,6 +926,20 @@ curl -X POST http://localhost:8080/api/sync/netbox \
 - `dry_run`: режим предпросмотра (по умолчанию `true`)
 - `site`: фильтр по сайту NetBox
 
+**VLAN на интерфейсы:**
+
+Опция `sync_vlans` в fields.yaml включает синхронизацию VLAN на интерфейсы:
+- `untagged_vlan`: access_vlan для access, native_vlan для trunk
+- `tagged_vlans`: список разрешённых VLAN на trunk порты
+
+```yaml
+# fields.yaml
+sync:
+  interfaces:
+    options:
+      sync_vlans: true  # включить синхронизацию VLAN
+```
+
 ---
 
 ### Match — Сопоставление MAC

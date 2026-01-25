@@ -19,7 +19,7 @@
 
 | Метрика | Значение |
 |---------|----------|
-| **Всего тестов** | ~1340 |
+| **Всего тестов** | 1434 |
 | **Framework** | pytest |
 | **Coverage** | ~85% |
 
@@ -35,7 +35,7 @@
 | `test_exporters/` | Excel, CSV, JSON экспорт | ~50 |
 | `test_contracts/` | Контракты fields.yaml ↔ models | ~50 |
 | `test_fixes/` | Регрессионные тесты для багфиксов | ~100 |
-| `test_e2e/` | End-to-end тесты pipeline | ~40 |
+| `test_e2e/` | End-to-end тесты pipeline и collectors | ~100 |
 
 ---
 
@@ -187,6 +187,7 @@ tests/
 ├── test_netbox/            # NetBox синхронизация
 │   ├── test_sync_integration.py
 │   ├── test_sync_base.py
+│   ├── test_sync_interfaces_vlan.py  # Interface VLAN sync (19 тестов)
 │   ├── test_inventory_sync.py
 │   └── test_vlans_sync.py
 │
@@ -202,8 +203,14 @@ tests/
 │   ├── test_interface_enabled.py
 │   └── test_platform_mapping.py
 │
-├── test_e2e/               # End-to-end
-│   └── test_sync_pipeline.py
+├── test_e2e/               # End-to-end тесты
+│   ├── conftest.py         # E2E fixtures (mock_device)
+│   ├── test_interface_collector_e2e.py  # Interface collector E2E
+│   ├── test_mac_collector_e2e.py        # MAC collector E2E
+│   ├── test_lldp_collector_e2e.py       # LLDP collector E2E
+│   ├── test_inventory_collector_e2e.py  # Inventory collector E2E
+│   ├── test_pipeline.py    # Pipeline E2E
+│   └── test_sync_pipeline.py  # Sync pipeline E2E
 │
 └── test_cli/               # CLI тесты
     ├── test_pipeline.py

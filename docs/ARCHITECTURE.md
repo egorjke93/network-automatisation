@@ -186,14 +186,17 @@ netbox/sync/
 - `NetBoxClient` — обёртка над pynetbox (`netbox/client.py`)
 - `NetBoxSync` — объединяет все mixins (`netbox/sync/main.py`)
 - `SyncBase` — базовый класс с общими методами (`netbox/sync/base.py`)
+  - `_vlan_cache` — кэш VLAN для производительности
+  - `_get_vlan_by_vid()` — поиск VLAN по VID с кэшированием
+  - `_parse_vlan_range()` — парсинг диапазонов "10,20,30-50" → [10,20,30..50]
 - `DiffCalculator` — предпросмотр изменений (`netbox/diff.py`)
 
 **Mixins:**
-- `InterfacesSyncMixin` — sync_interfaces()
+- `InterfacesSyncMixin` — sync_interfaces() + sync_vlans (untagged_vlan, tagged_vlans)
 - `CablesSyncMixin` — sync_cables_from_lldp()
 - `IPAddressesSyncMixin` — sync_ip_addresses()
 - `DevicesSyncMixin` — create_device(), sync_devices_from_inventory()
-- `VLANsSyncMixin` — sync_vlans_from_interfaces()
+- `VLANsSyncMixin` — sync_vlans_from_interfaces() (создание VLAN из SVI)
 - `InventorySyncMixin` — sync_inventory()
 
 ### 2.5 Export Layer (exporters/*.py)
@@ -635,6 +638,7 @@ Web API **не имеет базы данных**. Все данные:
 | `HistoryService` | `api/services/history_service.py` | Журнал операций (JSON файл) |
 | `TaskManager` | `api/services/task_manager.py` | Отслеживание async задач, progress |
 | `DeviceService` | `api/services/device_service.py` | CRUD устройств (data/devices.json) |
+| `common` | `api/services/common.py` | Общие утилиты (get_devices_for_operation) |
 
 **HistoryService:**
 - Хранит историю в `data/history.json`
@@ -1038,7 +1042,7 @@ Field Registry Statistics:
 | `core/connection.py` | SSH подключения через Scrapli |
 | `core/device.py` | Модель Device |
 | `core/models.py` | Data Models (Interface, MACEntry, ...) |
-| `core/constants.py` | Маппинги платформ, типов интерфейсов |
+| `core/constants/` | Модульные константы (interfaces, mac, platforms, netbox, etc.) |
 | `core/context.py` | RunContext (run_id, dry_run, timing) |
 | `core/exceptions.py` | Типизированные исключения |
 | `core/logging.py` | Structured Logs (JSON + ротация) |
@@ -1070,7 +1074,14 @@ Field Registry Statistics:
 
 | Файл | Описание |
 |------|----------|
-| `netbox/client.py` | NetBoxClient (pynetbox wrapper) |
+| `netbox/client/__init__.py` | Re-export NetBoxClient |
+| `netbox/client/base.py` | NetBoxClientBase — инициализация |
+| `netbox/client/main.py` | NetBoxClient — объединяет mixins |
+| `netbox/client/devices.py` | DevicesMixin (get_devices, get_device_by_*) |
+| `netbox/client/interfaces.py` | InterfacesMixin (get/create/update_interface) |
+| `netbox/client/vlans.py` | VLANsMixin (get_vlans, create_vlan) |
+| `netbox/client/inventory.py` | InventoryMixin (inventory items CRUD) |
+| `netbox/client/dcim.py` | DCIMMixin (device types, manufacturers, etc.) |
 | `netbox/sync/__init__.py` | Re-export NetBoxSync |
 | `netbox/sync/base.py` | SyncBase — общие методы синхронизации |
 | `netbox/sync/main.py` | NetBoxSync — объединяет все mixins |
@@ -1093,6 +1104,7 @@ Field Registry Statistics:
 | `api/routes/tasks.py` | Task tracking (/api/tasks) |
 | `api/schemas/*.py` | Pydantic схемы запросов/ответов |
 | `api/services/*.py` | Сервисы |
+| `api/services/common.py` | Общие утилиты (get_devices_for_operation) |
 | `api/services/history_service.py` | HistoryService — журнал операций |
 | `api/services/sync_service.py` | SyncService — синхронизация с NetBox |
 | `api/services/task_manager.py` | TaskManager — async tasks |

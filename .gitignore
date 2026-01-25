@@ -53,6 +53,7 @@ config.yml
 .claude/
 .claude*
 CLAUDE.md
+CLAUDE.md*
 *claude*.json
 *claude*.jsonl
 
@@ -67,3 +68,17 @@ Thumbs.db
 # Test folders
 проверка match mac/
 .coverage
+htmlcov/
+.pytest_cache/
+
+# Node.js
+node_modules/
+frontend/node_modules/
+
+# Local notes (не для git)
+docs/кубер.txt
+ошибки.docx
+добавить в work
+
+# Zone.Identifier (Windows WSL artifacts)
+*:Zone.Identifier

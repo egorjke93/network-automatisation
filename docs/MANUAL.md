@@ -196,6 +196,7 @@ sync:
         - "^Vlan1$"
         - "^Null\\d+"
       sync_mac_only_with_ip: true  # MAC только на L3 интерфейсы
+      sync_vlans: false         # Синхронизировать VLAN на интерфейсы
 ```
 
 ---
@@ -684,7 +685,6 @@ sync-netbox --ip-addresses
 | UPDATE кабелей | ❌ | Обновление типа кабеля |
 | UPDATE VLAN | ❌ | Обновление имени VLAN |
 | DELETE VLAN | ❌ | Удаление неиспользуемых VLAN |
-| Sync untagged/tagged VLANs | ❌ | Привязка VLAN к интерфейсам |
 
 **Реализовано:**
 - ✅ `--cleanup-interfaces` — удаление интерфейсов которых нет на устройстве
@@ -693,8 +693,50 @@ sync-netbox --ip-addresses
 - ✅ `--cleanup-inventory` — удаление inventory items которых нет на устройстве
 - ✅ `--update-ips` — обновление существующих IP-адресов
 - ✅ `enabled_mode` — конфигурируемая логика enabled для интерфейсов
+- ✅ `sync_vlans` — синхронизация VLAN на интерфейсы (untagged_vlan, tagged_vlans)
 
-### 4.8 Порядок выполнения --sync-all
+### 4.8 Синхронизация VLAN на интерфейсы
+
+Опция `sync_vlans` позволяет синхронизировать VLAN-привязки на интерфейсы в NetBox.
+
+**Включение в fields.yaml:**
+
+```yaml
+sync:
+  interfaces:
+    options:
+      sync_vlans: true  # По умолчанию false
+```
+
+**Логика синхронизации:**
+
+| Режим порта | untagged_vlan | tagged_vlans |
+|-------------|---------------|--------------|
+| **access** | access_vlan | Очищается |
+| **tagged (trunk)** | native_vlan | Список разрешённых VLAN |
+| **tagged-all** | native_vlan | Не синхронизируется (все разрешены) |
+
+**Важные моменты:**
+
+1. **VLAN должен существовать в NetBox** — если VLAN не найден, пропускается без ошибки
+2. **Поиск по сайту** — VLAN ищется в сайте устройства для избежания конфликтов
+3. **Кэширование** — VLAN кэшируются для производительности
+4. **Парсинг диапазонов** — "10,20,30-50" преобразуется в [10,20,30,31..50]
+
+**Примеры:**
+
+```bash
+# Dry-run с VLAN sync
+python -m network_collector sync-netbox --interfaces --dry-run
+
+# В выводе будут показаны изменения VLAN:
+# UPDATE: Gi0/1 [untagged_vlan: 10]
+# UPDATE: Gi0/2 [tagged_vlans: [10,20,30]]
+```
+
+**Тесты:** 19 тестов в `tests/test_netbox/test_sync_interfaces_vlan.py`
+
+### 4.9 Порядок выполнения --sync-all
 
 ```
 1. sync_devices          → Создание/обновление устройств
@@ -706,7 +748,7 @@ sync-netbox --ip-addresses
 7. cleanup (если --cleanup) → Удаление устаревших устройств
 ```
 
-### 4.9 Примеры синхронизации
+### 4.10 Примеры синхронизации
 
 ```bash
 # Первая синхронизация (dry-run)
@@ -743,7 +785,7 @@ python -m network_collector sync-netbox \
     --site "Office" --dry-run
 ```
 
-### 4.10 DiffCalculator — предпросмотр изменений
+### 4.11 DiffCalculator — предпросмотр изменений
 
 Показывает что будет создано/обновлено ДО применения изменений.
 

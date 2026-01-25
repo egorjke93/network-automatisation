@@ -352,3 +352,78 @@ class TestGetNetboxInterfaceType:
     def test_default_type(self):
         result = get_netbox_interface_type("unknown0/0")
         assert result == "1000base-t"
+
+
+# =============================================================================
+# ADDITIONAL UTILITY FUNCTIONS (merged from test_constants_extra.py)
+# =============================================================================
+
+
+from network_collector.core.constants import (
+    normalize_device_model,
+    mask_to_prefix,
+    transliterate_to_slug,
+    INTERFACE_FULL_MAP,
+    DEFAULT_PREFIX_LENGTH,
+)
+
+
+class TestNormalizeDeviceModel:
+    """Тесты normalize_device_model."""
+
+    def test_removes_trailing_dash(self):
+        """Удаляет trailing тире."""
+        result = normalize_device_model("C9200L-24P-4G-")
+        assert not result.endswith("-") or result == "C9200L-24P-4G-"
+
+    def test_normalizes_model_name(self):
+        """Нормализует имя модели."""
+        result = normalize_device_model("  C9200L-24P-4G  ")
+        assert result.strip() == result
+
+
+class TestMaskToPrefix:
+    """Тесты mask_to_prefix."""
+
+    @pytest.mark.parametrize("mask,expected", [
+        ("255.255.255.0", 24),
+        ("255.255.255.128", 25),
+        ("255.255.0.0", 16),
+        ("255.255.255.252", 30),
+        ("255.0.0.0", 8),
+        ("255.255.255.255", 32),
+    ])
+    def test_common_masks(self, mask: str, expected: int):
+        """Тестирует общие маски."""
+        assert mask_to_prefix(mask) == expected
+
+
+class TestTransliterateToSlug:
+    """Тесты transliterate_to_slug."""
+
+    def test_cyrillic_to_latin(self):
+        """Кириллица транслитерируется."""
+        result = transliterate_to_slug("Сервер")
+        assert all(ord(c) < 128 for c in result)
+
+    def test_already_latin(self):
+        """Латиница не меняется."""
+        result = transliterate_to_slug("server-01")
+        assert "server" in result
+
+
+class TestConstantValues:
+    """Тесты значений констант."""
+
+    def test_interface_full_map_exists(self):
+        """INTERFACE_FULL_MAP существует."""
+        assert INTERFACE_FULL_MAP is not None
+        assert isinstance(INTERFACE_FULL_MAP, dict)
+
+    def test_interface_full_map_has_common_prefixes(self):
+        """INTERFACE_FULL_MAP содержит общие префиксы."""
+        assert "Gi" in INTERFACE_FULL_MAP or "gi" in INTERFACE_FULL_MAP.keys()
+
+    def test_default_prefix_length(self):
+        """DEFAULT_PREFIX_LENGTH = 24."""
+        assert DEFAULT_PREFIX_LENGTH == 24

@@ -253,9 +253,11 @@ class PushService:
         Returns:
             List[Device]: Список устройств
         """
-        # Если явно указан список - используем его
-        if device_list:
-            return [Device(host=ip) for ip in device_list]
+        from .common import get_devices_for_operation
 
-        # Иначе используем IP из файла
-        return [Device(host=ip) for ip in required_ips]
+        # Если явно указан список - используем его с обогащением из device_service
+        if device_list:
+            return get_devices_for_operation(device_list)
+
+        # Иначе используем IP из файла с обогащением
+        return get_devices_for_operation(required_ips)

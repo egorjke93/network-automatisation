@@ -54,41 +54,9 @@ class SyncService:
         self._executor = ThreadPoolExecutor(max_workers=self._max_workers)
 
     def _get_devices(self, device_list: List[str] = None) -> List[Device]:
-        """Получает список устройств с device_type."""
-        # Получаем device_type из device_service
-        from .device_service import get_device_service
-        device_service = get_device_service()
-        all_devices = device_service.get_all_devices()
-
-        # Создаём маппинг host -> device_type
-        host_to_type = {d["host"]: d.get("device_type", "cisco_ios") for d in all_devices}
-
-        if device_list:
-            return [
-                Device(host=ip, device_type=host_to_type.get(ip, "cisco_ios"))
-                for ip in device_list
-            ]
-
-        # Получаем enabled устройства
-        hosts = device_service.get_device_hosts()
-        if hosts:
-            return [
-                Device(host=ip, device_type=host_to_type.get(ip, "cisco_ios"))
-                for ip in hosts
-            ]
-
-        # Fallback на devices_ips.py
-        try:
-            from network_collector.devices_ips import devices_list
-            return [
-                Device(
-                    host=d.get("host", d) if isinstance(d, dict) else d,
-                    device_type=d.get("device_type", "cisco_ios") if isinstance(d, dict) else "cisco_ios"
-                )
-                for d in devices_list
-            ]
-        except ImportError:
-            return []
+        """Получает список устройств с platform."""
+        from .common import get_devices_for_operation
+        return get_devices_for_operation(device_list)
 
     async def _run_in_executor(self, func, *args):
         """Запускает синхронную функцию в executor."""

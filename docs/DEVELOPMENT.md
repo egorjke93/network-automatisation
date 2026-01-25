@@ -118,6 +118,7 @@ tests/
 │   ├── test_inventory_sync.py     # Inventory sync
 │   ├── test_sync_base.py          # SyncBase class
 │   ├── test_sync_integration.py   # Sync integration
+│   ├── test_sync_interfaces_vlan.py  # Interface VLAN sync (19 тестов)
 │   └── test_vlans_sync.py         # VLANs sync
 └── test_parsers/                  # Тесты парсинга
     ├── test_interfaces.py
@@ -128,7 +129,7 @@ tests/
     └── test_version.py
 ```
 
-**Всего: 1334 теста, покрытие ~79%**
+**Всего: 1434 тестов, покрытие ~85%**
 
 ### 2.2 Описание тестовых модулей
 
