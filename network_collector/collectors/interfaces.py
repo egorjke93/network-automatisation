@@ -505,7 +505,12 @@ class InterfaceCollector(BaseCollector):
                     netbox_mode = "access"
                 elif "trunk" in mode or "dynamic" in mode:
                     # Проверяем список VLAN - если ALL или полный диапазон, то tagged-all
-                    trunking_vlans = row.get("trunking_vlans", "").lower().strip()
+                    # NTC может вернуть список ['ALL'] или строку "ALL"
+                    raw_vlans = row.get("trunking_vlans", "")
+                    if isinstance(raw_vlans, list):
+                        trunking_vlans = ",".join(str(v) for v in raw_vlans).lower().strip()
+                    else:
+                        trunking_vlans = str(raw_vlans).lower().strip()
                     # Варианты "все VLAN":
                     # - "all" (IOS)
                     # - "" (пустая строка)
