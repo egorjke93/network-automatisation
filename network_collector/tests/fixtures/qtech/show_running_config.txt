@@ -1,0 +1,47 @@
+!
+! QTech Switch Configuration
+!
+hostname QTECH-DC-SW01
+!
+service timestamps log datetime
+service timestamps debug datetime
+!
+username admin privilege 15 password encrypted abc123hash
+!
+vlan 1
+ name default
+!
+vlan 10
+ name SERVERS
+!
+vlan 20
+ name MANAGEMENT
+!
+interface TFGigabitEthernet 0/1
+ description Uplink-Core
+ switchport mode trunk
+ spanning-tree portfast disable
+!
+interface TFGigabitEthernet 0/2
+ description Server-01
+ switchport mode access
+ switchport access vlan 10
+!
+interface TFGigabitEthernet 0/3
+ description Server-02
+ switchport mode access
+ switchport access vlan 10
+!
+interface Vlan 1
+ ip address 10.0.0.3 255.255.255.0
+!
+ip route 0.0.0.0 0.0.0.0 10.0.0.254
+!
+line console
+ login local
+!
+line vty 0 4
+ login local
+ transport input ssh
+!
+end

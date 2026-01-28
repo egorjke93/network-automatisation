@@ -1,0 +1,46 @@
+Cisco Nexus Operating System (NX-OS) Software
+TAC support: http://www.cisco.com/tac
+Copyright (C) 2002-2024, Cisco and/or its affiliates.
+All rights reserved.
+The copyrights to certain works contained in this software are
+owned by other third parties and used and distributed under their own
+licenses, such as open source.  This software is provided "as is," and unless
+otherwise stated, there is no warranty, express or implied, including but not
+limited to warranties of merchantability and fitness for a particular purpose.
+Certain components of this software are licensed under
+the GNU General Public License (GPL) version 2.0 or 
+GNU General Public License (GPL) version 3.0  or the GNU
+Lesser General Public License (LGPL) Version 2.1 or 
+Lesser General Public License (LGPL) Version 2.0. 
+A copy of each such license is available at
+http://www.opensource.org/licenses/gpl-2.0.php and
+http://opensource.org/licenses/gpl-3.0.html and
+http://www.opensource.org/licenses/lgpl-2.1.php and
+http://www.gnu.org/licenses/old-licenses/library.txt.
+
+Software
+  BIOS: version 07.69
+ NXOS: version 9.3(13)
+  BIOS compile time:  04/07/2021
+  NXOS image file is: bootflash:///nxos.9.3.13.bin
+  NXOS compile time:  1/31/2024 12:00:00 [12/13/2023 11:06:50]
+
+
+Hardware
+  cisco Nexus9000 C93180YC-EX chassis 
+  Intel(R) Xeon(R) CPU  @ 1.80GHz with 24631952 kB of memory.
+  Processor Board ID FDO23210NEQ
+
+  Device name: SU-N9K-C93180-01
+  bootflash:   53298520 kB
+Kernel uptime is 561 day(s), 21 hour(s), 50 minute(s), 28 second(s)
+
+Last reset at 577119 usecs after Tue Jun 11 16:36:50 2024
+  Reason: Module PowerCycled
+  System version: 
+  Service: HW check by card-client
+
+plugin
+  Core Plugin, Ethernet Plugin
+
+Active Package(s):

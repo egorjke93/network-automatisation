@@ -1,0 +1,18 @@
+Value Required INTERFACE (\S+\s+\d+/\d+)
+Value TYPE (.+)
+Value CONNECTOR (.+)
+Value WAVELENGTH (\d+)
+Value SERIAL (\S+)
+Value BANDWIDTH (.+)
+
+Start
+  ^=+Interface\s+${INTERFACE}=+ -> TransceiverBlock
+
+TransceiverBlock
+  ^Transceiver Type\s+:\s+${TYPE}
+  ^Connector Type\s+:\s+${CONNECTOR}
+  ^Wavelength\(nm\)\s+:\s+${WAVELENGTH}
+  ^Vendor Serial Number\s+:\s+${SERIAL}
+  ^Transfer BandWidth\s+:\s+${BANDWIDTH}
+  ^=+Interface\s+\S+\s+\d+/\d+=+ -> Record Start
+  ^$$ -> Record Start

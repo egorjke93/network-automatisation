@@ -1,0 +1,14 @@
+Value HOSTNAME (\S+)
+Value MODEL (\S+\))
+Value VERSION (.+)
+Value SERIAL (\S+)
+Value UPTIME ([\d:]+)
+Value HARDWARE_VERSION ([\d.]+)
+
+Start
+  ^${HOSTNAME}[#>]show -> Continue
+  ^System description\s+:\s+.*\(${MODEL} -> Continue
+  ^System uptime\s+:\s+${UPTIME}
+  ^System hardware version\s+:\s+${HARDWARE_VERSION}
+  ^System software version\s+:\s+${VERSION}
+  ^System serial number\s+:\s+${SERIAL} -> Record

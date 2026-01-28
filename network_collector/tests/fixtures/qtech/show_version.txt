@@ -1,0 +1,15 @@
+SU-QSW-6900-56F-01#show version
+System description      : Qtech Full 25G Routing Switch(QSW-6900-56F)
+System start time       : 2025-07-11 10:56:12
+System uptime           : 166:23:12:03
+System hardware version : 1.0
+System software version : QSW-6900_OS 11.0(5)B9P126, Release(10172204)
+System patch number     : NA
+System serial number    : G1S82H800078B
+System boot version     : 1.3.13
+Module information:
+  Slot 0 : QSW-6900-56F
+    Hardware version    : 1.0
+    Boot version        : 1.3.13
+    Software version    : QSW-6900_OS 11.0(5)B9P126, Release(10172204)
+    Serial number       : G1S82H800078B

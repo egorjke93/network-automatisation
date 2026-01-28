@@ -1,0 +1,30 @@
+Value Required INTERFACE (\S+\s+\d+(?:/\d+)?)
+Value LINK_STATUS (UP|DOWN)
+Value PROTOCOL_STATUS (UP|DOWN)
+Value HARDWARE (\S+)
+Value ADDRESS ([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})
+Value BIA ([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})
+Value DESCRIPTION (.*)
+Value MTU (\d+)
+Value BANDWIDTH (\d+)
+Value MEDIA_TYPE (\S+)
+Value DUPLEX (\S+)
+Value SPEED (\S+)
+Value INPUT_RATE (\d+)
+Value OUTPUT_RATE (\d+)
+Value INPUT_PACKETS (\d+)
+Value OUTPUT_PACKETS (\d+)
+
+Start
+  ^=+\s+${INTERFACE}\s+=+ -> Continue
+  ^${INTERFACE}\s+is\s+${LINK_STATUS}\s*,\s*line protocol is\s+${PROTOCOL_STATUS}
+  ^\s+Hardware is ${HARDWARE}.+address is ${ADDRESS}\s+\(bia\s+${BIA}\)
+  ^\s+Description:\s+${DESCRIPTION}
+  ^\s+MTU\s+${MTU}\s+bytes,\s+BW\s+${BANDWIDTH}\s+Kbit
+  ^\s+Medium-type is\s+${MEDIA_TYPE}
+  ^\s+Admin duplex mode is \S+, oper duplex is\s+${DUPLEX}
+  ^\s+Admin speed is \S+, oper speed is\s+${SPEED}
+  ^\s+\d+ seconds input rate\s+${INPUT_RATE}\s+bits/sec
+  ^\s+\d+ seconds output rate\s+${OUTPUT_RATE}\s+bits/sec
+  ^\s+${INPUT_PACKETS}\s+packets input -> Continue
+  ^\s+${OUTPUT_PACKETS}\s+packets output -> Record

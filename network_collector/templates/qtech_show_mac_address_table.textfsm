@@ -1,0 +1,10 @@
+Value VLAN (\S+)
+Value MAC ([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})
+Value TYPE (STATIC|DYNAMIC)
+Value INTERFACE (\S+)
+
+Start
+  ^Mac Address Table -> Continue
+  ^-+ -> Continue
+  ^Vlan\s+Mac -> Continue
+  ^\s*${VLAN}\s+${MAC}\s+${TYPE}\s+${INTERFACE} -> Record

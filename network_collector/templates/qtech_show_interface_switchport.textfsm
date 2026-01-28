@@ -1,0 +1,13 @@
+Value Required INTERFACE (\S+\s+\d+(?:/\d+)?)
+Value SWITCHPORT (enabled|disabled)
+Value MODE (ACCESS|TRUNK|HYBRID)
+Value ACCESS_VLAN (\d+)
+Value NATIVE_VLAN (\d+)
+Value PROTECTED (Enabled|Disabled)
+Value VLAN_LISTS (\S+)
+
+Start
+  ^Interface\s+Switchport -> Continue
+  ^-+ -> Continue
+  ^${INTERFACE}\s+${SWITCHPORT}\s+${MODE}\s+${ACCESS_VLAN}\s+${NATIVE_VLAN}\s+${PROTECTED}\s+${VLAN_LISTS} -> Record
+  ^${INTERFACE}\s+${SWITCHPORT}\s*$$ -> Record
