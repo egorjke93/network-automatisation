@@ -1,3 +1,4 @@
+SU-QSW-6900-56F-01#show version
 System description      : Qtech Full 25G Routing Switch(QSW-6900-56F)
 System start time       : 2025-07-11 10:56:12
 System uptime           : 166:23:12:03

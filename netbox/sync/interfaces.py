@@ -269,14 +269,26 @@ class InterfacesSyncMixin:
                 updates["duplex"] = new_duplex
                 actual_changes.append(f"duplex: {current_duplex} → {new_duplex}")
 
+        # Debug: логируем данные mode/vlan для отладки
+        logger.debug(
+            f"  {nb_interface.name}: mode={intf.mode!r}, "
+            f"access_vlan={intf.access_vlan!r}, native_vlan={intf.native_vlan!r}, "
+            f"tagged_vlans={intf.tagged_vlans!r}"
+        )
+
         if sync_cfg.is_field_enabled("mode") and intf.mode:
             current_mode = getattr(nb_interface.mode, 'value', None) if nb_interface.mode else None
             if intf.mode != current_mode:
                 updates["mode"] = intf.mode
                 actual_changes.append(f"mode: {current_mode} → {intf.mode}")
+        elif sync_cfg.is_field_enabled("mode") and not intf.mode:
+            logger.debug(f"  {nb_interface.name}: mode пустой, пропускаем синхронизацию mode")
 
         # Sync untagged_vlan (access_vlan для access, native_vlan для trunk)
-        if sync_cfg.is_field_enabled("untagged_vlan") and sync_cfg.get_option("sync_vlans", False):
+        sync_vlans_enabled = sync_cfg.get_option("sync_vlans", False)
+        logger.debug(f"  {nb_interface.name}: sync_vlans={sync_vlans_enabled}")
+
+        if sync_cfg.is_field_enabled("untagged_vlan") and sync_vlans_enabled:
             # Определяем целевой VID
             target_vid = None
             if intf.mode == "access" and intf.access_vlan:

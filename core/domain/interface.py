@@ -305,8 +305,19 @@ class InterfaceNormalizer:
             iface_name = iface.get("interface", "")
             iface_lower = iface_name.lower()
 
+            # Пробуем найти интерфейс в switchport_modes по разным вариантам имени
+            sw_data = None
             if iface_name in switchport_modes:
                 sw_data = switchport_modes[iface_name]
+            else:
+                # Пробуем нормализованные варианты имени
+                normalized_names = self._get_interface_name_variants(iface_name)
+                for variant in normalized_names:
+                    if variant in switchport_modes:
+                        sw_data = switchport_modes[variant]
+                        break
+
+            if sw_data:
                 iface["mode"] = sw_data.get("mode", "")
                 iface["native_vlan"] = sw_data.get("native_vlan", "")
                 iface["access_vlan"] = sw_data.get("access_vlan", "")
@@ -329,6 +340,52 @@ class InterfaceNormalizer:
         if lag_lower.replace("po", "port-channel") == iface_lower:
             return True
         return False
+
+    def _get_interface_name_variants(self, name: str) -> List[str]:
+        """
+        Возвращает варианты имени интерфейса для сопоставления.
+
+        Например GigabitEthernet0/1 -> ['Gi0/1', 'GigabitEthernet0/1']
+
+        Args:
+            name: Имя интерфейса
+
+        Returns:
+            List[str]: Варианты имени
+        """
+        variants = [name]
+
+        # Полные имена -> сокращённые
+        abbrev_map = {
+            "GigabitEthernet": "Gi",
+            "TenGigabitEthernet": "Te",
+            "TwentyFiveGigE": "Twe",
+            "TwentyFiveGigabitEthernet": "Twe",
+            "FortyGigabitEthernet": "Fo",
+            "HundredGigE": "Hu",
+            "HundredGigabitEthernet": "Hu",
+            "FastEthernet": "Fa",
+            "Ethernet": "Eth",
+            "Port-channel": "Po",
+            "Port-Channel": "Po",
+        }
+
+        # Сокращённые -> полные
+        full_map = {v: k for k, v in abbrev_map.items()}
+
+        for full, short in abbrev_map.items():
+            if name.startswith(full):
+                suffix = name[len(full):]
+                variants.append(f"{short}{suffix}")
+                break
+
+        for short, full in full_map.items():
+            if name.startswith(short) and not name.startswith(full):
+                suffix = name[len(short):]
+                variants.append(f"{full}{suffix}")
+                break
+
+        return variants
 
     def enrich_with_media_type(
         self,

@@ -87,6 +87,7 @@ PLATFORM_FIXTURES = {
         "version": "show_version.txt",
         "switchport": "show_interfaces_switchport.txt",
         "interface_status": "show_interface_status.txt",
+        "config": "show_running_config.txt",
     },
     "cisco_nxos": {
         "interfaces": "show_interface.txt",
@@ -97,6 +98,7 @@ PLATFORM_FIXTURES = {
         "version": "show_version.txt",
         "switchport": "show_interface_switchport.txt",
         "interface_status": "show_interface_status.txt",
+        "config": "show_running_config.txt",
     },
     "qtech": {
         "interfaces": "show_interface.txt",
@@ -105,6 +107,7 @@ PLATFORM_FIXTURES = {
         "version": "show_version.txt",
         "switchport": "show_interface_switchport.txt",
         "interface_status": "show_interface_status.txt",
+        "config": "show_running_config.txt",
     },
 }
 

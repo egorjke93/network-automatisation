@@ -81,6 +81,7 @@ class InterfaceCollector(BaseCollector):
         "cisco_iosxe": "show interfaces switchport",
         "cisco_nxos": "show interface switchport",
         "arista_eos": "show interfaces switchport",
+        "qtech": "show interface switchport",
     }
 
     # Команды для получения media_type (тип трансивера)
@@ -268,6 +269,7 @@ class InterfaceCollector(BaseCollector):
                 switchport_modes = {}
                 if self.collect_switchport:
                     sw_cmd = self.switchport_commands.get(device.platform)
+                    logger.debug(f"{hostname}: collect_switchport={self.collect_switchport}, platform={device.platform}, sw_cmd={sw_cmd}")
                     if sw_cmd:
                         try:
                             sw_response = conn.send_command(sw_cmd)
@@ -276,8 +278,15 @@ class InterfaceCollector(BaseCollector):
                                 get_ntc_platform(device.platform),
                                 sw_cmd,
                             )
+                            logger.debug(f"{hostname}: switchport_modes содержит {len(switchport_modes)} записей")
+                            if switchport_modes:
+                                # Показываем первые 3 для отладки
+                                sample = list(switchport_modes.items())[:3]
+                                logger.debug(f"{hostname}: пример switchport_modes: {sample}")
                         except Exception as e:
-                            logger.debug(f"Ошибка получения switchport info: {e}")
+                            logger.warning(f"{hostname}: ошибка получения switchport info: {e}")
+                    else:
+                        logger.debug(f"{hostname}: нет команды switchport для платформы {device.platform}")
 
                 media_types = {}
                 if self.collect_media_type:
@@ -480,7 +489,9 @@ class InterfaceCollector(BaseCollector):
 
             for row in parsed:
                 iface = row.get("interface", "")
-                mode = row.get("mode", row.get("admin_mode", "")).lower()
+                # Используем admin_mode (Administrative Mode) вместо mode (Operational Mode)
+                # Operational Mode может быть "down" когда порт физически выключен
+                mode = row.get("admin_mode", row.get("mode", "")).lower()
                 native_vlan = row.get("native_vlan", row.get("trunking_native_vlan", ""))
                 access_vlan = row.get("access_vlan", "")
 
@@ -496,7 +507,12 @@ class InterfaceCollector(BaseCollector):
                     netbox_mode = "access"
                 elif "trunk" in mode or "dynamic" in mode:
                     # Проверяем список VLAN - если ALL или полный диапазон, то tagged-all
-                    trunking_vlans = row.get("trunking_vlans", "").lower().strip()
+                    # NTC может вернуть список ['ALL'] или строку "ALL"
+                    raw_vlans = row.get("trunking_vlans", "")
+                    if isinstance(raw_vlans, list):
+                        trunking_vlans = ",".join(str(v) for v in raw_vlans).lower().strip()
+                    else:
+                        trunking_vlans = str(raw_vlans).lower().strip()
                     # Варианты "все VLAN":
                     # - "all" (IOS)
                     # - "" (пустая строка)

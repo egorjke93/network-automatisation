@@ -296,6 +296,42 @@ class TestInterfaceNormalizerEnrich:
 
         assert result[0]["mode"] == "tagged-all"
 
+    def test_enrich_with_switchport_name_variants(self):
+        """Обогащение switchport с разными форматами имён (GigabitEthernet0/1 vs Gi0/1)."""
+        # show interfaces возвращает полные имена
+        interfaces = [
+            {"interface": "GigabitEthernet0/1"},
+            {"interface": "TenGigabitEthernet1/0/1"},
+        ]
+        # show interfaces switchport возвращает сокращённые имена
+        switchport_modes = {
+            "Gi0/1": {"mode": "access", "access_vlan": "10", "native_vlan": ""},
+            "Te1/0/1": {"mode": "tagged", "access_vlan": "", "native_vlan": "1"},
+        }
+
+        result = self.normalizer.enrich_with_switchport(interfaces, switchport_modes)
+
+        assert result[0]["mode"] == "access"
+        assert result[0]["access_vlan"] == "10"
+        assert result[1]["mode"] == "tagged"
+        assert result[1]["native_vlan"] == "1"
+
+    def test_get_interface_name_variants(self):
+        """Генерация вариантов имён интерфейсов."""
+        # Полное -> сокращённое
+        variants = self.normalizer._get_interface_name_variants("GigabitEthernet0/1")
+        assert "Gi0/1" in variants
+        assert "GigabitEthernet0/1" in variants
+
+        # Сокращённое -> полное
+        variants = self.normalizer._get_interface_name_variants("Te1/0/1")
+        assert "TenGigabitEthernet1/0/1" in variants
+        assert "Te1/0/1" in variants
+
+        # Port-channel
+        variants = self.normalizer._get_interface_name_variants("Port-channel1")
+        assert "Po1" in variants
+
     def test_enrich_with_media_type(self):
         """Обогащение media_type."""
         interfaces = [
