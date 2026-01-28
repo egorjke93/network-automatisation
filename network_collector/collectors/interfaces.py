@@ -489,7 +489,9 @@ class InterfaceCollector(BaseCollector):
 
             for row in parsed:
                 iface = row.get("interface", "")
-                mode = row.get("mode", row.get("admin_mode", "")).lower()
+                # Используем admin_mode (Administrative Mode) вместо mode (Operational Mode)
+                # Operational Mode может быть "down" когда порт физически выключен
+                mode = row.get("admin_mode", row.get("mode", "")).lower()
                 native_vlan = row.get("native_vlan", row.get("trunking_native_vlan", ""))
                 access_vlan = row.get("access_vlan", "")
 
