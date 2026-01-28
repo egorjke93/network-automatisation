@@ -12,6 +12,7 @@
 """
 
 import pytest
+from ntc_templates.parse import parse_output
 from network_collector.collectors.interfaces import InterfaceCollector
 
 
@@ -21,303 +22,280 @@ def collector():
     return InterfaceCollector()
 
 
+def make_switchport_output(interfaces: list[dict]) -> str:
+    """
+    Генерирует вывод show interfaces switchport из списка интерфейсов.
+
+    Args:
+        interfaces: список словарей с ключами:
+            - name: имя интерфейса (Gi1/0/1)
+            - admin_mode: administrative mode (static access, trunk)
+            - oper_mode: operational mode (static access, trunk, down)
+            - access_vlan: VLAN для access (35)
+            - native_vlan: native VLAN для trunk (1)
+            - trunking_vlans: список VLAN для trunk (ALL, 10,20,30)
+    """
+    output = ""
+    for iface in interfaces:
+        output += f"""
+Name: {iface['name']}
+Switchport: Enabled
+Administrative Mode: {iface.get('admin_mode', 'static access')}
+Operational Mode: {iface.get('oper_mode', iface.get('admin_mode', 'static access'))}
+Administrative Trunking Encapsulation: dot1q
+Negotiation of Trunking: Off
+Access Mode VLAN: {iface.get('access_vlan', '1')} (VLAN)
+Trunking Native Mode VLAN: {iface.get('native_vlan', '1')} (default)
+Voice VLAN: none
+Trunking VLANs Enabled: {iface.get('trunking_vlans', 'ALL')}
+Pruning VLANs Enabled: 2-1001
+"""
+    return output
+
+
 @pytest.mark.unit
 class TestSwitchportModeLogic:
-    """Тесты логики определения switchport mode."""
+    """Тесты логики определения switchport mode через реальный парсер."""
 
-    @pytest.mark.parametrize("switchport_mode,trunk_vlans,expected_mode", [
+    @pytest.mark.parametrize("admin_mode,trunking_vlans,expected_mode", [
         # === ACCESS MODE ===
-        ("access", "1", "access"),
-        ("static access", "100", "access"),
-        ("dynamic access", "", "access"),
+        ("static access", "ALL", "access"),
+        ("access", "ALL", "access"),
+        ("dynamic access", "ALL", "access"),
 
         # === TAGGED-ALL (полный транк) ===
         ("trunk", "ALL", "tagged-all"),
         ("trunk", "all", "tagged-all"),
-        ("trunk", "", "tagged-all"),  # Пустой = все VLAN
-        ("trunk", "1-4094", "tagged-all"),  # Полный диапазон
-        ("trunk", "1-4093", "tagged-all"),  # Некоторые устройства
-        ("trunk", "1-4095", "tagged-all"),  # Расширенный диапазон
+        ("trunk", "1-4094", "tagged-all"),
+        ("trunk", "1-4093", "tagged-all"),
+        ("trunk", "1-4095", "tagged-all"),
         ("dynamic desirable", "ALL", "tagged-all"),
-        ("dynamic auto", "", "tagged-all"),
+        ("dynamic auto", "ALL", "tagged-all"),
 
         # === TAGGED (ограниченный транк) ===
-        ("trunk", "10", "tagged"),  # Один VLAN
-        ("trunk", "10,20,30", "tagged"),  # Несколько VLAN
-        ("trunk", "10-20", "tagged"),  # Диапазон
-        ("trunk", "10-20,30,40-50", "tagged"),  # Смешанный
-        ("trunk", "1,10,20", "tagged"),  # С native VLAN 1
-        ("trunk", "100-200", "tagged"),  # Частичный диапазон
-        ("trunk", "2-100", "tagged"),  # Не с 1
-        ("trunk", "1-100", "tagged"),  # Не полный диапазон
-
-        # === EDGE CASES ===
-        # Регистр
-        ("Trunk", "All", "tagged-all"),
-        ("TRUNK", "ALL", "tagged-all"),
-        ("Trunk", "10,20", "tagged"),
-
-        # Пробелы
-        ("trunk", " ALL ", "tagged-all"),
-        ("trunk", " 10,20,30 ", "tagged"),
-
-        # Dynamic modes
-        ("dynamic desirable", "10,20", "tagged"),
-        ("dynamic auto", "100", "tagged"),
+        ("trunk", "10", "tagged"),
+        ("trunk", "10,20,30", "tagged"),
+        ("trunk", "10-20", "tagged"),
+        ("trunk", "10-20,30,40-50", "tagged"),
+        ("trunk", "1,10,20", "tagged"),
+        ("trunk", "100-200", "tagged"),
+        ("trunk", "2-100", "tagged"),
+        ("trunk", "1-100", "tagged"),
     ])
     def test_switchport_mode_determination(
-        self,
-        switchport_mode,
-        trunk_vlans,
-        expected_mode,
+        self, collector, admin_mode, trunking_vlans, expected_mode
     ):
-        """
-        Тест определения NetBox режима на основе switchport данных.
+        """Тест определения NetBox режима через реальный парсер."""
+        output = make_switchport_output([{
+            "name": "Gi1/0/1",
+            "admin_mode": admin_mode,
+            "trunking_vlans": trunking_vlans,
+        }])
 
-        Логика:
-        - access → access
-        - trunk + (ALL или "" или 1-4094) → tagged-all
-        - trunk + конкретные VLAN → tagged
-        """
-        # Имитируем данные из show interfaces switchport
-        switchport_data = {
-            "interface": "GigabitEthernet1/0/1",
-            "switchport": "Enabled",
-            "mode": switchport_mode,
-            "trunking_vlans": trunk_vlans,
-            "access_vlan": "1",
-        }
+        result = collector._parse_switchport_modes(output, "cisco_ios", "show interfaces switchport")
 
-        # Определяем mode (логика из InterfaceCollector._parse_switchport_modes)
-        mode = switchport_mode.lower().strip()
-        netbox_mode = ""
-
-        if "access" in mode:
-            netbox_mode = "access"
-        elif "trunk" in mode or "dynamic" in mode:
-            # Проверяем список VLAN
-            trunking_vlans = trunk_vlans.lower().strip()
-            if (
-                not trunking_vlans
-                or trunking_vlans == "all"
-                or trunking_vlans in ("1-4094", "1-4093", "1-4095")
-            ):
-                netbox_mode = "tagged-all"
-            else:
-                netbox_mode = "tagged"
-
-        assert netbox_mode == expected_mode, (
-            f"Switchport mode: {switchport_mode}\n"
-            f"Trunk VLANs: {trunk_vlans}\n"
-            f"Expected: {expected_mode}, Got: {netbox_mode}"
+        gi1 = result.get("Gi1/0/1", result.get("GigabitEthernet1/0/1", {}))
+        assert gi1.get("mode") == expected_mode, (
+            f"admin_mode={admin_mode}, trunking_vlans={trunking_vlans}\n"
+            f"Expected: {expected_mode}, Got: {gi1.get('mode')}"
         )
 
-    def test_access_mode_samples(self, sample_switchport_data):
-        """Тест access mode из fixture данных."""
-        data = sample_switchport_data["access_mode"]
+    def test_access_vlan_parsed(self, collector):
+        """Access VLAN парсится корректно."""
+        output = make_switchport_output([{
+            "name": "Gi1/0/1",
+            "admin_mode": "static access",
+            "access_vlan": "35",
+        }])
 
-        mode = data["switchport_mode"].lower()
-        result = "access" if "access" in mode else ""
+        result = collector._parse_switchport_modes(output, "cisco_ios", "show interfaces switchport")
+        gi1 = result.get("Gi1/0/1", result.get("GigabitEthernet1/0/1", {}))
 
-        assert result == "access"
+        assert gi1.get("mode") == "access"
+        assert gi1.get("access_vlan") == "35"
 
-    def test_trunk_all_vlans_samples(self, sample_switchport_data):
-        """Тест trunk ALL из fixture данных."""
-        data = sample_switchport_data["trunk_all_vlans"]
+    def test_native_vlan_parsed(self, collector):
+        """Native VLAN парсится корректно."""
+        output = make_switchport_output([{
+            "name": "Gi1/0/1",
+            "admin_mode": "trunk",
+            "native_vlan": "100",
+            "trunking_vlans": "ALL",
+        }])
 
-        mode = data["switchport_mode"].lower()
-        trunk_vlans = data["trunk_vlans"].lower().strip()
+        result = collector._parse_switchport_modes(output, "cisco_ios", "show interfaces switchport")
+        gi1 = result.get("Gi1/0/1", result.get("GigabitEthernet1/0/1", {}))
 
-        if "trunk" in mode:
-            if trunk_vlans == "all":
-                result = "tagged-all"
-            else:
-                result = "tagged"
-        else:
-            result = ""
+        assert gi1.get("mode") == "tagged-all"
+        assert gi1.get("native_vlan") == "100"
 
-        assert result == "tagged-all"
+    def test_port_down_uses_admin_mode(self, collector):
+        """Порт down использует admin_mode, не operational mode."""
+        output = make_switchport_output([{
+            "name": "Gi0/2",
+            "admin_mode": "static access",
+            "oper_mode": "down",  # Порт физически down
+            "access_vlan": "41",
+        }])
 
-    def test_trunk_1_4094_range(self, sample_switchport_data):
-        """Тест trunk 1-4094 (полный диапазон)."""
-        data = sample_switchport_data["trunk_1_4094"]
+        result = collector._parse_switchport_modes(output, "cisco_ios", "show interfaces switchport")
+        gi02 = result.get("Gi0/2", result.get("GigabitEthernet0/2", {}))
 
-        mode = data["switchport_mode"].lower()
-        trunk_vlans = data["trunk_vlans"].lower().strip()
+        # Должен быть access (по admin_mode), не пустой (по oper_mode=down)
+        assert gi02.get("mode") == "access", f"Порт down должен использовать admin_mode, получили {gi02}"
+        assert gi02.get("access_vlan") == "41"
 
-        if "trunk" in mode:
-            if trunk_vlans in ("1-4094", "1-4093", "1-4095"):
-                result = "tagged-all"
-            else:
-                result = "tagged"
-        else:
-            result = ""
+    def test_interface_name_variants(self, collector):
+        """Создаются альтернативные имена интерфейсов (Gi -> GigabitEthernet)."""
+        output = make_switchport_output([{
+            "name": "Gi1/0/1",
+            "admin_mode": "static access",
+        }])
 
-        assert result == "tagged-all", "1-4094 должен определяться как tagged-all"
+        result = collector._parse_switchport_modes(output, "cisco_ios", "show interfaces switchport")
 
-    def test_trunk_specific_vlans_samples(self, sample_switchport_data):
-        """Тест trunk с конкретными VLAN."""
-        data = sample_switchport_data["trunk_specific_vlans"]
+        # Должны быть оба варианта
+        assert "Gi1/0/1" in result
+        assert "GigabitEthernet1/0/1" in result
 
-        mode = data["switchport_mode"].lower()
-        trunk_vlans = data["trunk_vlans"].lower().strip()
+    def test_multiple_interfaces(self, collector):
+        """Парсинг нескольких интерфейсов одновременно."""
+        output = make_switchport_output([
+            {"name": "Gi1/0/1", "admin_mode": "static access", "access_vlan": "10"},
+            {"name": "Gi1/0/2", "admin_mode": "trunk", "trunking_vlans": "ALL"},
+            {"name": "Gi1/0/3", "admin_mode": "trunk", "trunking_vlans": "20,30,40"},
+        ])
 
-        if "trunk" in mode:
-            if trunk_vlans == "all" or trunk_vlans in ("1-4094", "1-4093"):
-                result = "tagged-all"
-            else:
-                result = "tagged"
-        else:
-            result = ""
+        result = collector._parse_switchport_modes(output, "cisco_ios", "show interfaces switchport")
 
-        assert result == "tagged", "10,20,30 должны быть tagged, не tagged-all"
+        gi1 = result.get("Gi1/0/1", {})
+        gi2 = result.get("Gi1/0/2", {})
+        gi3 = result.get("Gi1/0/3", {})
 
-    def test_trunk_range_vlans(self, sample_switchport_data):
-        """Тест trunk с диапазонами VLAN."""
-        data = sample_switchport_data["trunk_range_vlans"]
+        assert gi1.get("mode") == "access"
+        assert gi2.get("mode") == "tagged-all"
+        assert gi3.get("mode") == "tagged"
 
-        mode = data["switchport_mode"].lower()
-        trunk_vlans = data["trunk_vlans"].lower().strip()
 
-        if "trunk" in mode:
-            if trunk_vlans == "all" or trunk_vlans in ("1-4094", "1-4093"):
-                result = "tagged-all"
-            else:
-                result = "tagged"
-        else:
-            result = ""
+@pytest.mark.unit
+class TestNTCParsingIntegration:
+    """
+    Тесты с реальным NTC парсингом.
 
-        assert result == "tagged", "10-20,30,40-50 должен быть tagged"
+    Проверяют что код корректно обрабатывает особенности NTC templates:
+    - trunking_vlans как список
+    - admin_mode vs mode (operational)
+    """
 
-    def test_trunk_single_vlan(self, sample_switchport_data):
-        """Тест trunk с одним VLAN."""
-        data = sample_switchport_data["trunk_single_vlan"]
+    # Реальный вывод show interfaces switchport (Cisco IOS)
+    SWITCHPORT_OUTPUT_IOS = """
+Name: Gi1/0/1
+Switchport: Enabled
+Administrative Mode: static access
+Operational Mode: static access
+Administrative Trunking Encapsulation: dot1q
+Operational Trunking Encapsulation: native
+Negotiation of Trunking: Off
+Access Mode VLAN: 35 (VLAN0035)
+Trunking Native Mode VLAN: 1 (default)
+Voice VLAN: none
+Trunking VLANs Enabled: ALL
+Pruning VLANs Enabled: 2-1001
 
-        mode = data["switchport_mode"].lower()
-        trunk_vlans = data["trunk_vlans"].lower().strip()
+Name: Te1/1/1
+Switchport: Enabled
+Administrative Mode: trunk
+Operational Mode: trunk
+Administrative Trunking Encapsulation: dot1q
+Operational Trunking Encapsulation: dot1q
+Negotiation of Trunking: On
+Access Mode VLAN: 1 (default)
+Trunking Native Mode VLAN: 1 (default)
+Voice VLAN: none
+Trunking VLANs Enabled: ALL
+Pruning VLANs Enabled: 2-1001
 
-        if "trunk" in mode:
-            if trunk_vlans == "all" or trunk_vlans in ("1-4094", "1-4093"):
-                result = "tagged-all"
-            else:
-                result = "tagged"
-        else:
-            result = ""
+Name: Gi0/2
+Switchport: Enabled
+Administrative Mode: static access
+Operational Mode: down
+Administrative Trunking Encapsulation: dot1q
+Negotiation of Trunking: Off
+Access Mode VLAN: 41 (VLAN0041)
+Trunking Native Mode VLAN: 1 (default)
+Voice VLAN: none
+Trunking VLANs Enabled: ALL
+Pruning VLANs Enabled: 2-1001
 
-        assert result == "tagged", "Один VLAN (100) должен быть tagged"
+Name: Gi0/10
+Switchport: Enabled
+Administrative Mode: trunk
+Operational Mode: trunk
+Administrative Trunking Encapsulation: dot1q
+Operational Trunking Encapsulation: dot1q
+Negotiation of Trunking: On
+Access Mode VLAN: 1 (default)
+Trunking Native Mode VLAN: 100 (MGMT)
+Voice VLAN: none
+Trunking VLANs Enabled: 10,20,30,100
+Pruning VLANs Enabled: 2-1001
+"""
 
-    def test_empty_trunk_vlans_means_all(self):
+    def test_ntc_returns_list_for_trunking_vlans(self):
         """
-        Тест что пустой trunk_vlans означает ALL (все VLAN).
+        NTC templates возвращает trunking_vlans как список.
 
-        На некоторых устройствах пустой список = все VLAN разрешены.
+        Ключевой тест - раньше код падал из-за .lower() на списке.
         """
-        mode = "trunk"
-        trunk_vlans = ""
-
-        if "trunk" in mode:
-            if not trunk_vlans or trunk_vlans == "all":
-                result = "tagged-all"
-            else:
-                result = "tagged"
-        else:
-            result = ""
-
-        assert result == "tagged-all", "Пустой trunk_vlans должен быть tagged-all"
-
-    def test_lag_inherits_mode_from_members(self):
-        """
-        Тест что LAG наследует mode от member интерфейсов.
-
-        Логика:
-        - Если хотя бы один member в tagged-all → LAG тоже tagged-all
-        - Если все members в tagged → LAG тоже tagged
-        - tagged-all имеет приоритет над tagged
-        """
-        # Имитируем LAG membership
-        lag_membership = {
-            "GigabitEthernet1/0/1": "Po1",  # member 1
-            "GigabitEthernet1/0/2": "Po1",  # member 2
-        }
-
-        # Switchport modes для members
-        switchport_modes = {
-            "GigabitEthernet1/0/1": {"mode": "tagged"},
-            "GigabitEthernet1/0/2": {"mode": "tagged-all"},  # Один в tagged-all
-        }
-
-        # Определяем mode для LAG
-        lag_modes = {}
-        for member_iface, lag_name in lag_membership.items():
-            if member_iface in switchport_modes:
-                member_mode = switchport_modes[member_iface].get("mode", "")
-                # tagged-all имеет приоритет
-                if member_mode == "tagged-all":
-                    lag_modes[lag_name] = "tagged-all"
-                elif member_mode == "tagged" and lag_modes.get(lag_name) != "tagged-all":
-                    lag_modes[lag_name] = "tagged"
-
-        assert lag_modes.get("Po1") == "tagged-all", (
-            "LAG должен наследовать tagged-all если хотя бы один member в tagged-all"
+        parsed = parse_output(
+            platform="cisco_ios",
+            command="show interfaces switchport",
+            data=self.SWITCHPORT_OUTPUT_IOS
         )
 
-    def test_lag_all_members_tagged(self):
-        """Тест что LAG = tagged если все members в tagged."""
-        lag_membership = {
-            "GigabitEthernet1/0/1": "Po1",
-            "GigabitEthernet1/0/2": "Po1",
-        }
+        for row in parsed:
+            vlans = row.get("trunking_vlans")
+            assert isinstance(vlans, list), (
+                f"trunking_vlans должен быть list, получили {type(vlans).__name__}: {vlans}"
+            )
 
-        switchport_modes = {
-            "GigabitEthernet1/0/1": {"mode": "tagged"},
-            "GigabitEthernet1/0/2": {"mode": "tagged"},
-        }
-
-        lag_modes = {}
-        for member_iface, lag_name in lag_membership.items():
-            if member_iface in switchport_modes:
-                member_mode = switchport_modes[member_iface].get("mode", "")
-                if member_mode == "tagged-all":
-                    lag_modes[lag_name] = "tagged-all"
-                elif member_mode == "tagged" and lag_modes.get(lag_name) != "tagged-all":
-                    lag_modes[lag_name] = "tagged"
-
-        assert lag_modes.get("Po1") == "tagged", "LAG должен быть tagged"
-
-    @pytest.mark.parametrize("trunk_vlans,is_full_trunk", [
-        # Полный транк (tagged-all)
-        ("ALL", True),
-        ("all", True),
-        ("", True),
-        ("1-4094", True),
-        ("1-4093", True),
-        ("1-4095", True),
-
-        # Частичный транк (tagged)
-        ("10", False),
-        ("1,10,20", False),
-        ("10-20", False),
-        ("100-200", False),
-        ("1-100", False),  # Не полный диапазон
-        ("2-4094", False),  # Не с 1
-        ("10,20,30,40", False),
-    ])
-    def test_full_trunk_detection(self, trunk_vlans, is_full_trunk):
-        """
-        Тест определения "полного транка" (tagged-all) vs "частичный транк" (tagged).
-
-        Полный транк = ALL или 1-4094 или пустой
-        Частичный транк = конкретные VLAN
-        """
-        trunk_vlans_lower = trunk_vlans.lower().strip()
-
-        result = (
-            not trunk_vlans_lower
-            or trunk_vlans_lower == "all"
-            or trunk_vlans_lower in ("1-4094", "1-4093", "1-4095")
+    def test_ntc_admin_mode_vs_operational_mode(self):
+        """NTC парсит и admin_mode и mode (operational) отдельно."""
+        parsed = parse_output(
+            platform="cisco_ios",
+            command="show interfaces switchport",
+            data=self.SWITCHPORT_OUTPUT_IOS
         )
 
-        assert result == is_full_trunk, (
-            f"trunk_vlans='{trunk_vlans}' должен быть "
-            f"{'полным транком' if is_full_trunk else 'частичным транком'}"
+        gi02 = next((r for r in parsed if r["interface"] == "Gi0/2"), None)
+        assert gi02 is not None
+
+        assert gi02["mode"] == "down", "Operational mode должен быть 'down'"
+        assert gi02["admin_mode"] == "static access", "Admin mode должен быть 'static access'"
+
+    def test_full_integration(self, collector):
+        """Полная интеграция: реальный вывод -> NTC -> наш код -> правильный результат."""
+        result = collector._parse_switchport_modes(
+            self.SWITCHPORT_OUTPUT_IOS,
+            "cisco_ios",
+            "show interfaces switchport"
         )
+
+        # Access
+        gi1 = result.get("Gi1/0/1", result.get("GigabitEthernet1/0/1", {}))
+        assert gi1.get("mode") == "access"
+        assert gi1.get("access_vlan") == "35"
+
+        # Trunk ALL
+        te1 = result.get("Te1/1/1", result.get("TenGigabitEthernet1/1/1", {}))
+        assert te1.get("mode") == "tagged-all"
+
+        # Port down (должен использовать admin_mode)
+        gi02 = result.get("Gi0/2", result.get("GigabitEthernet0/2", {}))
+        assert gi02.get("mode") == "access"
+        assert gi02.get("access_vlan") == "41"
+
+        # Trunk с конкретными VLAN
+        gi10 = result.get("Gi0/10", result.get("GigabitEthernet0/10", {}))
+        assert gi10.get("mode") == "tagged"
+        assert gi10.get("native_vlan") == "100"
