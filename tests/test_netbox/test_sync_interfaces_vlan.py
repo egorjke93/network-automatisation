@@ -348,30 +348,36 @@ class TestVlanCache:
 
         mock_client = MagicMock()
         mock_vlan = MockVLAN(id=100, vid=10)
-        mock_client.get_vlan_by_vid.return_value = mock_vlan
+        # get_vlans возвращает все VLAN сайта
+        mock_client.get_vlans.return_value = [mock_vlan]
 
         sync = SyncBase(client=mock_client, dry_run=False)
 
-        # Первый вызов - API
+        # Первый вызов - загружает все VLAN сайта
         result1 = sync._get_vlan_by_vid(10, "Office")
         assert result1 == mock_vlan
-        assert mock_client.get_vlan_by_vid.call_count == 1
+        assert mock_client.get_vlans.call_count == 1
 
         # Второй вызов - из кэша
         result2 = sync._get_vlan_by_vid(10, "Office")
         assert result2 == mock_vlan
-        assert mock_client.get_vlan_by_vid.call_count == 1  # Не изменился
+        assert mock_client.get_vlans.call_count == 1  # Не изменился
 
-        # Другой сайт - новый вызов
+        # Другой сайт - новый вызов get_vlans
+        mock_client.get_vlans.return_value = [MockVLAN(id=200, vid=10)]
         sync._get_vlan_by_vid(10, "DC")
-        assert mock_client.get_vlan_by_vid.call_count == 2
+        assert mock_client.get_vlans.call_count == 2
 
     def test_vlan_cache_different_vids(self):
         """Разные VID кэшируются отдельно."""
         from network_collector.netbox.sync.base import SyncBase
 
         mock_client = MagicMock()
-        mock_client.get_vlan_by_vid.side_effect = lambda vid, site: MockVLAN(id=vid*10, vid=vid)
+        # get_vlans возвращает несколько VLAN
+        mock_client.get_vlans.return_value = [
+            MockVLAN(id=100, vid=10),
+            MockVLAN(id=200, vid=20),
+        ]
 
         sync = SyncBase(client=mock_client, dry_run=False)
 
@@ -380,7 +386,8 @@ class TestVlanCache:
 
         assert vlan10.vid == 10
         assert vlan20.vid == 20
-        assert mock_client.get_vlan_by_vid.call_count == 2
+        # Только один вызов get_vlans для сайта
+        assert mock_client.get_vlans.call_count == 1
 
 
 class TestParseVlanRange:

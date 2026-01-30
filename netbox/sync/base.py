@@ -181,10 +181,30 @@ class SyncBase:
         if cache_key in self._vlan_cache:
             return self._vlan_cache[cache_key]
 
-        vlan = self.client.get_vlan_by_vid(vid, site)
-        if vlan:
-            self._vlan_cache[cache_key] = vlan
-        return vlan
+        # Загружаем все VLAN сайта одним запросом (если ещё не загружены)
+        site_cache_key = f"_site_loaded_{site or ''}"
+        if site_cache_key not in self._vlan_cache:
+            self._load_site_vlans(site)
+            self._vlan_cache[site_cache_key] = True
+
+        # Теперь ищем в кэше
+        if cache_key in self._vlan_cache:
+            return self._vlan_cache[cache_key]
+
+        return None
+
+    def _load_site_vlans(self, site: Optional[str] = None) -> None:
+        """Загружает все VLAN сайта в кэш одним запросом."""
+        try:
+            vlans = list(self.client.get_vlans(site=site))
+            count = 0
+            for vlan in vlans:
+                cache_key = (vlan.vid, site or "")
+                self._vlan_cache[cache_key] = vlan
+                count += 1
+            logger.debug(f"Загружено {count} VLANs для сайта '{site}'")
+        except Exception as e:
+            logger.warning(f"Ошибка загрузки VLANs для сайта '{site}': {e}")
 
     # ==================== GET OR CREATE ====================
 

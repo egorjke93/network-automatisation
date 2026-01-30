@@ -365,12 +365,17 @@ class InterfacesSyncMixin:
                             matched_vids.append(vid)
                         else:
                             not_found_vids.append(vid)
-                            logger.warning(f"VLAN {vid} не найден в NetBox (site={site_name})")
 
                     if not_found_vids:
-                        logger.warning(
-                            f"  {nb_interface.name}: не найдены VLANs {not_found_vids} в сайте '{site_name}'"
-                        )
+                        # Показываем только итог, не каждый VLAN
+                        if len(not_found_vids) > 10:
+                            logger.debug(
+                                f"  {nb_interface.name}: {len(not_found_vids)} VLANs не найдены в NetBox"
+                            )
+                        else:
+                            logger.debug(
+                                f"  {nb_interface.name}: VLANs {not_found_vids} не найдены в NetBox"
+                            )
 
                     # Получаем текущие tagged_vlans из NetBox
                     current_vlan_ids = []
