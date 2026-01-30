@@ -351,6 +351,12 @@ def setup_parser() -> argparse.ArgumentParser:
     # === NetBox Sync ===
     netbox_parser = subparsers.add_parser("sync-netbox", help="Синхронизация с NetBox")
     netbox_parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Подробный вывод (DEBUG)",
+    )
+    netbox_parser.add_argument(
         "--url",
         help="URL NetBox (или env NETBOX_URL)",
     )
