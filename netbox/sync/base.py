@@ -318,10 +318,6 @@ class SyncBase:
                     if len(start_end) == 2:
                         start = int(start_end[0].strip())
                         end = int(start_end[1].strip())
-                        # Ограничиваем размер диапазона (защита от 1-4094)
-                        if end - start > 100:
-                            logger.debug(f"Диапазон VLAN слишком большой: {part}, пропускаем")
-                            continue
                         result.extend(range(start, end + 1))
                 else:
                     # Одиночный VLAN: "10" → [10]

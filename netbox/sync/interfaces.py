@@ -334,6 +334,9 @@ class InterfacesSyncMixin:
             if intf.mode == "tagged" and intf.tagged_vlans:
                 # Парсим строку "10,20,30-50" в список VID
                 target_vids = self._parse_vlan_range(intf.tagged_vlans)
+                logger.debug(
+                    f"  {nb_interface.name}: tagged_vlans='{intf.tagged_vlans}' -> parsed={target_vids}"
+                )
 
                 if target_vids:
                     # Получаем сайт устройства
@@ -345,13 +348,20 @@ class InterfacesSyncMixin:
                     # Преобразуем VID в ID VLAN из NetBox
                     target_vlan_ids = []
                     matched_vids = []
+                    not_found_vids = []
                     for vid in target_vids:
                         vlan = self._get_vlan_by_vid(vid, site_name)
                         if vlan:
                             target_vlan_ids.append(vlan.id)
                             matched_vids.append(vid)
                         else:
-                            logger.debug(f"VLAN {vid} не найден в NetBox (site={site_name})")
+                            not_found_vids.append(vid)
+                            logger.warning(f"VLAN {vid} не найден в NetBox (site={site_name})")
+
+                    if not_found_vids:
+                        logger.warning(
+                            f"  {nb_interface.name}: не найдены VLANs {not_found_vids} в сайте '{site_name}'"
+                        )
 
                     # Получаем текущие tagged_vlans из NetBox
                     current_vlan_ids = []
