@@ -378,16 +378,17 @@ class InterfacesSyncMixin:
                             )
 
                     # Получаем текущие tagged_vlans из NetBox
-                    current_vlan_ids = []
-                    current_vlan_vids = []
+                    current_vlan_ids = set()
+                    current_vlan_vids = set()
                     if nb_interface.tagged_vlans:
-                        current_vlan_ids = sorted([v.id for v in nb_interface.tagged_vlans])
-                        current_vlan_vids = sorted([v.vid for v in nb_interface.tagged_vlans])
+                        current_vlan_ids = {v.id for v in nb_interface.tagged_vlans}
+                        current_vlan_vids = {v.vid for v in nb_interface.tagged_vlans}
 
-                    # Сравниваем списки
-                    if sorted(target_vlan_ids) != current_vlan_ids:
-                        updates["tagged_vlans"] = target_vlan_ids
-                        actual_changes.append(f"tagged_vlans: {current_vlan_vids} → {matched_vids}")
+                    # Сравниваем множества (порядок не важен)
+                    target_vlan_ids_set = set(target_vlan_ids)
+                    if target_vlan_ids_set != current_vlan_ids:
+                        updates["tagged_vlans"] = sorted(target_vlan_ids_set)
+                        actual_changes.append(f"tagged_vlans: {sorted(current_vlan_vids)} → {sorted(matched_vids)}")
 
             elif intf.mode != "tagged":
                 # Если mode не tagged — очищаем tagged_vlans
