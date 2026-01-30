@@ -77,12 +77,21 @@ class InterfacesSyncMixin:
                     data["speed"] = self._parse_speed(intf.speed)
                 if intf.duplex:
                     data["duplex"] = self._parse_duplex(intf.duplex)
+                # Добавляем untagged_vlan для сравнения (access_vlan или native_vlan)
+                if sync_cfg.get_option("sync_vlans", False):
+                    if intf.mode == "access" and intf.access_vlan:
+                        data["untagged_vlan"] = intf.access_vlan
+                    elif intf.mode in ("tagged", "tagged-all") and intf.native_vlan:
+                        data["untagged_vlan"] = intf.native_vlan
                 local_data.append(data)
 
         enabled_mode = sync_cfg.get_option("enabled_mode", "admin")
         compare_fields = ["description", "enabled", "mode", "mtu", "duplex", "speed"]
         if sync_cfg.get_option("auto_detect_type", True):
             compare_fields.append("type")
+        # Добавляем VLAN поля для сравнения если sync_vlans включен
+        if sync_cfg.get_option("sync_vlans", False):
+            compare_fields.extend(["untagged_vlan", "tagged_vlans"])
 
         diff = comparator.compare_interfaces(
             local=local_data,
