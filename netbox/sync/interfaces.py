@@ -11,6 +11,7 @@ from .base import (
     SyncBase, SyncComparator, Interface, get_sync_config,
     normalize_mac_netbox, get_netbox_interface_type, logger,
 )
+from ...core.domain.vlan import parse_vlan_range, VlanSet
 
 logger = logging.getLogger(__name__)
 
@@ -341,8 +342,8 @@ class InterfacesSyncMixin:
         if sync_cfg.is_field_enabled("tagged_vlans") and sync_cfg.get_option("sync_vlans", False):
             # Только для tagged портов (не tagged-all)
             if intf.mode == "tagged" and intf.tagged_vlans:
-                # Парсим строку "10,20,30-50" в список VID
-                target_vids = self._parse_vlan_range(intf.tagged_vlans)
+                # Парсим строку "10,20,30-50" в список VID (используем domain layer)
+                target_vids = parse_vlan_range(intf.tagged_vlans)
                 logger.debug(
                     f"  {nb_interface.name}: tagged_vlans='{intf.tagged_vlans}' -> parsed={target_vids}"
                 )

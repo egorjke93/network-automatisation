@@ -20,7 +20,7 @@ class VLANsMixin:
         Получает список VLAN.
 
         Args:
-            site: Фильтр по сайту
+            site: Фильтр по сайту (name или slug)
             **filters: Дополнительные фильтры
 
         Returns:
@@ -28,7 +28,9 @@ class VLANsMixin:
         """
         params = {}
         if site:
-            params["site"] = site
+            # NetBox API требует slug сайта, конвертируем
+            site_slug = site.lower().replace(" ", "-")
+            params["site"] = site_slug
         params.update(filters)
 
         vlans = list(self.api.ipam.vlans.filter(**params))

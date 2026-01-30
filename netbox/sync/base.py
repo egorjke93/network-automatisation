@@ -303,51 +303,7 @@ class SyncBase:
         )
 
     # ==================== ПАРСИНГ ====================
-
-    def _parse_vlan_range(self, vlan_str: str) -> List[int]:
-        """
-        Парсит строку с диапазонами VLAN в список VID.
-
-        Args:
-            vlan_str: Строка типа "10,20,30-50,100" или "1-4094"
-
-        Returns:
-            List[int]: Список VID, например [10, 20, 30, 31, ..., 50, 100]
-                       Пустой список если строка пустая или "all"
-        """
-        if not vlan_str:
-            return []
-
-        vlan_str = vlan_str.strip().lower()
-
-        # Пропускаем "all" и полные диапазоны (tagged-all)
-        if vlan_str in ("all", "1-4094", "1-4093", "1-4095", "none"):
-            return []
-
-        result = []
-        try:
-            # Разбиваем по запятым: "10,20,30-50" → ["10", "20", "30-50"]
-            for part in vlan_str.split(","):
-                part = part.strip()
-                if not part:
-                    continue
-
-                if "-" in part:
-                    # Диапазон: "30-50" → [30, 31, ..., 50]
-                    start_end = part.split("-", 1)
-                    if len(start_end) == 2:
-                        start = int(start_end[0].strip())
-                        end = int(start_end[1].strip())
-                        result.extend(range(start, end + 1))
-                else:
-                    # Одиночный VLAN: "10" → [10]
-                    result.append(int(part))
-        except ValueError as e:
-            logger.debug(f"Ошибка парсинга VLAN: {vlan_str} - {e}")
-            return []
-
-        # Убираем дубликаты и сортируем
-        return sorted(set(result))
+    # Парсинг VLAN перенесён в core/domain/vlan.py (parse_vlan_range)
 
     def _parse_speed(self, speed_str: str) -> Optional[int]:
         """Парсит скорость в kbps для NetBox."""

@@ -14,6 +14,10 @@ Sync:
 - SyncComparator: сравнение локальных и удалённых данных
 - SyncDiff: результат сравнения (to_create, to_update, to_delete)
 
+VLAN:
+- parse_vlan_range: парсинг строки "10,20,30-50" в список [10,20,30,31,...,50]
+- VlanSet: множество VLAN для сравнения и операций
+
 Использование:
     from network_collector.core.domain import InterfaceNormalizer, SyncComparator
 
@@ -22,6 +26,9 @@ Sync:
 
     comparator = SyncComparator()
     diff = comparator.compare_interfaces(local, remote)
+
+    from network_collector.core.domain import parse_vlan_range, VlanSet
+    vids = parse_vlan_range("10,20,30-50")  # [10, 20, 30, 31, ..., 50]
 """
 
 from .interface import InterfaceNormalizer
@@ -29,6 +36,7 @@ from .mac import MACNormalizer
 from .lldp import LLDPNormalizer
 from .inventory import InventoryNormalizer
 from .sync import SyncComparator, SyncDiff, SyncItem, ChangeType, FieldChange, get_cable_endpoints
+from .vlan import parse_vlan_range, is_full_vlan_range, VlanSet, FULL_VLAN_RANGES
 
 __all__ = [
     "InterfaceNormalizer",
@@ -41,4 +49,9 @@ __all__ = [
     "ChangeType",
     "FieldChange",
     "get_cable_endpoints",
+    # VLAN
+    "parse_vlan_range",
+    "is_full_vlan_range",
+    "VlanSet",
+    "FULL_VLAN_RANGES",
 ]

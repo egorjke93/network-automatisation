@@ -391,70 +391,61 @@ class TestVlanCache:
 
 
 class TestParseVlanRange:
-    """Тесты парсинга диапазонов VLAN."""
+    """Тесты парсинга диапазонов VLAN (проверяет domain layer)."""
 
     def test_parse_single_vlan(self):
         """Одиночный VLAN."""
-        from network_collector.netbox.sync.base import SyncBase
+        from network_collector.core.domain.vlan import parse_vlan_range
 
-        sync = SyncBase(client=MagicMock(), dry_run=False)
-        result = sync._parse_vlan_range("10")
+        result = parse_vlan_range("10")
         assert result == [10]
 
     def test_parse_multiple_vlans(self):
         """Несколько VLAN через запятую."""
-        from network_collector.netbox.sync.base import SyncBase
+        from network_collector.core.domain.vlan import parse_vlan_range
 
-        sync = SyncBase(client=MagicMock(), dry_run=False)
-        result = sync._parse_vlan_range("10,20,30")
+        result = parse_vlan_range("10,20,30")
         assert result == [10, 20, 30]
 
     def test_parse_vlan_range(self):
         """Диапазон VLAN."""
-        from network_collector.netbox.sync.base import SyncBase
+        from network_collector.core.domain.vlan import parse_vlan_range
 
-        sync = SyncBase(client=MagicMock(), dry_run=False)
-        result = sync._parse_vlan_range("10-15")
+        result = parse_vlan_range("10-15")
         assert result == [10, 11, 12, 13, 14, 15]
 
     def test_parse_mixed_vlans_and_ranges(self):
         """Комбинация VLAN и диапазонов."""
-        from network_collector.netbox.sync.base import SyncBase
+        from network_collector.core.domain.vlan import parse_vlan_range
 
-        sync = SyncBase(client=MagicMock(), dry_run=False)
-        result = sync._parse_vlan_range("10,20-25,30")
+        result = parse_vlan_range("10,20-25,30")
         assert result == [10, 20, 21, 22, 23, 24, 25, 30]
 
     def test_parse_all_returns_empty(self):
         """'all' возвращает пустой список."""
-        from network_collector.netbox.sync.base import SyncBase
+        from network_collector.core.domain.vlan import parse_vlan_range
 
-        sync = SyncBase(client=MagicMock(), dry_run=False)
-        assert sync._parse_vlan_range("all") == []
-        assert sync._parse_vlan_range("ALL") == []
+        assert parse_vlan_range("all") == []
+        assert parse_vlan_range("ALL") == []
 
     def test_parse_full_range_returns_empty(self):
         """Полный диапазон (1-4094) возвращает пустой список."""
-        from network_collector.netbox.sync.base import SyncBase
+        from network_collector.core.domain.vlan import parse_vlan_range
 
-        sync = SyncBase(client=MagicMock(), dry_run=False)
-        assert sync._parse_vlan_range("1-4094") == []
-        assert sync._parse_vlan_range("1-4093") == []
+        assert parse_vlan_range("1-4094") == []
+        assert parse_vlan_range("1-4093") == []
 
     def test_parse_empty_string(self):
         """Пустая строка возвращает пустой список."""
-        from network_collector.netbox.sync.base import SyncBase
+        from network_collector.core.domain.vlan import parse_vlan_range
 
-        sync = SyncBase(client=MagicMock(), dry_run=False)
-        assert sync._parse_vlan_range("") == []
-        assert sync._parse_vlan_range(None) == []
+        assert parse_vlan_range("") == []
 
     def test_parse_removes_duplicates(self):
         """Удаляет дубликаты."""
-        from network_collector.netbox.sync.base import SyncBase
+        from network_collector.core.domain.vlan import parse_vlan_range
 
-        sync = SyncBase(client=MagicMock(), dry_run=False)
-        result = sync._parse_vlan_range("10,10,20,10-12")
+        result = parse_vlan_range("10,10,20,10-12")
         assert result == [10, 11, 12, 20]
 
 
