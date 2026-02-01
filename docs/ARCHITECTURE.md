@@ -186,9 +186,9 @@ netbox/sync/
 - `NetBoxClient` — обёртка над pynetbox (`netbox/client.py`)
 - `NetBoxSync` — объединяет все mixins (`netbox/sync/main.py`)
 - `SyncBase` — базовый класс с общими методами (`netbox/sync/base.py`)
-  - `_vlan_cache` — кэш VLAN для производительности
+  - `_vlan_cache` — кэш VLAN для производительности (batch загрузка)
   - `_get_vlan_by_vid()` — поиск VLAN по VID с кэшированием
-  - `_parse_vlan_range()` — парсинг диапазонов "10,20,30-50" → [10,20,30..50]
+  - `_load_site_vlans()` — загрузка всех VLAN сайта одним запросом
 - `DiffCalculator` — предпросмотр изменений (`netbox/diff.py`)
 
 **Mixins:**
@@ -1068,6 +1068,7 @@ Field Registry Statistics:
 | `core/domain/lldp.py` | LLDPNormalizer |
 | `core/domain/inventory.py` | InventoryNormalizer |
 | `core/domain/sync.py` | SyncComparator, SyncDiff, get_cable_endpoints |
+| `core/domain/vlan.py` | parse_vlan_range(), VlanSet — парсинг и сравнение VLAN |
 | `core/field_registry.py` | Field Registry — реестр полей, алиасов, валидация |
 
 ### 10.4 NetBox
@@ -1200,7 +1201,8 @@ network_collector/
 │   │   ├── mac.py
 │   │   ├── lldp.py
 │   │   ├── inventory.py
-│   │   └── sync.py
+│   │   ├── sync.py
+│   │   └── vlan.py          # VlanSet, parse_vlan_range
 │   └── pipeline/            # Pipeline система
 │       ├── models.py        # Pipeline, PipelineStep
 │       └── executor.py      # PipelineExecutor

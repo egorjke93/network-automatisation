@@ -716,25 +716,39 @@ sync:
 | **tagged (trunk)** | native_vlan | Список разрешённых VLAN |
 | **tagged-all** | native_vlan | Не синхронизируется (все разрешены) |
 
+**Что синхронизируется:**
+
+| Сценарий | Действие |
+|----------|----------|
+| VLAN добавлен на порт | Добавляется в NetBox |
+| VLAN удалён с порта | Удаляется из NetBox |
+| VLAN изменился | Обновляется |
+| access → trunk | mode меняется, tagged_vlans добавляются |
+| trunk → access | mode меняется, tagged_vlans очищаются |
+
 **Важные моменты:**
 
 1. **VLAN должен существовать в NetBox** — если VLAN не найден, пропускается без ошибки
-2. **Поиск по сайту** — VLAN ищется в сайте устройства для избежания конфликтов
-3. **Кэширование** — VLAN кэшируются для производительности
+2. **Поиск по сайту** — VLAN ищется в сайте устройства (конвертируется в slug)
+3. **Batch загрузка** — все VLAN сайта загружаются одним запросом для производительности
 4. **Парсинг диапазонов** — "10,20,30-50" преобразуется в [10,20,30,31..50]
+5. **VlanSet** — используется для сравнения множеств VLAN (core/domain/vlan.py)
 
-**Примеры:**
+**Примеры вывода:**
 
 ```bash
 # Dry-run с VLAN sync
-python -m network_collector sync-netbox --interfaces --dry-run
+python -m network_collector sync-netbox --interfaces --dry-run -v
 
-# В выводе будут показаны изменения VLAN:
-# UPDATE: Gi0/1 [untagged_vlan: 10]
-# UPDATE: Gi0/2 [tagged_vlans: [10,20,30]]
+# В выводе показываются конкретные изменения:
+# UPDATE: Gi0/1 (untagged_vlan: 10 → 20)
+# UPDATE: Gi0/2 (tagged_vlans: +[30, 40], -[25])    # добавлено 30,40; удалено 25
+# UPDATE: Gi0/3 (tagged_vlans: -[10, 20, 30])       # очищено при смене на access
 ```
 
-**Тесты:** 19 тестов в `tests/test_netbox/test_sync_interfaces_vlan.py`
+**Тесты:**
+- 19 тестов в `tests/test_netbox/test_sync_interfaces_vlan.py`
+- 51 тест в `tests/test_core/test_domain/test_vlan.py`
 
 ### 4.9 Порядок выполнения --sync-all
 

@@ -378,25 +378,29 @@ class InterfacesSyncMixin:
                                 f"  {nb_interface.name}: VLANs {not_found_vids} не найдены в NetBox"
                             )
 
-                    # Получаем текущие tagged_vlans из NetBox
-                    current_vlan_ids = set()
-                    current_vlan_vids = set()
-                    if nb_interface.tagged_vlans:
-                        current_vlan_ids = {v.id for v in nb_interface.tagged_vlans}
-                        current_vlan_vids = {v.vid for v in nb_interface.tagged_vlans}
+                    # Используем VlanSet для сравнения
+                    current = VlanSet.from_vlan_objects(nb_interface.tagged_vlans)
+                    target = VlanSet.from_ids(matched_vids)
 
-                    # Сравниваем множества (порядок не важен)
-                    target_vlan_ids_set = set(target_vlan_ids)
-                    if target_vlan_ids_set != current_vlan_ids:
-                        updates["tagged_vlans"] = sorted(target_vlan_ids_set)
-                        actual_changes.append(f"tagged_vlans: {sorted(current_vlan_vids)} → {sorted(matched_vids)}")
+                    if current != target:
+                        updates["tagged_vlans"] = sorted(target_vlan_ids)
+                        # Показываем что именно изменилось
+                        added = target.added(current)
+                        removed = target.removed(current)
+                        parts = []
+                        if added:
+                            parts.append(f"+{sorted(added)}")
+                        if removed:
+                            parts.append(f"-{sorted(removed)}")
+                        change_detail = ", ".join(parts) if parts else "изменено"
+                        actual_changes.append(f"tagged_vlans: {change_detail}")
 
             elif intf.mode != "tagged":
                 # Если mode не tagged — очищаем tagged_vlans
-                if nb_interface.tagged_vlans:
-                    current_vlan_vids = sorted([v.vid for v in nb_interface.tagged_vlans])
+                current = VlanSet.from_vlan_objects(nb_interface.tagged_vlans)
+                if current:
                     updates["tagged_vlans"] = []
-                    actual_changes.append(f"tagged_vlans: {current_vlan_vids} → []")
+                    actual_changes.append(f"tagged_vlans: -{current.sorted_list}")
 
         if intf.lag:
             device_id = getattr(nb_interface.device, 'id', None) if nb_interface.device else None
