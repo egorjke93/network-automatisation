@@ -179,7 +179,15 @@ class DevicesSyncMixin:
 
             inventory_names.add(name)
 
+            # Ищем устройство сначала по имени, потом по IP
             existing = self.client.get_device_by_name(name)
+            if not existing and ip_address:
+                # Fallback: ищем по IP если имя похоже на IP-адрес
+                existing = self.client.get_device_by_ip(ip_address)
+                if existing:
+                    logger.info(f"Устройство найдено по IP {ip_address}: {existing.name}")
+                    # Используем имя из NetBox для дальнейшей работы
+                    name = existing.name
             if existing:
                 if update_existing:
                     updated = self._update_device(

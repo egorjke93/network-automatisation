@@ -51,6 +51,21 @@ class InterfacesSyncMixin:
 
         device = self.client.get_device_by_name(device_name)
         if not device:
+            # Fallback: если device_name похоже на IP, ищем устройство по IP
+            device_ip = None
+            if interfaces:
+                # Пытаемся получить device_ip из первого интерфейса
+                first_intf = interfaces[0] if isinstance(interfaces, list) else None
+                if first_intf:
+                    device_ip = first_intf.get("device_ip") if isinstance(first_intf, dict) else getattr(first_intf, "device_ip", None)
+            # Или если device_name выглядит как IP
+            if not device_ip and device_name and device_name.replace(".", "").isdigit():
+                device_ip = device_name
+            if device_ip:
+                device = self.client.get_device_by_ip(device_ip)
+                if device:
+                    logger.info(f"Устройство найдено по IP {device_ip}: {device.name}")
+        if not device:
             logger.error(f"Устройство не найдено в NetBox: {device_name}")
             stats["failed"] = 1
             stats["errors"] = [f"Device not found in NetBox: {device_name}"]
