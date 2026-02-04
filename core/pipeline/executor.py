@@ -316,7 +316,7 @@ class PipelineExecutor:
 
         # LLDP/CDP имеет параметр protocol
         if target == "lldp":
-            options.setdefault("protocol", "lldp")
+            options.setdefault("protocol", "both")  # По умолчанию оба протокола
         elif target == "cdp":
             options["protocol"] = "cdp"
             collector_class = LLDPCollector
@@ -437,6 +437,8 @@ class PipelineExecutor:
             devices_with_errors = [d for d in data if d.get("_error")]
             error_count = len(devices_with_errors)
 
+            # ВАЖНО: cleanup для devices требует tenant для безопасности (как в CLI)
+            # В pipeline пока не поддерживаем cleanup для devices
             result = sync.sync_devices_from_inventory(data, site=site, role=role)
 
             # Добавляем предупреждение о устройствах с ошибками сбора
@@ -464,7 +466,9 @@ class PipelineExecutor:
             all_details = {"create": [], "update": [], "delete": [], "skip": []}
 
             for hostname, interfaces in by_device.items():
-                sync_result = sync.sync_interfaces(hostname, interfaces)
+                sync_result = sync.sync_interfaces(
+                    hostname, interfaces, cleanup=options.get("cleanup", False)
+                )
                 total_created += sync_result.get("created", 0)
                 total_updated += sync_result.get("updated", 0)
                 total_skipped += sync_result.get("skipped", 0)
@@ -495,7 +499,10 @@ class PipelineExecutor:
             if not lldp_data:
                 # Пробуем cdp
                 lldp_data = self._context["collected_data"].get("cdp", {}).get("data", [])
-            result = sync.sync_cables_from_lldp(lldp_data)
+            result = sync.sync_cables_from_lldp(
+                lldp_data,
+                cleanup=options.get("cleanup", False),
+            )
 
         elif target == "inventory":
             # Group by device

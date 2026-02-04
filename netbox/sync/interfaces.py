@@ -315,13 +315,16 @@ class InterfacesSyncMixin:
             f"tagged_vlans={intf.tagged_vlans!r}"
         )
 
-        if sync_cfg.is_field_enabled("mode") and intf.mode:
+        if sync_cfg.is_field_enabled("mode"):
             current_mode = getattr(nb_interface.mode, 'value', None) if nb_interface.mode else None
-            if intf.mode != current_mode:
+            if intf.mode and intf.mode != current_mode:
+                # Устанавливаем новый mode
                 updates["mode"] = intf.mode
                 actual_changes.append(f"mode: {current_mode} → {intf.mode}")
-        elif sync_cfg.is_field_enabled("mode") and not intf.mode:
-            logger.debug(f"  {nb_interface.name}: mode пустой, пропускаем синхронизацию mode")
+            elif not intf.mode and current_mode:
+                # Порт без switchport настроек (например shutdown) — очищаем mode в NetBox
+                updates["mode"] = ""
+                actual_changes.append(f"mode: {current_mode} → None")
 
         # Sync untagged_vlan (access_vlan для access, native_vlan для trunk)
         sync_vlans_enabled = sync_cfg.get_option("sync_vlans", False)

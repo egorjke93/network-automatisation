@@ -585,3 +585,132 @@ class TestTaggedVlansSync:
         if sync.client.update_interface.called:
             call_kwargs = sync.client.update_interface.call_args[1]
             assert "tagged_vlans" not in call_kwargs
+
+
+class TestModeClearOnShutdown:
+    """Тесты очищения mode для shutdown портов."""
+
+    @pytest.fixture
+    def mock_sync_cfg(self):
+        """Config со всеми включёнными полями."""
+        cfg = MagicMock()
+        cfg.is_field_enabled.return_value = True
+        cfg.get_option.side_effect = lambda key, default=None: {
+            "sync_vlans": True,
+            "auto_detect_type": False,
+            "sync_mac_only_with_ip": False,
+            "enabled_mode": "admin",
+        }.get(key, default)
+        return cfg
+
+    def test_empty_mode_clears_netbox_mode(self, mock_sync_cfg):
+        """Если mode на устройстве пустой, очищаем mode в NetBox."""
+        from network_collector.netbox.sync.interfaces import InterfacesSyncMixin
+
+        sync = MagicMock(spec=InterfacesSyncMixin)
+        sync.dry_run = False
+        sync.client = MagicMock()
+
+        # Shutdown интерфейс — mode пустой
+        intf = MockInterface(
+            name="Gi0/1",
+            status="disabled",
+            mode="",  # Пустой mode для shutdown порта
+        )
+
+        mock_device = MagicMock()
+        mock_device.site = None
+
+        # В NetBox mode был tagged-all
+        nb_interface = MockNBInterface(
+            id=1,
+            name="Gi0/1",
+            mode="tagged-all",
+            device=mock_device,
+        )
+
+        with patch("network_collector.netbox.sync.interfaces.get_sync_config", return_value=mock_sync_cfg):
+            result = InterfacesSyncMixin._update_interface(sync, nb_interface, intf)
+
+        # Должен очистить mode
+        sync.client.update_interface.assert_called_once()
+        call_kwargs = sync.client.update_interface.call_args[1]
+        assert "mode" in call_kwargs
+        assert call_kwargs["mode"] == ""
+
+    def test_mode_not_cleared_if_same(self, mock_sync_cfg):
+        """Если mode одинаковый — не обновляем."""
+        from network_collector.netbox.sync.interfaces import InterfacesSyncMixin
+
+        sync = MagicMock(spec=InterfacesSyncMixin)
+        sync.dry_run = False
+        sync.client = MagicMock()
+
+        intf = MockInterface(
+            name="Gi0/1",
+            status="up",
+            mode="access",
+        )
+
+        mock_device = MagicMock()
+        mock_device.site = None
+
+        nb_interface = MockNBInterface(
+            id=1,
+            name="Gi0/1",
+            mode="access",  # Тот же mode
+            device=mock_device,
+        )
+
+        with patch("network_collector.netbox.sync.interfaces.get_sync_config", return_value=mock_sync_cfg):
+            result = InterfacesSyncMixin._update_interface(sync, nb_interface, intf)
+
+        # mode не должен быть в updates
+        if sync.client.update_interface.called:
+            call_kwargs = sync.client.update_interface.call_args[1]
+            assert "mode" not in call_kwargs
+
+    def test_shutdown_port_clears_vlans_with_empty_mode(self, mock_sync_cfg):
+        """Shutdown порт без mode очищает tagged_vlans."""
+        from network_collector.netbox.sync.interfaces import InterfacesSyncMixin
+
+        sync = MagicMock(spec=InterfacesSyncMixin)
+        sync.dry_run = False
+        sync.client = MagicMock()
+        sync._get_vlan_by_vid = MagicMock(return_value=None)
+
+        # Shutdown интерфейс — mode пустой
+        intf = MockInterface(
+            name="Gi0/1",
+            status="disabled",
+            mode="",  # Нет mode
+            tagged_vlans="",  # Нет vlans
+        )
+
+        mock_device = MagicMock()
+        mock_device.site = MagicMock()
+        mock_device.site.name = "Office"
+
+        # В NetBox были tagged_vlans
+        mock_vlan_100 = MagicMock()
+        mock_vlan_100.vid = 100
+        existing_tagged = [mock_vlan_100]
+
+        nb_interface = MockNBInterface(
+            id=1,
+            name="Gi0/1",
+            mode="tagged-all",  # Был trunk
+            device=mock_device,
+        )
+        nb_interface.tagged_vlans = existing_tagged
+
+        with patch("network_collector.netbox.sync.interfaces.get_sync_config", return_value=mock_sync_cfg):
+            result = InterfacesSyncMixin._update_interface(sync, nb_interface, intf)
+
+        sync.client.update_interface.assert_called_once()
+        call_kwargs = sync.client.update_interface.call_args[1]
+        # Должен очистить mode и tagged_vlans
+        assert "mode" in call_kwargs
+        assert call_kwargs["mode"] == ""
+        assert "tagged_vlans" in call_kwargs
+        assert call_kwargs["tagged_vlans"] == []
