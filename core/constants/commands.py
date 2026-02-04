@@ -110,7 +110,19 @@ CUSTOM_TEXTFSM_TEMPLATES: Dict[tuple, str] = {
     # Port-Security (парсинг sticky MAC из show running-config)
     ("cisco_ios", "port-security"): "cisco_ios_port_security.textfsm",
     ("cisco_iosxe", "port-security"): "cisco_ios_port_security.textfsm",
-    # QTech примеры (раскомментируй и создай шаблоны если нужно)
-    # ("qtech", "show mac address-table"): "qtech_show_mac.textfsm",
-    # ("qtech", "show version"): "qtech_show_version.textfsm",
+    # QTech шаблоны
+    ("qtech", "show mac address-table"): "qtech_show_mac_address_table.textfsm",
+    ("qtech_qsw", "show mac address-table"): "qtech_show_mac_address_table.textfsm",
+    ("qtech", "show version"): "qtech_show_version.textfsm",
+    ("qtech_qsw", "show version"): "qtech_show_version.textfsm",
+    ("qtech", "show interfaces"): "qtech_show_interface.textfsm",
+    ("qtech_qsw", "show interfaces"): "qtech_show_interface.textfsm",
+    ("qtech", "show lldp neighbors detail"): "qtech_show_lldp_neighbors_detail.textfsm",
+    ("qtech_qsw", "show lldp neighbors detail"): "qtech_show_lldp_neighbors_detail.textfsm",
+    ("qtech", "show interface status"): "qtech_show_interface_status.textfsm",
+    ("qtech_qsw", "show interface status"): "qtech_show_interface_status.textfsm",
+    ("qtech", "show interface switchport"): "qtech_show_interface_switchport.textfsm",
+    ("qtech_qsw", "show interface switchport"): "qtech_show_interface_switchport.textfsm",
+    ("qtech", "show interface transceiver"): "qtech_show_interface_transceiver.textfsm",
+    ("qtech_qsw", "show interface transceiver"): "qtech_show_interface_transceiver.textfsm",
 }
