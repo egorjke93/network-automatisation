@@ -120,12 +120,21 @@ class InterfacesSyncMixin:
             compare_fields=compare_fields,
         )
 
+        # Логируем статистику diff для диагностики
+        logger.debug(
+            f"Diff для {device_name}: to_create={len(diff.to_create)}, "
+            f"to_update={len(diff.to_update)}, to_delete={len(diff.to_delete)}, "
+            f"to_skip={len(diff.to_skip)}"
+        )
+
         for item in diff.to_create:
             intf = next((i for i in sorted_interfaces if i.name == item.name), None)
             if intf:
                 self._create_interface(device.id, intf)
                 stats["created"] += 1
                 details["create"].append({"name": item.name})
+            else:
+                logger.warning(f"Интерфейс {item.name} не найден в локальных данных")
 
         for item in diff.to_update:
             intf = next((i for i in sorted_interfaces if i.name == item.name), None)
@@ -143,12 +152,17 @@ class InterfacesSyncMixin:
             stats["deleted"] += 1
             details["delete"].append({"name": item.name})
 
-        stats["skipped"] = len(diff.to_skip)
+        stats["skipped"] += len(diff.to_skip)
+
+        # Добавляем статистику по локальным/remote интерфейсам
+        stats["local_count"] = len(sorted_interfaces)
+        stats["remote_count"] = len(existing)
 
         logger.info(
             f"Синхронизация интерфейсов {device_name}: "
             f"создано={stats['created']}, обновлено={stats['updated']}, "
-            f"удалено={stats['deleted']}, пропущено={stats['skipped']}"
+            f"удалено={stats['deleted']}, пропущено={stats['skipped']} "
+            f"(локальных={stats['local_count']}, в NetBox={stats['remote_count']})"
         )
 
         stats["details"] = details
