@@ -193,7 +193,7 @@ netbox/sync/
 
 **Mixins:**
 - `InterfacesSyncMixin` — sync_interfaces() + batch create/update/delete + VLAN sync
-- `CablesSyncMixin` — sync_cables_from_lldp()
+- `CablesSyncMixin` — sync_cables_from_lldp() + cleanup + дедупликация
 - `IPAddressesSyncMixin` — sync_ip_addresses() + batch create/delete
 - `DevicesSyncMixin` — create_device(), sync_devices_from_inventory()
 - `VLANsSyncMixin` — sync_vlans_from_interfaces() (создание VLAN из SVI)
@@ -212,6 +212,23 @@ Sync операции для interfaces, inventory и IP используют **
        ↓ (при ошибке)
     Fallback → Поштучные операции
 ```
+
+**Cable Sync — отличия от других sync-операций:**
+
+`CablesSyncMixin` работает принципиально иначе, чем interfaces/inventory/IP:
+
+| Аспект | Interfaces/Inventory/IP | Cables |
+|--------|------------------------|--------|
+| API вызовы | Batch (bulk create/update/delete) | Поштучно |
+| Сравнение | SyncComparator → SyncDiff | Проверка `interface.cable` |
+| Источник | Коллектор (1 устройство) | LLDP (2 устройства на кабель) |
+
+Ключевые особенности cable sync:
+- **Поиск соседа** — 4 стратегии по `neighbor_type`: hostname → IP → MAC
+- **Дедупликация** — `seen_cables` set (LLDP видит кабель с обеих сторон)
+- **LAG-пропуск** — кабели на LAG интерфейсы не создаются
+- **skip_unknown** — пропуск соседей без идентификационных данных
+- **Cleanup защита** — кабель удаляется только если ОБА устройства в LLDP-скане
 
 ### 2.5 Export Layer (exporters/*.py)
 

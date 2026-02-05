@@ -25,6 +25,7 @@
 8. [Как работает to_dict() и очистка полей](#как-работает-to_dict-и-очистка-полей)
 9. [Примеры кода с объяснениями](#примеры-кода-с-объяснениями)
 10. [Batch API — Оптимизация производительности](#batch-api--оптимизация-производительности)
+11. [Sync Cables — Синхронизация кабелей](#sync-cables--синхронизация-кабелей)
 
 ---
 
@@ -2128,6 +2129,203 @@ def _batch_create_interfaces(self, device_id, to_create, interfaces, stats, deta
 
 ---
 
+## Sync Cables — Синхронизация кабелей
+
+> **Файл:** `netbox/sync/cables.py`
+> **Mixin:** `CablesSyncMixin`
+
+### Зачем нужна синхронизация кабелей?
+
+LLDP/CDP — протоколы обнаружения соседей. Каждый свич видит, кто подключён к его портам.
+Из этих данных можно построить **физическую топологию** сети в NetBox — создать кабели
+между интерфейсами.
+
+### Отличие от interfaces/inventory
+
+Кабели работают принципиально иначе, чем остальные sync-операции:
+
+| Аспект | Interfaces/Inventory/IP | Cables |
+|--------|------------------------|--------|
+| API вызовы | **Batch** (один запрос на все) | **Поштучно** (каждый кабель отдельно) |
+| Сравнение | SyncComparator → SyncDiff | Проверка `interface.cable` |
+| Источник данных | Коллектор (show interfaces) | LLDP/CDP (show lldp neighbors) |
+| Два устройства | Одно устройство | Два устройства на концах кабеля |
+
+**Почему не batch?** Каждый кабель связывает два устройства, требует проверки обоих интерфейсов,
+поиска соседа по нескольким стратегиям. Это не подходит под паттерн "собрать всё → отправить одним запросом".
+
+### Алгоритм sync_cables_from_lldp
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  sync_cables_from_lldp(lldp_data, skip_unknown, cleanup)       │
+│                                                                  │
+│  1. Создаём seen_cables = set()  (для дедупликации)             │
+│  2. Собираем lldp_devices = set()  (для cleanup)               │
+│                                                                  │
+│  3. for entry in lldp_data:                                     │
+│     ├─ skip_unknown? → пропуск                                  │
+│     ├─ _find_device(local) → устройство в NetBox                │
+│     ├─ _find_interface(device_id, local_intf) → интерфейс       │
+│     ├─ _find_neighbor_device(entry) → 4 стратегии поиска        │
+│     ├─ _find_interface(neighbor_id, remote_port) → интерфейс    │
+│     ├─ LAG check → пропуск если type == "lag"                   │
+│     ├─ _create_cable(local, remote) → "created"/"exists"/"error"│
+│     └─ seen_cables дедупликация → статистика                    │
+│                                                                  │
+│  4. if cleanup:                                                  │
+│     └─ _cleanup_cables(neighbors, lldp_devices)                 │
+│        ├─ valid_endpoints из LLDP                               │
+│        ├─ get_cables из NetBox                                  │
+│        ├─ Защита: удаляем только если ОБА устройства в скане   │
+│        └─ _delete_cable(cable)                                  │
+│                                                                  │
+│  5. return stats + details                                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Поиск соседа — 4 стратегии
+
+Метод `_find_neighbor_device(entry)` определяет стратегию по `neighbor_type`
+(устанавливается в Domain Layer — `LLDPNormalizer.determine_neighbor_type()`):
+
+```python
+# neighbor_type определяется по данным LLDP:
+# - "hostname" → System Name передан (надёжно)
+# - "mac"      → только Chassis ID (MAC) доступен
+# - "ip"       → только Management IP доступен
+# - "unknown"  → ничего полезного нет
+
+if neighbor_type == "hostname":
+    # 1. hostname (без домена) → 2. IP → 3. MAC
+    device = self._find_device(clean_hostname)
+    if not device and ip:
+        device = self.client.get_device_by_ip(ip)
+    if not device and mac:
+        device = self._find_device_by_mac(mac)
+
+elif neighbor_type == "mac":
+    # 1. MAC → 2. IP
+    device = self._find_device_by_mac(mac)
+    if not device and ip:
+        device = self.client.get_device_by_ip(ip)
+
+elif neighbor_type == "ip":
+    # 1. IP → 2. MAC
+    device = self.client.get_device_by_ip(ip)
+    if not device and mac:
+        device = self._find_device_by_mac(mac)
+
+else:  # unknown
+    # Пробуем всё: IP → MAC
+    ...
+```
+
+### Дедупликация — зачем и как
+
+LLDP работает двусторонне. Если switch1 и switch2 соединены:
+
+```
+LLDP от switch1: local=Gi0/1, remote=switch2:Gi0/2  (запись 1)
+LLDP от switch2: local=Gi0/2, remote=switch1:Gi0/1  (запись 2)
+```
+
+Это **один кабель**, но **две LLDP-записи**. Без дедупликации:
+- В dry_run: `created: 2` вместо `created: 1`
+- В реальном режиме: первый создаёт, второй → "exists"
+
+Решение — `seen_cables` set с **сортированными** ключами:
+
+```python
+# Запись 1: cable_key = sorted(["switch1:Gi0/1", "switch2:Gi0/2"])
+#         = ("switch1:Gi0/1", "switch2:Gi0/2")
+# Запись 2: cable_key = sorted(["switch2:Gi0/2", "switch1:Gi0/1"])
+#         = ("switch1:Gi0/1", "switch2:Gi0/2")  ← ТОТ ЖЕ КЛЮЧ
+```
+
+### Cleanup — защита от удаления чужих кабелей
+
+Cleanup удаляет кабели из NetBox, которых нет в текущих LLDP данных.
+Но есть проблема: если мы сканировали только 10 свичей из 50, нельзя удалять
+кабели к устройствам, которые мы не сканировали.
+
+**Правило:** кабель удаляется **только если ОБА устройства** на его концах присутствуют в LLDP-скане.
+
+```
+Пример 1: switch1 ↔ switch2 (оба в скане)
+  Кабель не в LLDP → УДАЛЯЕМ (оба устройства в скане, можем быть уверены)
+
+Пример 2: switch1 ↔ router1 (router1 НЕ в скане)
+  Кабель не в LLDP → НЕ УДАЛЯЕМ (не знаем топологию router1)
+```
+
+Алгоритм:
+
+```python
+# 1. Строим valid_endpoints из LLDP (нормализованные, сортированные)
+valid_endpoints = set()
+for entry in lldp_neighbors:
+    endpoints = tuple(sorted(["switch1:Gi0/1", "switch2:Gi0/2"]))
+    valid_endpoints.add(endpoints)
+
+# 2. Для каждого устройства в скане → получаем кабели из NetBox
+for device_name in lldp_devices:
+    cables = self.client.get_cables(device_id=device.id)
+
+    for cable in cables:
+        cable_endpoints = get_cable_endpoints(cable)
+
+        if cable_endpoints not in valid_endpoints:
+            # 3. Проверка: ОБА конца в нашем скане?
+            endpoint_devices = {ep.split(":")[0] for ep in cable_endpoints}
+            if endpoint_devices.issubset(normalized_lldp_devices):
+                self._delete_cable(cable)  # Безопасно удалять
+```
+
+### LAG-пропуск
+
+LLDP может показать Port-Channel (LAG) как соседский интерфейс. Но физический кабель
+подключён к конкретному порту, а не к LAG. Поэтому кабели на LAG-интерфейсы пропускаются:
+
+```python
+if local_intf_type == "lag" or remote_intf_type == "lag":
+    stats["skipped"] += 1
+    continue
+```
+
+### Проверка существования кабеля
+
+В отличие от старого кода, проверка делается через атрибут `interface.cable`,
+а не через отдельный API-запрос `get_cable_by_interfaces()`:
+
+```python
+# Старый код (устаревший):
+# existing = self.client.get_cable_by_interfaces(interface_a.id, interface_b.id)
+
+# Актуальный код:
+if interface_a.cable or interface_b.cable:
+    return "exists"  # На одном из интерфейсов уже есть кабель
+```
+
+### Пример полного цикла
+
+```
+Входные данные (LLDP, protocol=both):
+  switch1:Gi0/1 → switch2:Gi0/2 (hostname, MAC, IP)
+  switch1:Gi0/2 → switch3:Gi0/1 (hostname)
+  switch2:Gi0/2 → switch1:Gi0/1 (hostname)  ← дубль!
+  switch1:Po1   → switch2:Po1   (LAG)       ← пропуск
+
+Результат:
+  created: 2       (switch1↔switch2, switch1↔switch3)
+  already_exists: 0
+  skipped: 2       (LAG + дубль не считается)
+  failed: 0
+  deleted: 0       (cleanup не включён)
+```
+
+---
+
 ## Резюме
 
 ### Ключевые концепции
@@ -2141,6 +2339,7 @@ def _batch_create_interfaces(self, device_id, to_create, interfaces, stats, deta
 7. **Collector** — сбор данных с устройств по SSH
 8. **SyncComparator** — сравнение local vs remote данных
 9. **Batch API** — пакетные операции для ускорения sync (bulk create/update/delete)
+10. **Cable Sync** — поштучная синхронизация кабелей из LLDP с дедупликацией и cleanup
 
 ### Поток данных
 
@@ -2156,6 +2355,7 @@ def _batch_create_interfaces(self, device_id, to_create, interfaces, stats, deta
 | `core/pipeline/executor.py` | PipelineExecutor, run(), _execute_* |
 | `netbox/sync/base.py` | SyncBase, _find_*, _get_or_create_* |
 | `netbox/sync/interfaces.py` | InterfacesSyncMixin, batch create/update/delete, _build_*_data |
+| `netbox/sync/cables.py` | CablesSyncMixin, _find_neighbor_device, _cleanup_cables, дедупликация |
 | `netbox/sync/inventory.py` | InventorySyncMixin, batch create/update/delete |
 | `netbox/sync/ip_addresses.py` | IPAddressesSyncMixin, batch create/delete |
 | `netbox/sync/main.py` | NetBoxSync (множественное наследование) |
