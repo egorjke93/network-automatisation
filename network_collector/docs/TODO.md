@@ -619,6 +619,48 @@ collect_devices → sync_devices → collect_interfaces → sync_interfaces → 
 
 ---
 
+## Оптимизация производительности (Февраль 2026)
+
+### Batch API для синхронизации ✅ ВЫПОЛНЕНО
+
+**Проблема:** Pipeline на 22 устройства выполнялся ~30 минут. Sync фаза выполнялась последовательно —
+по одному API-вызову на каждый интерфейс/inventory/IP.
+
+**Решение:** Переход на batch API (pynetbox bulk create/update/delete):
+
+| Компонент | Файл | Изменение |
+|-----------|------|-----------|
+| Client bulk interfaces | `netbox/client/interfaces.py` | +3 метода: `bulk_create/update/delete_interfaces` |
+| Client bulk inventory | `netbox/client/inventory.py` | +3 метода: `bulk_create/update/delete_inventory_items` |
+| Client bulk IP | `netbox/client/ip_addresses.py` | +3 метода: `bulk_create/update/delete_ip_addresses` |
+| Batch sync interfaces | `netbox/sync/interfaces.py` | Рефакторинг на batch create/update/delete |
+| Batch sync inventory | `netbox/sync/inventory.py` | Рефакторинг на batch create/update/delete |
+| Batch sync IP | `netbox/sync/ip_addresses.py` | Рефакторинг на batch create/update/delete |
+| Параллелизм collect | `config.yaml` | `max_workers: 5` → `10` |
+| Тесты | `tests/test_netbox/test_bulk_operations.py` | 32 теста |
+
+**Архитектура batch sync:**
+```python
+# Было: по одному API-вызову на каждый интерфейс
+for item in diff.to_create:
+    self._create_interface(device.id, intf)  # 1 API call
+
+# Стало: один bulk-вызов на все интерфейсы
+create_batch = [self._build_create_data(device.id, intf) for intf in ...]
+self.client.bulk_create_interfaces(create_batch)  # 1 API call
+```
+
+**Безопасность:**
+- Fallback: если bulk-вызов падает → автоматический переход на поштучные операции
+- dry-run: batch пропускает API-вызовы, логирует как раньше
+- Обратная совместимость: старые методы (`create_interface`, `update_interface`) остаются
+
+**Ожидаемое ускорение:** 3-5x для sync фазы (22 устройства × ~48 портов):
+- До: 22 × ~100 API calls × ~100ms = ~3.5 мин (только interfaces)
+- После: 22 × ~3 API calls (bulk) + MAC = ~1 мин
+
+---
+
 ## Bug Fixes (Февраль 2026)
 
 ### Pipeline Cleanup Options Fix ✅
@@ -748,7 +790,7 @@ if target == "lldp":
 |---------|----------|
 | Python файлов | ~90 |
 | Строк кода | ~17,000 |
-| Тестов | 1497+ |
+| Тестов | 1533+ |
 | CLI команд | 11 |
 | API endpoints | 13 |
 | Vue компонентов | 14 |

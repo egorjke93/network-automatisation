@@ -113,6 +113,7 @@ class TestInterfaceVlanSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        sync._build_update_data = lambda nb_intf, intf: InterfacesSyncMixin._build_update_data(sync, nb_intf, intf)
 
         # VLAN 10 существует в NetBox с id=100
         mock_vlan = MockVLAN(id=100, vid=10, name="Users")
@@ -155,6 +156,7 @@ class TestInterfaceVlanSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        sync._build_update_data = lambda nb_intf, intf: InterfacesSyncMixin._build_update_data(sync, nb_intf, intf)
 
         # VLAN 1 (native) существует
         mock_vlan = MockVLAN(id=50, vid=1, name="default")
@@ -193,6 +195,7 @@ class TestInterfaceVlanSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        sync._build_update_data = lambda nb_intf, intf: InterfacesSyncMixin._build_update_data(sync, nb_intf, intf)
 
         # VLAN не найден
         sync._get_vlan_by_vid = MagicMock(return_value=None)
@@ -230,6 +233,7 @@ class TestInterfaceVlanSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        sync._build_update_data = lambda nb_intf, intf: InterfacesSyncMixin._build_update_data(sync, nb_intf, intf)
 
         # VLAN существует
         mock_vlan = MockVLAN(id=100, vid=10)
@@ -264,6 +268,7 @@ class TestInterfaceVlanSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        sync._build_update_data = lambda nb_intf, intf: InterfacesSyncMixin._build_update_data(sync, nb_intf, intf)
 
         # Интерфейс без VLAN (нет mode или access_vlan)
         intf = MockInterface(
@@ -301,6 +306,7 @@ class TestInterfaceVlanSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        sync._build_update_data = lambda nb_intf, intf: InterfacesSyncMixin._build_update_data(sync, nb_intf, intf)
 
         # VLAN 10 с id=100
         mock_vlan = MockVLAN(id=100, vid=10)
@@ -472,6 +478,7 @@ class TestTaggedVlansSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        sync._build_update_data = lambda nb_intf, intf: InterfacesSyncMixin._build_update_data(sync, nb_intf, intf)
 
         # VLANs 10, 20, 30 существуют в NetBox
         def get_vlan(vid, site):
@@ -515,6 +522,7 @@ class TestTaggedVlansSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        sync._build_update_data = lambda nb_intf, intf: InterfacesSyncMixin._build_update_data(sync, nb_intf, intf)
         sync._get_vlan_by_vid = MagicMock(return_value=MockVLAN(id=100, vid=10))
 
         # Access интерфейс
@@ -556,6 +564,7 @@ class TestTaggedVlansSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        sync._build_update_data = lambda nb_intf, intf: InterfacesSyncMixin._build_update_data(sync, nb_intf, intf)
         sync._get_vlan_by_vid = MagicMock(return_value=MockVLAN(id=10, vid=1))
 
         # tagged-all интерфейс
@@ -610,6 +619,7 @@ class TestModeClearOnShutdown:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        sync._build_update_data = lambda nb_intf, intf: InterfacesSyncMixin._build_update_data(sync, nb_intf, intf)
 
         # Shutdown интерфейс — mode пустой
         intf = MockInterface(
@@ -645,6 +655,7 @@ class TestModeClearOnShutdown:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        sync._build_update_data = lambda nb_intf, intf: InterfacesSyncMixin._build_update_data(sync, nb_intf, intf)
 
         intf = MockInterface(
             name="Gi0/1",
@@ -677,6 +688,7 @@ class TestModeClearOnShutdown:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        sync._build_update_data = lambda nb_intf, intf: InterfacesSyncMixin._build_update_data(sync, nb_intf, intf)
         sync._get_vlan_by_vid = MagicMock(return_value=None)
 
         # Shutdown интерфейс — mode пустой
