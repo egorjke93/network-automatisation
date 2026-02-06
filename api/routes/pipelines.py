@@ -54,8 +54,8 @@ def _load_pipelines() -> List[Pipeline]:
             try:
                 pipeline = Pipeline.from_yaml(str(yaml_file))
                 pipelines.append(pipeline)
-            except Exception:
-                pass  # Пропускаем невалидные файлы
+            except Exception as e:
+                logger.warning(f"Ошибка загрузки pipeline {yaml_file.name}: {e}")
     return pipelines
 
 

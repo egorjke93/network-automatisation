@@ -412,8 +412,9 @@ class PipelineExecutor:
                 collected = self._context["collected_data"].get(collect_target, {})
                 data = collected.get("data", [])
             except Exception as e:
-                logger.error(f"Auto-collect {collect_target} failed: {e}")
-                return {"target": target, "dry_run": dry_run, "failed": True, "reason": str(e)}
+                raise RuntimeError(
+                    f"Auto-collect {collect_target} failed for sync {target}: {e}"
+                ) from e
 
         if not data:
             logger.warning(f"No {target} data to sync after collect")

@@ -341,7 +341,9 @@ class DevicesSyncMixin:
                 logger.info(f"Обновлено устройство: {device.name}")
 
             if need_primary_ip:
-                self._set_primary_ip(device, primary_ip)
+                ip_set = self._set_primary_ip(device, primary_ip)
+                if not ip_set:
+                    logger.warning(f"Primary IP {primary_ip} не установлен для {device.name}")
 
             return True
         except NetBoxError as e:

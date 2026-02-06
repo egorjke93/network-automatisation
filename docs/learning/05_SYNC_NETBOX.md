@@ -454,8 +454,18 @@ python -m network_collector sync-netbox --interfaces --dry-run
 ```python
 # netbox/sync/interfaces.py
 def _batch_create_interfaces(self, device_id, to_create, ...):
+    # Разделяем на LAG и остальные (LAG нужно создать первым!)
+    lag_items = [...]     # Port-channel
+    member_items = [...]  # Остальные (включая member'ов LAG)
+
+    # Фаза 1: LAG
+    _do_batch_create(device_id, lag_items)
+    # Фаза 2: member'ы (теперь get_interface_by_name найдёт LAG)
+    _do_batch_create(device_id, member_items)
+
+def _do_batch_create(self, device_id, items, ...):
     # Подготавливаем данные (это происходит ВСЕГДА)
-    for item in to_create:
+    for item, intf in items:
         data, mac = self._build_create_data(device_id, intf)
         create_batch.append(data)
 
@@ -612,18 +622,28 @@ diff = comparator.compare_interfaces(
 )
 ```
 
-### Шаг 5: Batch CREATE
+### Шаг 5: Batch CREATE (двухфазный для LAG)
+
+Создание интерфейсов разделено на две фазы, чтобы member-интерфейсы
+могли найти свой LAG по имени (он должен уже существовать в NetBox):
 
 ```python
-# Для каждого to_create: подготовить данные
-for item in diff.to_create:
-    data, mac = self._build_create_data(device.id, intf)
-    # data = {"device": 42, "name": "Gi0/25", "type": "1000base-t", "enabled": True, ...}
-    create_batch.append(data)
+# Фаза 1: сначала создаём LAG интерфейсы (Port-channel)
+lag_batch = [_build_create_data(device.id, intf) for intf in lag_interfaces]
+self.client.bulk_create_interfaces(lag_batch)
+# Теперь Port-channel1, Port-channel2 существуют в NetBox
 
-# Один HTTP-запрос на все новые интерфейсы
-created = self.client.bulk_create_interfaces(create_batch)
+# Фаза 2: создаём member и standalone интерфейсы
+# _build_create_data() для Gi0/1 с lag="Port-channel1" вызывает
+# get_interface_by_name("Port-channel1") -- и НАХОДИТ его (создан в фазе 1)
+member_batch = [_build_create_data(device.id, intf) for intf in other_interfaces]
+self.client.bulk_create_interfaces(member_batch)
+# data = {"device": 42, "name": "Gi0/1", "lag": 123, ...}  ← lag ID!
 ```
+
+Без двухфазного создания member-интерфейсы не получали бы `lag` ID,
+потому что Port-channel ещё не существовал в NetBox на момент вызова
+`get_interface_by_name()`.
 
 ### Шаг 6: Batch UPDATE
 

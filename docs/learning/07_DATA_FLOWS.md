@@ -660,17 +660,17 @@ SyncItem(
 
 ```python
 def _batch_create_interfaces(self, device_id, to_create, sorted_interfaces, stats, details):
-    # 1. Собираем данные для batch
-    create_batch = []
-    for item in to_create:
-        intf = next(i for i in sorted_interfaces if i.name == item.name)
-        data, mac = self._build_create_data(device_id, intf)
-        create_batch.append(data)
+    # 1. Разделяем на LAG и остальные
+    lag_items = [item for item in to_create if item.name.startswith(("Port-channel", "Po"))]
+    member_items = [item for item in to_create if item not in lag_items]
 
-    # 2. Один API запрос вместо N
-    if not self.dry_run:
-        created = self.client.bulk_create_interfaces(create_batch)
-        # POST /api/dcim/interfaces/ с массивом данных
+    # 2. Фаза 1: создаём LAG (Port-channel) -- они должны существовать ДО member'ов
+    _do_batch_create(device_id, lag_items)
+    # Теперь Port-channel1 существует в NetBox с реальным ID
+
+    # 3. Фаза 2: создаём member'ы -- get_interface_by_name("Port-channel1") найдёт LAG
+    _do_batch_create(device_id, member_items)
+    # data = {"name": "Gi0/1", "lag": 123, ...}  ← lag ID из фазы 1
 ```
 
 Сравнение подходов:

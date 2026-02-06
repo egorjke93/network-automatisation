@@ -380,8 +380,9 @@ pynetbox использует lazy-loading: обращение к атрибут
 │    │ c) SyncComparator.compare_interfaces(local, remote)                 │   │
 │    │    → diff: to_create[], to_update[], to_delete[], to_skip[]        │   │
 │    │                                                                     │   │
-│    │ d) Batch create — _build_create_data() для каждого → 1 POST         │   │
-│    │    client.bulk_create_interfaces([{...}, {...}, ...])               │   │
+│    │ d) Batch create (двухфазный для LAG):                                │   │
+│    │    Фаза 1: LAG (Port-channel) → bulk_create_interfaces             │   │
+│    │    Фаза 2: Member интерфейсы (с lag ID) → bulk_create_interfaces   │   │
 │    │                                                                     │   │
 │    │ e) Batch update — _build_update_data() для каждого → 1 PATCH        │   │
 │    │    client.bulk_update_interfaces([{id:1,...}, {id:2,...}])          │   │

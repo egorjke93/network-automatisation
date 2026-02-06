@@ -131,9 +131,16 @@ class CablesSyncMixin:
                 stats["failed"] += 1
 
         if cleanup and lldp_devices:
-            deleted_details = self._cleanup_cables(neighbors, lldp_devices)
+            cleanup_result = self._cleanup_cables(neighbors, lldp_devices)
+            deleted_details = cleanup_result["deleted"]
             stats["deleted"] = len(deleted_details)
             details["delete"].extend(deleted_details)
+            if cleanup_result["failed_devices"] > 0:
+                stats["failed"] += cleanup_result["failed_devices"]
+                logger.warning(
+                    f"Cleanup кабелей: {cleanup_result['failed_devices']} "
+                    f"устройств пропущено из-за ошибок"
+                )
 
         logger.info(
             f"Синхронизация кабелей: создано={stats['created']}, "
@@ -147,13 +154,14 @@ class CablesSyncMixin:
         self: SyncBase,
         lldp_neighbors: List[LLDPNeighbor],
         lldp_devices: set,
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """Удаляет кабели из NetBox которых нет в LLDP данных.
 
         Returns:
-            List[Dict]: Список удалённых кабелей с деталями
+            Dict: {"deleted": List[Dict], "failed_devices": int}
         """
         deleted_details = []
+        failed_devices = 0
 
         def normalize_hostname(name: str) -> str:
             """Убирает домен из hostname (switch2.mylab.local -> switch2)."""
@@ -175,12 +183,14 @@ class CablesSyncMixin:
         for device_name in lldp_devices:
             device = self._find_device(device_name)
             if not device:
+                failed_devices += 1
                 continue
 
             try:
                 cables = self.client.get_cables(device_id=device.id)
             except Exception as e:
                 logger.error(f"Ошибка получения кабелей для {device_name}: {e}")
+                failed_devices += 1
                 continue
 
             for cable in cables:
@@ -208,7 +218,7 @@ class CablesSyncMixin:
                         self._delete_cable(cable)
                         deleted_details.append(cable_detail)
 
-        return deleted_details
+        return {"deleted": deleted_details, "failed_devices": failed_devices}
 
     def _delete_cable(self: SyncBase, cable) -> None:
         """Удаляет кабель из NetBox."""

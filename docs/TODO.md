@@ -558,7 +558,7 @@ sync:
 
 ## Что уже хорошо ✅
 
-- ✅ 1537+ тестов (хорошее покрытие)
+- ✅ 1545+ тестов (хорошее покрытие)
 - ✅ Структурированное JSON логирование
 - ✅ Domain Layer с нормализаторами
 - ✅ Pipeline система с транзакциями
@@ -691,6 +691,61 @@ def _find_interface(self, device_id, name):
 
 ## Bug Fixes (Февраль 2026)
 
+### LAG Member Interfaces Not Assigned in Batch Create ✅
+
+**Проблема:** При запуске pipeline LAG интерфейсы (Port-channel) создавались, но member-интерфейсы
+не привязывались к LAG. При повторном запуске sync отдельно — LAG назначался.
+
+**Причина:** `_batch_create_interfaces` создавал ВСЕ интерфейсы одним batch-запросом.
+Когда `_build_create_data()` для Gi0/1 вызывал `get_interface_by_name("Port-channel1")`,
+Port-channel1 ещё не существовал в NetBox (был в том же batch).
+
+**Решение:** Двухфазное создание:
+1. Фаза 1: создаём LAG интерфейсы (Port-channel/Po)
+2. Фаза 2: создаём member-интерфейсы (теперь `get_interface_by_name` находит LAG)
+
+**Файл:** `netbox/sync/interfaces.py`
+
+**Тесты:** 8 тестов в `tests/test_netbox/test_lag_batch_create.py`
+
+### Pipeline Auto-Collect Silent Failure Fix ✅
+
+**Проблема:** Если auto-collect упал при sync шаге, pipeline возвращал `{"failed": True}`
+как data, но `_execute_step` оборачивал это в `StepStatus.COMPLETED`. Шаг считался успешным.
+
+**Решение:** Вместо `return {"failed": True}` бросаем `RuntimeError`, которую ловит
+`_execute_step` и корректно ставит `StepStatus.FAILED`.
+
+**Файл:** `core/pipeline/executor.py`
+
+### Pipeline YAML Load Silent Error Fix ✅
+
+**Проблема:** `_load_pipelines()` в API при битом YAML файле делал `except: pass`.
+Pipeline пропадал молча без логирования.
+
+**Решение:** `except Exception as e: logger.warning(f"Ошибка загрузки pipeline {file}: {e}")`
+
+**Файл:** `api/routes/pipelines.py`
+
+### Cable Cleanup Stats Fix ✅
+
+**Проблема:** При cleanup кабелей, если `get_cables()` падал для устройства — устройство
+тихо пропускалось. Stats показывали "deleted=5" хотя часть устройств была пропущена.
+
+**Решение:** `_cleanup_cables` теперь считает `failed_devices` и пробрасывает в stats.
+Логирует warning о пропущенных устройствах.
+
+**Файл:** `netbox/sync/cables.py`
+
+### Primary IP Silent Failure Fix ✅
+
+**Проблема:** `_set_primary_ip()` мог вернуть `False` (IP не найден/ошибка), но
+caller в `_update_device()` игнорировал return value и возвращал `True`.
+
+**Решение:** Проверяется return value `_set_primary_ip()`, при неудаче — `logger.warning`.
+
+**Файл:** `netbox/sync/devices.py`
+
 ### Pipeline Cleanup Options Fix ✅
 
 **Проблема:** Pipeline не передавал `cleanup` опцию в sync методы.
@@ -818,7 +873,7 @@ if target == "lldp":
 |---------|----------|
 | Python файлов | ~90 |
 | Строк кода | ~17,000 |
-| Тестов | 1537+ |
+| Тестов | 1545+ |
 | CLI команд | 11 |
 | API endpoints | 13 |
 | Vue компонентов | 14 |
