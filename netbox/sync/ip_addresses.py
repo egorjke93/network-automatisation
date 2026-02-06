@@ -2,6 +2,7 @@
 Синхронизация IP-адресов с NetBox.
 
 Mixin класс для sync_ip_addresses и связанных методов.
+Использует batch API для оптимизации производительности.
 """
 
 import logging
@@ -28,6 +29,9 @@ class IPAddressesSyncMixin:
     ) -> Dict[str, int]:
         """
         Синхронизирует IP-адреса устройства с NetBox.
+
+        Использует batch API для create/delete.
+        При ошибке batch — fallback на поштучные операции.
 
         Args:
             device_name: Имя устройства в NetBox
@@ -66,62 +70,12 @@ class IPAddressesSyncMixin:
             cleanup=cleanup,
         )
 
-        for item in diff.to_create:
-            entry = next(
-                (e for e in entries if e.ip_address and e.ip_address.split("/")[0] == item.name),
-                None
-            )
-            if not entry:
-                continue
+        # === BATCH CREATE ===
+        self._batch_create_ip_addresses(
+            device, diff.to_create, entries, interfaces, stats, details
+        )
 
-            interface_name = entry.interface
-            ip_with_mask = entry.with_prefix
-
-            intf = self._find_interface(device.id, interface_name)
-            if not intf:
-                normalized_name = self._normalize_interface_name(interface_name)
-                for name, i in interfaces.items():
-                    if self._normalize_interface_name(name) == normalized_name:
-                        intf = i
-                        break
-
-            if not intf:
-                logger.warning(f"Интерфейс не найден: {device_name}:{interface_name}")
-                stats["failed"] += 1
-                continue
-
-            if self.dry_run:
-                logger.info(f"[DRY-RUN] Создание IP: {ip_with_mask} на {interface_name}")
-                stats["created"] += 1
-                details["create"].append({"address": ip_with_mask, "interface": interface_name})
-                continue
-
-            try:
-                extra_params = {}
-                if hasattr(device, 'tenant') and device.tenant:
-                    extra_params['tenant'] = device.tenant.id
-                if hasattr(intf, 'description') and intf.description:
-                    extra_params['description'] = intf.description
-
-                self.client.create_ip_address(
-                    address=ip_with_mask,
-                    interface_id=intf.id,
-                    status="active",
-                    **extra_params,
-                )
-                logger.info(f"Создан IP: {ip_with_mask} на {device_name}:{interface_name}")
-                stats["created"] += 1
-                details["create"].append({"address": ip_with_mask, "interface": interface_name})
-            except NetBoxValidationError as e:
-                logger.error(f"Ошибка валидации IP {ip_with_mask}: {format_error_for_log(e)}")
-                stats["failed"] += 1
-            except NetBoxError as e:
-                logger.error(f"Ошибка NetBox создания IP {ip_with_mask}: {format_error_for_log(e)}")
-                stats["failed"] += 1
-            except Exception as e:
-                logger.error(f"Неизвестная ошибка создания IP {ip_with_mask}: {e}")
-                stats["failed"] += 1
-
+        # Update — поштучно (т.к. может требовать пересоздание IP при смене маски)
         for item in diff.to_update:
             entry = next(
                 (e for e in entries if e.ip_address and e.ip_address.split("/")[0] == item.name),
@@ -144,16 +98,12 @@ class IPAddressesSyncMixin:
                     else:
                         stats["skipped"] += 1
 
-        for item in diff.to_delete:
-            address = str(item.remote_data.address) if hasattr(item.remote_data, 'address') else str(item.remote_data)
-            self._delete_ip_address(item.remote_data)
-            stats["deleted"] += 1
-            details["delete"].append({"address": address})
+        # === BATCH DELETE ===
+        self._batch_delete_ip_addresses(diff.to_delete, stats, details)
 
         stats["skipped"] += len(diff.to_skip)
 
         # Установка primary IP (работает и в dry_run)
-        # Перезагружаем device чтобы получить актуальное состояние primary_ip
         if device_ip:
             device = self.client.get_device_by_name(device_name)
             if device:
@@ -168,6 +118,132 @@ class IPAddressesSyncMixin:
         )
         stats["details"] = details
         return stats
+
+    # ==================== BATCH ОПЕРАЦИИ ====================
+
+    def _batch_create_ip_addresses(
+        self: SyncBase,
+        device,
+        to_create: list,
+        entries: list,
+        interfaces: dict,
+        stats: dict,
+        details: dict,
+    ) -> None:
+        """Batch создание IP-адресов."""
+        if not to_create:
+            return
+
+        # Собираем данные для batch create
+        create_batch = []  # (data_dict, ip_with_mask, interface_name)
+
+        for item in to_create:
+            entry = next(
+                (e for e in entries if e.ip_address and e.ip_address.split("/")[0] == item.name),
+                None
+            )
+            if not entry:
+                continue
+
+            interface_name = entry.interface
+            ip_with_mask = entry.with_prefix
+
+            intf = self._find_interface(device.id, interface_name)
+            if not intf:
+                normalized_name = self._normalize_interface_name(interface_name)
+                for name, i in interfaces.items():
+                    if self._normalize_interface_name(name) == normalized_name:
+                        intf = i
+                        break
+
+            if not intf:
+                logger.warning(f"Интерфейс не найден: {device.name}:{interface_name}")
+                stats["failed"] += 1
+                continue
+
+            if self.dry_run:
+                logger.info(f"[DRY-RUN] Создание IP: {ip_with_mask} на {interface_name}")
+                stats["created"] += 1
+                details["create"].append({"address": ip_with_mask, "interface": interface_name})
+                continue
+
+            # Подготавливаем данные для создания
+            data = {
+                "address": ip_with_mask,
+                "status": "active",
+                "assigned_object_type": "dcim.interface",
+                "assigned_object_id": intf.id,
+            }
+            if hasattr(device, 'tenant') and device.tenant:
+                data['tenant'] = device.tenant.id
+            if hasattr(intf, 'description') and intf.description:
+                data['description'] = intf.description
+
+            create_batch.append((data, ip_with_mask, interface_name))
+
+        if not create_batch or self.dry_run:
+            return
+
+        # Batch create с fallback
+        self._batch_with_fallback(
+            batch_data=[data for data, _, _ in create_batch],
+            item_names=[f"{ip} на {device.name}:{intf}" for _, ip, intf in create_batch],
+            bulk_fn=self.client.bulk_create_ip_addresses,
+            fallback_fn=lambda data, name: self.client.api.ipam.ip_addresses.create(data),
+            stats=stats, details=details,
+            operation="created", entity_name="IP",
+            detail_key="address",
+        )
+
+    def _batch_delete_ip_addresses(
+        self: SyncBase,
+        to_delete: list,
+        stats: dict,
+        details: dict,
+    ) -> None:
+        """Batch удаление IP-адресов."""
+        if not to_delete:
+            return
+
+        if self.dry_run:
+            for item in to_delete:
+                address = str(item.remote_data.address) if hasattr(item.remote_data, 'address') else str(item.remote_data)
+                logger.info(f"[DRY-RUN] Удаление IP: {address}")
+                stats["deleted"] += 1
+                details["delete"].append({"address": address})
+            return
+
+        # Собираем ID и адреса для удаления
+        delete_ids = []
+        delete_addresses = []
+        delete_items = []
+        for item in to_delete:
+            address = str(item.remote_data.address) if hasattr(item.remote_data, 'address') else str(item.remote_data)
+            if hasattr(item.remote_data, 'id'):
+                delete_ids.append(item.remote_data.id)
+                delete_addresses.append(address)
+                delete_items.append(item)
+
+        if not delete_ids:
+            return
+
+        self._batch_with_fallback(
+            batch_data=delete_ids,
+            item_names=delete_addresses,
+            bulk_fn=self.client.bulk_delete_ip_addresses,
+            fallback_fn=lambda item_id, name: self._delete_ip_address_by_id(item_id),
+            stats=stats, details=details,
+            operation="deleted", entity_name="IP",
+            detail_key="address",
+        )
+
+    # ==================== LEGACY (для fallback и update) ====================
+
+    def _delete_ip_address_by_id(self: SyncBase, ip_id: int) -> None:
+        """Удаляет IP-адрес по ID через API."""
+        ip_obj = self.client.api.ipam.ip_addresses.get(ip_id)
+        if ip_obj:
+            ip_obj.delete()
 
     def _delete_ip_address(self: SyncBase, ip_obj) -> None:
         """Удаляет IP-адрес из NetBox."""
@@ -198,7 +274,7 @@ class IPAddressesSyncMixin:
         prefix_change = next((c for c in changes if c.field == "prefix_length"), None)
         if prefix_change and entry:
             old_address = str(ip_obj.address)
-            new_address = entry.with_prefix  # IP с новой маской
+            new_address = entry.with_prefix
 
             if self.dry_run:
                 logger.info(
@@ -208,7 +284,6 @@ class IPAddressesSyncMixin:
                 return True
 
             try:
-                # Собираем данные для нового IP
                 new_ip_data = {
                     "address": new_address,
                     "status": "active",
@@ -221,11 +296,9 @@ class IPAddressesSyncMixin:
                 if hasattr(interface, 'description') and interface.description:
                     new_ip_data['description'] = interface.description
 
-                # Удаляем старый IP
                 ip_obj.delete()
                 logger.debug(f"Удалён старый IP: {old_address}")
 
-                # Создаём новый IP с правильной маской
                 new_ip = self.client.api.ipam.ip_addresses.create(new_ip_data)
                 logger.info(
                     f"Пересоздан IP: {old_address} → {new_address} "

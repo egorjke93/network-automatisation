@@ -9,7 +9,7 @@
 
 import re
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Callable
 
 from ..client import NetBoxClient
 from ...core.context import RunContext, get_current_context
@@ -301,6 +301,68 @@ class SyncBase:
             name,
             use_transliterate=True,
         )
+
+    # ==================== BATCH С FALLBACK ====================
+
+    def _batch_with_fallback(
+        self,
+        batch_data: list,
+        item_names: List[str],
+        bulk_fn: Callable,
+        fallback_fn: Callable,
+        stats: dict,
+        details: dict,
+        operation: str,
+        entity_name: str,
+        detail_key: str = "name",
+    ) -> Optional[list]:
+        """
+        Batch операция с автоматическим fallback на поштучную обработку.
+
+        При ошибке batch вызывает fallback_fn для каждого элемента отдельно.
+
+        Args:
+            batch_data: Данные для batch (list of dicts или list of ids)
+            item_names: Имена для логов (параллельный список)
+            bulk_fn: Batch функция — вызывается один раз на весь список
+            fallback_fn: Поштучная функция (data, name) -> None, может бросить Exception
+            stats: Статистика (modified in-place)
+            details: Детали (modified in-place)
+            operation: Ключ для stats/details ("created"/"deleted"/"updated")
+            entity_name: Название сущности для логов ("интерфейс"/"inventory"/"IP")
+            detail_key: Ключ для details dict ("name" или "address")
+
+        Returns:
+            Результат bulk_fn при успехе, None при fallback
+        """
+        if not batch_data:
+            return None
+
+        # Определяем ключ для details (created -> create, deleted -> delete, updated -> update)
+        detail_section = operation.rstrip("d").rstrip("e") + "e"  # created->create, deleted->delete
+
+        try:
+            result = bulk_fn(batch_data)
+            for name in item_names:
+                logger.info(f"{self._log_prefix()}{'Создан' if operation == 'created' else 'Удалён' if operation == 'deleted' else 'Обновлён'} {entity_name}: {name}")
+                stats[operation] = stats.get(operation, 0) + 1
+                details[detail_section].append({detail_key: name})
+            return result
+        except Exception as e:
+            logger.warning(
+                f"{self._log_prefix()}Batch {operation} {entity_name} не удался ({e}), "
+                f"fallback на поштучную обработку"
+            )
+            for data, name in zip(batch_data, item_names):
+                try:
+                    fallback_fn(data, name)
+                    logger.info(f"{self._log_prefix()}{'Создан' if operation == 'created' else 'Удалён' if operation == 'deleted' else 'Обновлён'} {entity_name}: {name}")
+                    stats[operation] = stats.get(operation, 0) + 1
+                    details[detail_section].append({detail_key: name})
+                except Exception as exc:
+                    logger.error(f"{self._log_prefix()}Ошибка {operation} {entity_name} {name}: {exc}")
+                    stats["failed"] = stats.get("failed", 0) + 1
+            return None
 
     # ==================== ПАРСИНГ ====================
     # Парсинг VLAN перенесён в core/domain/vlan.py (parse_vlan_range)

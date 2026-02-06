@@ -2,6 +2,7 @@
 Синхронизация inventory items с NetBox.
 
 Mixin класс для sync_inventory.
+Использует batch API для оптимизации производительности.
 """
 
 import logging
@@ -26,6 +27,9 @@ class InventorySyncMixin:
     ) -> Dict[str, int]:
         """
         Синхронизирует inventory items (модули, SFP, PSU) в NetBox.
+
+        Использует batch API для create/update/delete.
+        При ошибке batch — fallback на поштучные операции.
 
         Args:
             device_name: Имя устройства в NetBox
@@ -65,6 +69,10 @@ class InventorySyncMixin:
         # Отслеживаем обработанные имена
         processed_names = set()
 
+        # Собираем батчи для create/update
+        create_batch = []  # Список (data_dict, name, truncate_note) для bulk create
+        update_batch = []  # Список (existing_id, updates_dict, name, changes, truncate_note)
+
         for item in items:
             name = item.name.strip() if item.name else ""
             pid = item.pid.strip() if item.pid else ""
@@ -95,9 +103,12 @@ class InventorySyncMixin:
                 stats["skipped"] += 1
                 continue
 
+            truncate_note = f" [обрезано с '{original_name}']" if was_truncated else ""
+
             existing = self.client.get_inventory_item(device.id, name)
 
             if existing:
+                # Подготавливаем данные обновления
                 needs_update = False
                 updates = {}
 
@@ -111,83 +122,94 @@ class InventorySyncMixin:
                     updates["description"] = description
                     needs_update = True
                 if sync_cfg.is_field_enabled("manufacturer"):
-                    # existing.manufacturer может быть объект с name или None
                     existing_mfr = ""
                     if existing.manufacturer:
                         existing_mfr = getattr(existing.manufacturer, "name", str(existing.manufacturer))
-                    # Если manufacturer пустой - очищаем поле (убираем неверный дефолтный Cisco)
-                    # Если разный - обновляем
                     if manufacturer:
                         if existing_mfr.lower() != manufacturer.lower():
                             updates["manufacturer"] = manufacturer
                             needs_update = True
                     elif existing_mfr:
-                        # Очищаем manufacturer (был задан, но в данных пустой)
                         updates["manufacturer"] = None
                         needs_update = True
 
                 if needs_update:
                     changes = list(updates.keys())
-                    truncate_note = f" [обрезано с '{original_name}']" if was_truncated else ""
                     if self.dry_run:
                         logger.info(f"[DRY-RUN] Обновление inventory: {name}{truncate_note} ({changes})")
                         stats["updated"] += 1
                         details["update"].append({"name": name, "changes": changes})
                     else:
-                        try:
-                            self.client.update_inventory_item(existing.id, **updates)
-                            logger.info(f"Обновлён inventory: {name}{truncate_note} ({changes})")
-                            stats["updated"] += 1
-                            details["update"].append({"name": name, "changes": changes})
-                        except NetBoxError as e:
-                            logger.error(f"Ошибка NetBox обновления {name}: {format_error_for_log(e)}")
-                            stats["failed"] += 1
-                        except Exception as e:
-                            logger.error(f"Неизвестная ошибка обновления {name}: {e}")
-                            stats["failed"] += 1
+                        update_batch.append((existing.id, updates, name, changes, truncate_note))
                 else:
                     stats["skipped"] += 1
                 continue
 
-            truncate_note = f" [обрезано с '{original_name}']" if was_truncated else ""
-
+            # Новый item — подготавливаем данные создания
             if self.dry_run:
                 logger.info(f"[DRY-RUN] Создание inventory: {name}{truncate_note} (pid={pid}, serial={serial})")
                 stats["created"] += 1
                 details["create"].append({"name": name})
                 continue
 
+            kwargs = {"device": device.id, "name": name, "discovered": True}
+            if sync_cfg.is_field_enabled("part_id") and pid:
+                kwargs["part_id"] = pid
+            if sync_cfg.is_field_enabled("serial") and serial:
+                kwargs["serial"] = serial
+            if sync_cfg.is_field_enabled("description") and description:
+                kwargs["description"] = description
+            # Manufacturer для bulk create: резолвим ID заранее
+            if sync_cfg.is_field_enabled("manufacturer") and manufacturer:
+                mfr = self.client.api.dcim.manufacturers.get(slug=manufacturer.lower())
+                if not mfr:
+                    mfr = self.client.api.dcim.manufacturers.get(name=manufacturer)
+                if mfr:
+                    kwargs["manufacturer"] = mfr.id
+
+            create_batch.append((kwargs, name, truncate_note))
+
+        # === BATCH CREATE ===
+        if create_batch and not self.dry_run:
+            self._batch_with_fallback(
+                batch_data=[data for data, _, _ in create_batch],
+                item_names=[f"{name}{tn}" for _, name, tn in create_batch],
+                bulk_fn=self.client.bulk_create_inventory_items,
+                fallback_fn=lambda data, name: self.client.api.dcim.inventory_items.create(data),
+                stats=stats, details=details,
+                operation="created", entity_name="inventory",
+            )
+
+        # === BATCH UPDATE (специфичная логика — id внутри dict) ===
+        if update_batch and not self.dry_run:
+            batch_data = []
+            for existing_id, updates, name, changes, truncate_note in update_batch:
+                upd = dict(updates)
+                upd["id"] = existing_id
+                batch_data.append(upd)
+
             try:
-                kwargs = {}
-                if sync_cfg.is_field_enabled("part_id") and pid:
-                    kwargs["part_id"] = pid
-                if sync_cfg.is_field_enabled("serial") and serial:
-                    kwargs["serial"] = serial
-                if sync_cfg.is_field_enabled("description") and description:
-                    kwargs["description"] = description
-                if sync_cfg.is_field_enabled("manufacturer") and manufacturer:
-                    kwargs["manufacturer"] = manufacturer
-
-                self.client.create_inventory_item(
-                    device_id=device.id,
-                    name=name,
-                    **kwargs,
-                )
-                logger.info(f"Создан inventory: {name}{truncate_note}")
-                stats["created"] += 1
-                details["create"].append({"name": name})
-            except NetBoxValidationError as e:
-                logger.error(f"Ошибка валидации inventory {name}: {format_error_for_log(e)}")
-                stats["failed"] += 1
-            except NetBoxError as e:
-                logger.error(f"Ошибка NetBox создания inventory {name}: {format_error_for_log(e)}")
-                stats["failed"] += 1
+                self.client.bulk_update_inventory_items(batch_data)
+                for _, _, name, changes, truncate_note in update_batch:
+                    logger.info(f"Обновлён inventory: {name}{truncate_note} ({changes})")
+                    stats["updated"] += 1
+                    details["update"].append({"name": name, "changes": changes})
             except Exception as e:
-                logger.error(f"Неизвестная ошибка создания inventory {name}: {e}")
-                stats["failed"] += 1
+                logger.warning(f"Batch update inventory не удался ({e}), fallback на поштучное обновление")
+                for existing_id, updates, name, changes, truncate_note in update_batch:
+                    try:
+                        self.client.update_inventory_item(existing_id, **updates)
+                        logger.info(f"Обновлён inventory: {name}{truncate_note} ({changes})")
+                        stats["updated"] += 1
+                        details["update"].append({"name": name, "changes": changes})
+                    except Exception as exc:
+                        logger.error(f"Ошибка обновления inventory {name}: {exc}")
+                        stats["failed"] += 1
 
-        # Cleanup: удаляем лишние inventory items
+        # === BATCH DELETE (cleanup) ===
         if cleanup:
+            delete_ids = []
+            delete_names = []
             for nb_name, nb_item in existing_items.items():
                 if nb_name not in processed_names:
                     if self.dry_run:
@@ -195,14 +217,18 @@ class InventorySyncMixin:
                         stats["deleted"] += 1
                         details["delete"].append({"name": nb_name})
                     else:
-                        try:
-                            self.client.delete_inventory_item(nb_item.id)
-                            logger.info(f"Удалён inventory: {nb_name}")
-                            stats["deleted"] += 1
-                            details["delete"].append({"name": nb_name})
-                        except Exception as e:
-                            logger.error(f"Ошибка удаления inventory {nb_name}: {e}")
-                            stats["failed"] += 1
+                        delete_ids.append(nb_item.id)
+                        delete_names.append(nb_name)
+
+            if delete_ids and not self.dry_run:
+                self._batch_with_fallback(
+                    batch_data=delete_ids,
+                    item_names=delete_names,
+                    bulk_fn=self.client.bulk_delete_inventory_items,
+                    fallback_fn=lambda item_id, name: self.client.delete_inventory_item(item_id),
+                    stats=stats, details=details,
+                    operation="deleted", entity_name="inventory",
+                )
 
         logger.info(
             f"Синхронизация inventory {device_name}: "

@@ -150,8 +150,8 @@ class TestBulkClientInterfaces:
         assert len(result) == 2
         mixin.api.dcim.interfaces.update.assert_called_once_with(updates)
 
-    def test_bulk_delete_sends_id_dicts(self):
-        """bulk_delete отправляет список словарей с id."""
+    def test_bulk_delete_sends_id_list(self):
+        """bulk_delete передаёт список int ID в pynetbox."""
         from network_collector.netbox.client.interfaces import InterfacesMixin
         mixin = InterfacesMixin()
         mixin.api = Mock()
@@ -160,7 +160,7 @@ class TestBulkClientInterfaces:
 
         assert result is True
         mixin.api.dcim.interfaces.delete.assert_called_once_with(
-            [{"id": 10}, {"id": 20}, {"id": 30}]
+            [10, 20, 30]
         )
 
 

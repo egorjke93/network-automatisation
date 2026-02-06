@@ -76,6 +76,22 @@ class MockVLAN:
         self.name = name or f"VLAN{vid}"
 
 
+def bind_mixin_methods(mock_obj, mixin_class, method_names):
+    """Привязывает реальные методы mixin к mock объекту."""
+    for name in method_names:
+        method = getattr(mixin_class, name)
+        setattr(mock_obj, name, lambda *args, _m=method, **kw: _m(mock_obj, *args, **kw))
+
+
+# Все методы InterfacesSyncMixin, которые нужно привязать к mock
+INTERFACE_SYNC_METHODS = [
+    '_build_update_data', '_build_create_data',
+    '_check_type', '_check_description', '_check_enabled', '_check_mac',
+    '_check_mtu', '_check_speed', '_check_duplex', '_check_mode',
+    '_check_untagged_vlan', '_check_tagged_vlans', '_check_lag',
+]
+
+
 class TestInterfaceVlanSync:
     """Тесты sync untagged_vlan."""
 
@@ -113,6 +129,7 @@ class TestInterfaceVlanSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
 
         # VLAN 10 существует в NetBox с id=100
         mock_vlan = MockVLAN(id=100, vid=10, name="Users")
@@ -155,6 +172,7 @@ class TestInterfaceVlanSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
 
         # VLAN 1 (native) существует
         mock_vlan = MockVLAN(id=50, vid=1, name="default")
@@ -193,6 +211,7 @@ class TestInterfaceVlanSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
 
         # VLAN не найден
         sync._get_vlan_by_vid = MagicMock(return_value=None)
@@ -230,6 +249,7 @@ class TestInterfaceVlanSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
 
         # VLAN существует
         mock_vlan = MockVLAN(id=100, vid=10)
@@ -264,6 +284,7 @@ class TestInterfaceVlanSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
 
         # Интерфейс без VLAN (нет mode или access_vlan)
         intf = MockInterface(
@@ -301,6 +322,7 @@ class TestInterfaceVlanSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
 
         # VLAN 10 с id=100
         mock_vlan = MockVLAN(id=100, vid=10)
@@ -472,6 +494,7 @@ class TestTaggedVlansSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
 
         # VLANs 10, 20, 30 существуют в NetBox
         def get_vlan(vid, site):
@@ -515,6 +538,7 @@ class TestTaggedVlansSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
         sync._get_vlan_by_vid = MagicMock(return_value=MockVLAN(id=100, vid=10))
 
         # Access интерфейс
@@ -556,6 +580,7 @@ class TestTaggedVlansSync:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
         sync._get_vlan_by_vid = MagicMock(return_value=MockVLAN(id=10, vid=1))
 
         # tagged-all интерфейс
@@ -610,6 +635,7 @@ class TestModeClearOnShutdown:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
 
         # Shutdown интерфейс — mode пустой
         intf = MockInterface(
@@ -645,6 +671,7 @@ class TestModeClearOnShutdown:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
 
         intf = MockInterface(
             name="Gi0/1",
@@ -677,6 +704,7 @@ class TestModeClearOnShutdown:
         sync = MagicMock(spec=InterfacesSyncMixin)
         sync.dry_run = False
         sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
         sync._get_vlan_by_vid = MagicMock(return_value=None)
 
         # Shutdown интерфейс — mode пустой
@@ -714,3 +742,87 @@ class TestModeClearOnShutdown:
         assert call_kwargs["mode"] == ""
         assert "tagged_vlans" in call_kwargs
         assert call_kwargs["tagged_vlans"] == []
+
+
+class TestModeDiffDetection:
+    """Тесты: diff comparator корректно обнаруживает изменение mode."""
+
+    def test_to_dict_includes_empty_mode(self):
+        """to_dict() должен включать mode даже если он пустой."""
+        from network_collector.core.models import Interface
+
+        intf = Interface(name="Gi0/1", status="disabled", mode="")
+        data = intf.to_dict()
+        assert "mode" in data
+        assert data["mode"] == ""
+
+    def test_to_dict_includes_set_mode(self):
+        """to_dict() включает mode когда он задан."""
+        from network_collector.core.models import Interface
+
+        intf = Interface(name="Gi0/1", status="up", mode="access")
+        data = intf.to_dict()
+        assert data["mode"] == "access"
+
+    def test_diff_detects_empty_mode_vs_tagged_all(self):
+        """Comparator обнаруживает изменение tagged-all → пустой mode."""
+        from network_collector.core.domain.sync import SyncComparator
+
+        comparator = SyncComparator()
+
+        # Локальный интерфейс — mode пустой (shutdown)
+        local = [{"name": "Gi0/1", "status": "disabled", "mode": "", "description": ""}]
+
+        # Remote интерфейс — mode tagged-all
+        remote_intf = MagicMock()
+        remote_intf.name = "Gi0/1"
+        remote_intf.enabled = False
+        remote_intf.description = ""
+        remote_intf.mode = MagicMock()
+        remote_intf.mode.value = "tagged-all"
+        remote_intf.mtu = None
+        remote_intf.duplex = None
+        remote_intf.speed = None
+        remote_intf.type = MagicMock()
+        remote_intf.type.value = "1000base-t"
+
+        diff = comparator.compare_interfaces(
+            local=local,
+            remote=[remote_intf],
+            compare_fields=["mode"],
+            update_existing=True,
+        )
+
+        assert len(diff.to_update) == 1
+        assert len(diff.to_skip) == 0
+        assert diff.to_update[0].changes[0].field == "mode"
+        assert diff.to_update[0].changes[0].new_value == ""
+
+    def test_diff_skips_both_empty_mode(self):
+        """Comparator НЕ создаёт обновление когда оба mode пустые."""
+        from network_collector.core.domain.sync import SyncComparator
+
+        comparator = SyncComparator()
+
+        local = [{"name": "Gi0/1", "status": "disabled", "mode": "", "description": ""}]
+
+        remote_intf = MagicMock()
+        remote_intf.name = "Gi0/1"
+        remote_intf.enabled = False
+        remote_intf.description = ""
+        remote_intf.mode = None  # В NetBox тоже нет mode
+        remote_intf.mtu = None
+        remote_intf.duplex = None
+        remote_intf.speed = None
+        remote_intf.type = MagicMock()
+        remote_intf.type.value = "1000base-t"
+
+        diff = comparator.compare_interfaces(
+            local=local,
+            remote=[remote_intf],
+            compare_fields=["mode"],
+            update_existing=True,
+        )
+
+        assert len(diff.to_update) == 0
+        assert len(diff.to_skip) == 1

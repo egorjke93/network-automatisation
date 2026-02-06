@@ -124,3 +124,58 @@ class IPAddressesMixin:
         ip = self.api.ipam.ip_addresses.create(data)
         logger.debug(f"Создан IP-адрес: {address}")
         return ip
+
+    # ==================== BULK ОПЕРАЦИИ ====================
+
+    def bulk_create_ip_addresses(self, ip_data: List[dict]) -> List[Any]:
+        """
+        Создаёт несколько IP-адресов одним API-вызовом.
+
+        Args:
+            ip_data: Список словарей с данными IP-адресов
+
+        Returns:
+            List: Список созданных IP-адресов
+        """
+        if not ip_data:
+            return []
+        result = self.api.ipam.ip_addresses.create(ip_data)
+        created = result if isinstance(result, list) else [result]
+        logger.debug(f"Bulk create: создано {len(created)} IP-адресов")
+        return created
+
+    def bulk_update_ip_addresses(self, updates: List[dict]) -> List[Any]:
+        """
+        Обновляет несколько IP-адресов одним API-вызовом.
+
+        Каждый dict должен содержать 'id'.
+
+        Args:
+            updates: Список словарей с полем 'id' и обновляемыми полями
+
+        Returns:
+            List: Список обновлённых IP-адресов
+        """
+        if not updates:
+            return []
+        result = self.api.ipam.ip_addresses.update(updates)
+        updated = result if isinstance(result, list) else [result]
+        logger.debug(f"Bulk update: обновлено {len(updated)} IP-адресов")
+        return updated
+
+    def bulk_delete_ip_addresses(self, ids: List[int]) -> bool:
+        """
+        Удаляет IP-адреса по списку ID одним API-вызовом.
+
+        Args:
+            ids: Список ID IP-адресов
+
+        Returns:
+            bool: True если удаление успешно
+        """
+        if not ids:
+            return True
+        # pynetbox 7.5+ принимает список int ID напрямую
+        self.api.ipam.ip_addresses.delete(ids)
+        logger.debug(f"Bulk delete: удалено {len(ids)} IP-адресов")
+        return True

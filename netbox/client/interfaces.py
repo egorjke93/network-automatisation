@@ -142,3 +142,58 @@ class InterfacesMixin:
             interface.update(updates)
             logger.debug(f"Обновлён интерфейс: {interface.name}")
         return interface
+
+    # ==================== BULK ОПЕРАЦИИ ====================
+
+    def bulk_create_interfaces(self, interfaces_data: List[dict]) -> List[Any]:
+        """
+        Создаёт несколько интерфейсов одним API-вызовом.
+
+        Args:
+            interfaces_data: Список словарей с данными интерфейсов
+
+        Returns:
+            List: Список созданных интерфейсов
+        """
+        if not interfaces_data:
+            return []
+        result = self.api.dcim.interfaces.create(interfaces_data)
+        created = result if isinstance(result, list) else [result]
+        logger.debug(f"Bulk create: создано {len(created)} интерфейсов")
+        return created
+
+    def bulk_update_interfaces(self, updates: List[dict]) -> List[Any]:
+        """
+        Обновляет несколько интерфейсов одним API-вызовом.
+
+        Каждый dict должен содержать 'id'.
+
+        Args:
+            updates: Список словарей с полем 'id' и обновляемыми полями
+
+        Returns:
+            List: Список обновлённых интерфейсов
+        """
+        if not updates:
+            return []
+        result = self.api.dcim.interfaces.update(updates)
+        updated = result if isinstance(result, list) else [result]
+        logger.debug(f"Bulk update: обновлено {len(updated)} интерфейсов")
+        return updated
+
+    def bulk_delete_interfaces(self, ids: List[int]) -> bool:
+        """
+        Удаляет интерфейсы по списку ID одним API-вызовом.
+
+        Args:
+            ids: Список ID интерфейсов
+
+        Returns:
+            bool: True если удаление успешно
+        """
+        if not ids:
+            return True
+        # pynetbox 7.5+ принимает список int ID напрямую
+        self.api.dcim.interfaces.delete(ids)
+        logger.debug(f"Bulk delete: удалено {len(ids)} интерфейсов")
+        return True

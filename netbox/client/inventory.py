@@ -159,3 +159,58 @@ class InventoryMixin:
             logger.debug(f"Удалён inventory item: {name}")
             return True
         return False
+
+    # ==================== BULK ОПЕРАЦИИ ====================
+
+    def bulk_create_inventory_items(self, items_data: List[dict]) -> List[Any]:
+        """
+        Создаёт несколько inventory items одним API-вызовом.
+
+        Args:
+            items_data: Список словарей с данными inventory items
+
+        Returns:
+            List: Список созданных inventory items
+        """
+        if not items_data:
+            return []
+        result = self.api.dcim.inventory_items.create(items_data)
+        created = result if isinstance(result, list) else [result]
+        logger.debug(f"Bulk create: создано {len(created)} inventory items")
+        return created
+
+    def bulk_update_inventory_items(self, updates: List[dict]) -> List[Any]:
+        """
+        Обновляет несколько inventory items одним API-вызовом.
+
+        Каждый dict должен содержать 'id'.
+
+        Args:
+            updates: Список словарей с полем 'id' и обновляемыми полями
+
+        Returns:
+            List: Список обновлённых inventory items
+        """
+        if not updates:
+            return []
+        result = self.api.dcim.inventory_items.update(updates)
+        updated = result if isinstance(result, list) else [result]
+        logger.debug(f"Bulk update: обновлено {len(updated)} inventory items")
+        return updated
+
+    def bulk_delete_inventory_items(self, ids: List[int]) -> bool:
+        """
+        Удаляет inventory items по списку ID одним API-вызовом.
+
+        Args:
+            ids: Список ID inventory items
+
+        Returns:
+            bool: True если удаление успешно
+        """
+        if not ids:
+            return True
+        # pynetbox 7.5+ принимает список int ID напрямую
+        self.api.dcim.inventory_items.delete(ids)
+        logger.debug(f"Bulk delete: удалено {len(ids)} inventory items")
+        return True

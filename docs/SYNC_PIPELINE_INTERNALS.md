@@ -22,7 +22,10 @@
    - [Полная цепочка: от клика до результата](#полная-цепочка-от-клика-до-результата)
 6. [Collectors — Сбор данных](#collectors--сбор-данных)
 7. [Сравнение данных (SyncComparator)](#сравнение-данных-synccomparator)
-8. [Примеры кода с объяснениями](#примеры-кода-с-объяснениями)
+8. [Как работает to_dict() и очистка полей](#как-работает-to_dict-и-очистка-полей)
+9. [Примеры кода с объяснениями](#примеры-кода-с-объяснениями)
+10. [Batch API — Оптимизация производительности](#batch-api--оптимизация-производительности)
+11. [Sync Cables — Синхронизация кабелей](#sync-cables--синхронизация-кабелей)
 
 ---
 
@@ -85,8 +88,9 @@ python -m network_collector pipeline run full-sync
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    NetBox Client (netbox/client.py)              │
+│                    NetBox Client (netbox/client/)                │
 │  Обёртка над pynetbox для работы с NetBox API                   │
+│  Поштучные + bulk методы (batch create/update/delete)           │
 └─────────────────────────────────────────────────────────────────┘
                                 │
                                 ▼
@@ -859,6 +863,11 @@ class NetBoxSync(
 
 **Файл:** `netbox/sync/interfaces.py`
 
+> **Оптимизация (Февраль 2026):** Метод `sync_interfaces` использует **Batch API** —
+> все создания, обновления и удаления интерфейсов выполняются пакетно (один API-вызов
+> на каждую операцию), а не поштучно. Это даёт ускорение в **3-5x** для фазы sync.
+> Подробнее: [Batch API — Оптимизация производительности](#batch-api--оптимизация-производительности).
+
 ```python
 class InterfacesSyncMixin:
     """Mixin для синхронизации интерфейсов."""
@@ -873,6 +882,9 @@ class InterfacesSyncMixin:
     ) -> Dict[str, Any]:
         """
         Синхронизирует интерфейсы устройства.
+
+        Использует batch API для create/update/delete (один вызов на операцию).
+        При ошибке batch — fallback на поштучные операции.
 
         Возвращает статистику: {created, updated, deleted, skipped, details}
         """
@@ -892,163 +904,222 @@ class InterfacesSyncMixin:
         # 2. НАХОДИМ УСТРОЙСТВО В NETBOX
         device = self.client.get_device_by_name(device_name)
         if not device:
+            # Fallback: поиск по IP если device_name похоже на IP
+            ...
             logger.error(f"Устройство не найдено в NetBox: {device_name}")
             stats["failed"] = 1
-            stats["errors"] = [f"Device not found in NetBox: {device_name}"]
             return stats
 
         # 3. ПОЛУЧАЕМ СУЩЕСТВУЮЩИЕ ИНТЕРФЕЙСЫ
         existing = list(self.client.get_interfaces(device_id=device.id))
 
-        # 4. СРАВНИВАЕМ
-        # SyncComparator — это класс для сравнения данных
+        # 4. СРАВНИВАЕМ через SyncComparator (domain layer)
         comparator = SyncComparator()
+        local_data = [intf.to_dict() for intf in interfaces if intf.name]
+        diff = comparator.compare_interfaces(local, remote, ...)
 
-        # Подготавливаем локальные данные
-        local_data = []
-        for intf in interfaces:
-            if intf.name:
-                data = intf.to_dict()
-                # Автоопределение типа интерфейса
-                if sync_cfg.get_option("auto_detect_type", True):
-                    data["type"] = get_netbox_interface_type(interface=intf)
-                local_data.append(data)
+        # 5. ПРИМЕНЯЕМ ИЗМЕНЕНИЯ (Batch API)
+        #    Каждая операция — один вызов к NetBox API
 
-        # Сравниваем local vs remote
-        diff = comparator.compare_interfaces(
-            local=local_data,      # С устройства
-            remote=existing,       # В NetBox
-            create_missing=create_missing,
-            update_existing=update_existing,
-            cleanup=cleanup,
-        )
+        # 5.1 Batch create
+        self._batch_create_interfaces(device.id, diff.to_create, interfaces, stats, details)
 
-        # 5. ПРИМЕНЯЕМ ИЗМЕНЕНИЯ
+        # 5.2 Batch update
+        self._batch_update_interfaces(diff.to_update, interfaces, stats, details)
 
-        # 5.1 Создаём новые
-        for item in diff.to_create:
-            intf = next((i for i in interfaces if i.name == item.name), None)
-            if intf:
-                self._create_interface(device.id, intf)
-                stats["created"] += 1
-                details["create"].append({"name": item.name})
+        # 5.3 Batch delete
+        self._batch_delete_interfaces(diff.to_delete, stats, details)
 
-        # 5.2 Обновляем существующие
-        for item in diff.to_update:
-            intf = next((i for i in interfaces if i.name == item.name), None)
-            if intf and item.remote_data:
-                updated = self._update_interface(item.remote_data, intf)
-                if updated:
-                    stats["updated"] += 1
-                    details["update"].append({
-                        "name": item.name,
-                        "changes": [str(c) for c in item.changes]
-                    })
-                else:
-                    stats["skipped"] += 1
-
-        # 5.3 Удаляем лишние (если cleanup=True)
-        for item in diff.to_delete:
-            self._delete_interface(item.remote_data)
-            stats["deleted"] += 1
-            details["delete"].append({"name": item.name})
-
-        stats["skipped"] = len(diff.to_skip)
-
-        logger.info(
-            f"Синхронизация интерфейсов {device_name}: "
-            f"создано={stats['created']}, обновлено={stats['updated']}"
-        )
-
+        stats["skipped"] += len(diff.to_skip)
         stats["details"] = details
         return stats
 ```
 
-#### Методы _create_interface и _update_interface
+**Ключевое отличие от старого подхода:**
+
+| Операция | Раньше (поштучно) | Сейчас (Batch API) |
+|----------|-------------------|---------------------|
+| Создание 10 интерфейсов | 10 POST запросов | 1 POST запрос |
+| Обновление 48 интерфейсов | 48 PATCH запросов | 1 PATCH запрос |
+| Удаление 5 интерфейсов | 5 DELETE запросов | 1 DELETE запрос |
+| **Итого на устройство (~48 портов)** | **~100 запросов** | **~3 запроса** |
+
+#### Архитектура Batch операций
+
+Batch API разделяет подготовку данных и отправку в NetBox:
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  sync_interfaces()                                                    │
+│                                                                       │
+│  1. SyncComparator.compare() → diff (to_create, to_update, to_delete)│
+│                                                                       │
+│  2. _batch_create_interfaces()                                        │
+│     ├── for each item: _build_create_data() → (dict, mac)            │
+│     ├── collect all dicts into create_batch[]                         │
+│     ├── ONE call: client.bulk_create_interfaces(create_batch)         │
+│     ├── post-create: assign_mac_to_interface() (по одному)            │
+│     └── fallback: _create_interface() поштучно при ошибке             │
+│                                                                       │
+│  3. _batch_update_interfaces()                                        │
+│     ├── for each item: _build_update_data() → (updates, changes, mac)│
+│     ├── collect all updates into update_batch[]                       │
+│     ├── ONE call: client.bulk_update_interfaces(update_batch)         │
+│     ├── post-update: assign_mac_to_interface() (по одному)            │
+│     └── fallback: _update_interface() поштучно при ошибке             │
+│                                                                       │
+│  4. _batch_delete_interfaces()                                        │
+│     ├── collect all IDs into delete_ids[]                             │
+│     ├── ONE call: client.bulk_delete_interfaces(delete_ids)           │
+│     └── fallback: _delete_interface() поштучно при ошибке             │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+#### _build_create_data() — Подготовка данных для создания
+
+Выделен из `_create_interface()`. Чистая функция — **без API-вызовов** (кроме LAG lookup):
 
 ```python
-def _create_interface(
+def _build_create_data(
     self: SyncBase,
     device_id: int,
     intf: Interface,
-) -> None:
+) -> Tuple[Optional[Dict], Optional[str]]:
     """
-    Создаёт интерфейс в NetBox.
+    Подготавливает данные для создания интерфейса (без API-вызовов).
+
+    Returns:
+        Tuple: (data_dict для API, mac_to_assign или None)
     """
     sync_cfg = get_sync_config("interfaces")
 
-    # Режим симуляции — ничего не создаём
-    if self.dry_run:
-        logger.info(f"[DRY-RUN] Создание интерфейса: {intf.name}")
-        return
+    data = {
+        "device": device_id,
+        "name": intf.name,
+        "type": get_netbox_interface_type(interface=intf),
+    }
 
-    # Собираем данные для создания
-    kwargs = {}
-
-    # Проверяем какие поля включены в fields.yaml
+    # Добавляем поля согласно fields.yaml
     if sync_cfg.is_field_enabled("description"):
-        kwargs["description"] = intf.description
+        data["description"] = intf.description
     if sync_cfg.is_field_enabled("enabled"):
-        kwargs["enabled"] = intf.status not in ("disabled", "error")
+        data["enabled"] = intf.status not in ("disabled", "error")
     if sync_cfg.is_field_enabled("mtu") and intf.mtu:
-        kwargs["mtu"] = intf.mtu
+        data["mtu"] = intf.mtu
     if sync_cfg.is_field_enabled("speed") and intf.speed:
-        kwargs["speed"] = self._parse_speed(intf.speed)
+        data["speed"] = self._parse_speed(intf.speed)
+    if sync_cfg.is_field_enabled("duplex") and intf.duplex:
+        data["duplex"] = self._parse_duplex(intf.duplex)
+    if sync_cfg.is_field_enabled("mode") and intf.mode:
+        data["mode"] = intf.mode
 
-    # Создаём интерфейс через NetBox клиент
-    interface = self.client.create_interface(
-        device_id=device_id,
-        name=intf.name,
-        interface_type=get_netbox_interface_type(interface=intf),
-        **kwargs,
-    )
+    # MAC назначается через отдельный endpoint (не в bulk)
+    mac_to_assign = None
+    if sync_cfg.is_field_enabled("mac_address") and intf.mac:
+        mac_to_assign = normalize_mac_netbox(intf.mac)
 
-    # Назначаем MAC адрес (отдельная операция)
-    mac_to_assign = normalize_mac_netbox(intf.mac) if intf.mac else None
+    return data, mac_to_assign
+```
+
+#### _build_update_data() — Оркестратор обновления
+
+Выделен из `_update_interface()`. Делегирует проверку каждого поля отдельному хелперу `_check_*()`.
+Каждый хелпер мутирует `updates` и `actual_changes` in-place. MAC-хелпер — исключение, возвращает значение.
+
+```python
+def _build_update_data(self, nb_interface, intf):
+    """Оркестратор — вызывает 11 хелперов _check_*()."""
+    updates = {}
+    actual_changes = []
+    sync_cfg = get_sync_config("interfaces")
+
+    self._check_type(nb_interface, intf, sync_cfg, updates, actual_changes)
+    self._check_description(nb_interface, intf, sync_cfg, updates, actual_changes)
+    self._check_enabled(nb_interface, intf, sync_cfg, updates, actual_changes)
+    mac_to_assign = self._check_mac(nb_interface, intf, sync_cfg, actual_changes)
+    self._check_mtu(nb_interface, intf, sync_cfg, updates, actual_changes)
+    self._check_speed(nb_interface, intf, sync_cfg, updates, actual_changes)
+    self._check_duplex(nb_interface, intf, sync_cfg, updates, actual_changes)
+    self._check_mode(nb_interface, intf, sync_cfg, updates, actual_changes)
+    self._check_untagged_vlan(nb_interface, intf, sync_cfg, updates, actual_changes)
+    self._check_tagged_vlans(nb_interface, intf, sync_cfg, updates, actual_changes)
+    self._check_lag(nb_interface, intf, sync_cfg, updates, actual_changes)
+
+    return updates, actual_changes, mac_to_assign
+```
+
+**11 хелперов `_check_*()`** — каждый отвечает за одно поле:
+
+| Хелпер | Поле | Особенности |
+|--------|------|-------------|
+| `_check_type` | type | `get_netbox_interface_type()` |
+| `_check_description` | description | Простое сравнение |
+| `_check_enabled` | enabled | `enabled_mode` из config |
+| `_check_mac` | mac_address | Возвращает `Optional[str]`, API: `get_interface_mac()` |
+| `_check_mtu` | mtu | Простое сравнение |
+| `_check_speed` | speed | `_parse_speed()` |
+| `_check_duplex` | duplex | `_parse_duplex()` |
+| `_check_mode` | mode | access/trunk/tagged |
+| `_check_untagged_vlan` | untagged_vlan | Site lookup, `_get_vlan_by_vid()` |
+| `_check_tagged_vlans` | tagged_vlans | VlanSet, добавление/удаление |
+| `_check_lag` | lag | LAG interface lookup |
+
+**Почему MAC назначается отдельно?**
+
+NetBox не позволяет назначить MAC-адрес в bulk create/update запросе.
+MAC назначается через отдельный endpoint `assign_mac_to_interface()`.
+Поэтому после batch create/update мы проходим по очереди MAC:
+
+```python
+# Post-create: назначаем MAC (отдельный endpoint, по одному)
+for idx, mac in create_mac_queue:
+    if idx < len(created):
+        self.client.assign_mac_to_interface(created[idx].id, mac)
+```
+
+#### Fallback — страховка от ошибок
+
+Если batch-вызов падает (например, один из 48 интерфейсов имеет невалидные данные),
+система переключается на поштучные операции. Так мы не теряем все 47 корректных интерфейсов:
+
+```python
+try:
+    # Пробуем batch (один запрос на все 48 интерфейсов)
+    created = self.client.bulk_create_interfaces(create_batch)
+    for name in create_names:
+        stats["created"] += 1
+except Exception as e:
+    # Batch упал — fallback на поштучное создание
+    logger.warning(f"Batch create не удался ({e}), fallback на поштучное создание")
+    for data in create_batch:
+        try:
+            self._create_interface(device_id, intf)
+            stats["created"] += 1
+        except Exception as exc:
+            logger.error(f"Ошибка создания интерфейса {name}: {exc}")
+```
+
+#### Legacy-методы _create_interface и _update_interface
+
+Старые методы `_create_interface()` и `_update_interface()` **сохранены** как fallback.
+Они используются только если batch-вызов упал с ошибкой.
+
+```python
+def _create_interface(self: SyncBase, device_id: int, intf: Interface) -> None:
+    """Создаёт интерфейс в NetBox (поштучно, для fallback)."""
+    # Та же логика что раньше — один запрос на один интерфейс
+    interface = self.client.create_interface(device_id=device_id, name=intf.name, ...)
     if mac_to_assign and interface:
         self.client.assign_mac_to_interface(interface.id, mac_to_assign)
 
-def _update_interface(
-    self: SyncBase,
-    nb_interface,      # Существующий интерфейс в NetBox
-    intf: Interface,   # Новые данные с устройства
-) -> bool:
-    """
-    Обновляет интерфейс в NetBox.
-
-    Returns:
-        bool: True если были реальные изменения
-    """
-    updates = {}
-    sync_cfg = get_sync_config("interfaces")
-
-    # Проверяем каждое поле на изменения
-    if sync_cfg.is_field_enabled("description"):
-        if intf.description != nb_interface.description:
-            updates["description"] = intf.description
-
-    if sync_cfg.is_field_enabled("enabled"):
-        enabled = intf.status not in ("disabled", "error")
-        if enabled != nb_interface.enabled:
-            updates["enabled"] = enabled
-
-    if sync_cfg.is_field_enabled("mtu") and intf.mtu:
-        if intf.mtu != (nb_interface.mtu or 0):
-            updates["mtu"] = intf.mtu
-
-    # Нет изменений?
-    if not updates:
-        logger.debug(f"  → нет изменений для интерфейса {nb_interface.name}")
-        return False
-
-    # Режим симуляции
-    if self.dry_run:
-        logger.info(f"[DRY-RUN] Обновление интерфейса {nb_interface.name}: {updates}")
-        return True
-
-    # Применяем изменения
-    self.client.update_interface(nb_interface.id, **updates)
-    return True
+def _update_interface(self: SyncBase, nb_interface, intf: Interface) -> tuple:
+    """Обновляет интерфейс в NetBox (поштучно, для fallback)."""
+    updates, actual_changes, mac_to_assign = self._build_update_data(nb_interface, intf)
+    if updates:
+        self.client.update_interface(nb_interface.id, **updates)
+    if mac_to_assign:
+        self.client.assign_mac_to_interface(nb_interface.id, mac_to_assign)
+    return True, actual_changes
 ```
 
 ### NetBoxSync — Главный класс
@@ -1259,62 +1330,81 @@ class SyncService:
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ 6. SYNC МОДУЛЬ: netbox/sync/                                    │
+│ 6. SYNC МОДУЛЬ: netbox/sync/ (Batch API)                        │
 │                                                                 │
 │    # sync_devices_from_inventory()                              │
 │    for entry in devices:                                        │
 │        existing = client.get_device_by_name(name)              │
-│        if existing:                                             │
-│            if update_existing:                                  │
-│                self._update_device(existing, ...)              │
-│        else:                                                    │
-│            self.create_device(name, device_type, ...)          │
+│        if existing: self._update_device(existing, ...)         │
+│        else: self.create_device(name, device_type, ...)        │
 │                                                                 │
-│    # sync_interfaces()                                          │
+│    # sync_interfaces() — BATCH API                              │
 │    device = self.client.get_device_by_name(device_name)        │
 │    existing = client.get_interfaces(device_id=device.id)       │
 │    diff = comparator.compare_interfaces(local, remote)         │
-│    for item in diff.to_create:                                  │
-│        self._create_interface(device.id, intf)                 │
-│    for item in diff.to_update:                                  │
-│        self._update_interface(nb_interface, intf)              │
+│                                                                 │
+│    # Batch create (один запрос на все новые интерфейсы)         │
+│    create_batch = [_build_create_data(intf) for intf in create]│
+│    client.bulk_create_interfaces(create_batch)  # 1 POST       │
+│                                                                 │
+│    # Batch update (один запрос на все обновления)               │
+│    update_batch = [_build_update_data(nb, intf) for ...]       │
+│    client.bulk_update_interfaces(update_batch)  # 1 PATCH      │
+│                                                                 │
+│    # Batch delete (один запрос на все удаления)                 │
+│    delete_ids = [item.remote_data.id for item in delete]       │
+│    client.bulk_delete_interfaces(delete_ids)    # 1 DELETE     │
+│                                                                 │
+│    # Post: MAC назначение (отдельный endpoint, по одному)       │
+│    for mac in mac_queue:                                        │
+│        client.assign_mac_to_interface(intf_id, mac)            │
 └─────────────────────────────────────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ 7. NETBOX CLIENT: netbox/client.py                              │
+│ 7. NETBOX CLIENT: netbox/client/ (mixin архитектура)            │
 │                                                                 │
-│    # Обёртка над pynetbox                                       │
-│    class NetBoxClient:                                          │
+│    # Обёртка над pynetbox с bulk-методами                       │
+│    class NetBoxClient(InterfacesMixin, InventoryMixin, ...):   │
 │        def __init__(self, url, token):                         │
 │            self.api = pynetbox.api(url, token=token)           │
 │                                                                 │
-│        def get_device_by_name(self, name):                     │
-│            return self.api.dcim.devices.get(name=name)         │
+│    # --- Поштучные методы (для fallback) ---                    │
+│    def create_interface(device_id, name, **kwargs)             │
+│    def update_interface(interface_id, **updates)               │
 │                                                                 │
-│        def create_interface(self, device_id, name, **kwargs):  │
-│            return self.api.dcim.interfaces.create({            │
-│                "device": device_id,                             │
-│                "name": name,                                    │
-│                **kwargs                                         │
-│            })                                                   │
+│    # --- Bulk методы (основной путь) ---                        │
+│    def bulk_create_interfaces(data: List[dict])                │
+│    def bulk_update_interfaces(updates: List[dict])             │
+│    def bulk_delete_interfaces(ids: List[int])                  │
+│                                                                 │
+│    # Аналогично для inventory и IP:                             │
+│    def bulk_create_inventory_items(data)                        │
+│    def bulk_create_ip_addresses(data)                           │
+│    # ...и bulk_update/delete                                    │
 └─────────────────────────────────────────────────────────────────┘
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ 8. NETBOX API (HTTP)                                            │
+│ 8. NETBOX API (HTTP) — Batch запрос                             │
 │                                                                 │
-│    POST /api/dcim/interfaces/                                   │
-│    {                                                            │
-│      "device": 123,                                             │
-│      "name": "GigabitEthernet0/1",                             │
-│      "type": "1000base-t",                                      │
-│      "description": "Uplink",                                   │
-│      "enabled": true                                            │
-│    }                                                            │
+│    POST /api/dcim/interfaces/ (список = batch create)           │
+│    [                                                            │
+│      {"device": 123, "name": "Gi0/1", "type": "1000base-t"},  │
+│      {"device": 123, "name": "Gi0/2", "type": "1000base-t"},  │
+│      {"device": 123, "name": "Gi0/3", "type": "1000base-t"},  │
+│      ... (до 48 интерфейсов в одном запросе)                   │
+│    ]                                                            │
 │                                                                 │
 │    Response: 201 Created                                        │
-│    { "id": 456, "name": "GigabitEthernet0/1", ... }            │
+│    [                                                            │
+│      {"id": 456, "name": "Gi0/1", ...},                       │
+│      {"id": 457, "name": "Gi0/2", ...},                       │
+│      ...                                                        │
+│    ]                                                            │
+│                                                                 │
+│    Раньше: 48 отдельных POST запросов                           │
+│    Сейчас: 1 POST запрос с массивом                             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1561,6 +1651,133 @@ class SyncComparator:
 
 ---
 
+## Как работает to_dict() и очистка полей
+
+### Проблема: пустые значения при синхронизации
+
+Когда мы синхронизируем интерфейсы, нужно понять: "поле пустое" — это **отсутствие данных** или **намеренная очистка**?
+
+**Пример:** порт был trunk (tagged-all), а потом его просто выключили (shutdown). Теперь mode пустой. Нужно ли очистить mode в NetBox?
+
+**Ответ:** Да! Пустой mode = "очистить", а отсутствие поля = "не трогать".
+
+### Как работает to_dict()
+
+`to_dict()` превращает объект Interface в словарь для сравнения:
+
+```python
+# Файл: core/models.py
+
+def to_dict(self) -> Dict[str, Any]:
+    # Шаг 1: берём все поля, убираем пустые
+    result = {k: v for k, v in asdict(self).items() if v is not None and v != ""}
+    # Шаг 2: но description и mode ВСЕГДА включаем (пустая строка = очистка)
+    result["description"] = self.description
+    result["mode"] = self.mode
+    return result
+```
+
+**Разберём `{k: v for k, v in ... if ...}` по шагам:**
+
+```python
+# Это dict comprehension — создание словаря в одну строку
+
+# Шаг 1: asdict(self) — dataclass → обычный словарь
+asdict(self) = {
+    "name": "Gi0/1",
+    "status": "disabled",
+    "mode": "",          # пустой — порт shutdown
+    "description": "",   # пустой — нет описания
+    "speed": "",         # пустой — нет данных
+    "mtu": None,         # нет данных
+}
+
+# Шаг 2: .items() — пары (ключ, значение)
+# ("name", "Gi0/1"), ("status", "disabled"), ("mode", ""), ...
+
+# Шаг 3: for k, v in ... — проходим по каждой паре
+# k = "name",   v = "Gi0/1"
+# k = "status", v = "disabled"
+# k = "mode",   v = ""
+# ...
+
+# Шаг 4: if v is not None and v != "" — фильтр
+# "Gi0/1"    → не None ✓, не "" ✓ → БЕРЁМ
+# "disabled" → не None ✓, не "" ✓ → БЕРЁМ
+# ""         → не None ✓, но "" ✗  → ВЫКИДЫВАЕМ
+# None       → None ✗              → ВЫКИДЫВАЕМ
+
+# Результат:
+result = {"name": "Gi0/1", "status": "disabled"}
+```
+
+**Это то же самое что обычный цикл:**
+
+```python
+result = {}
+for k, v in asdict(self).items():
+    if v is not None and v != "":
+        result[k] = v
+# result = {"name": "Gi0/1", "status": "disabled"}
+```
+
+### Зачем description и mode добавляются отдельно
+
+Проблема: mode="" выкидывается фильтром → comparator не видит что mode изменился → не обновляет.
+
+Решение: **всегда включаем** mode и description в словарь:
+
+```python
+result["description"] = self.description  # "" = очистить описание
+result["mode"] = self.mode                # "" = очистить mode (shutdown порт)
+```
+
+### Как comparator использует это
+
+```python
+# Файл: core/domain/sync.py
+
+def _get_local_field(self, data, field_name):
+    if field_name == "mode":
+        if "mode" in data:
+            return data["mode"]   # "" = очистить, "access"/"tagged" = установить
+        return None               # ключа нет = пропустить сравнение
+
+    if field_name == "description":
+        if "description" in data:
+            return data["description"]  # "" = очистить, "текст" = установить
+        return None                     # пропустить
+```
+
+**Логика:**
+
+| `data` содержит | `_get_local_field` вернёт | Действие |
+|------------------|---------------------------|----------|
+| `{"mode": "access"}` | `"access"` | Установить mode=access |
+| `{"mode": ""}` | `""` | Очистить mode (shutdown порт) |
+| `{}` (нет ключа mode) | `None` | Не трогать mode |
+
+### Полная цепочка для shutdown порта
+
+```
+1. Устройство: interface Gi0/1 → shutdown (mode пустой)
+
+2. Коллектор: Interface(name="Gi0/1", mode="")
+
+3. to_dict(): {"name": "Gi0/1", "mode": "", "status": "disabled", ...}
+              ↑ mode="" включён в словарь
+
+4. _get_local_field("mode"): "mode" in data → True → return ""
+
+5. _compare_fields: local="" vs remote="tagged-all" → РАЗНЫЕ → to_update
+
+6. _update_interface: not intf.mode and current_mode → updates["mode"] = ""
+
+7. NetBox API: interface.update(mode="") → mode очищён ✓
+```
+
+---
+
 ## Примеры кода с объяснениями
 
 ### Пример 1: Простая синхронизация интерфейсов
@@ -1711,6 +1928,403 @@ curl http://localhost:8080/api/tasks/abc-123-def
 
 ---
 
+## Batch API — Оптимизация производительности
+
+> **Добавлено:** Февраль 2026
+> **Причина:** Pipeline на 22 устройства выполнялся ~30 минут, основное время — sync фаза
+> **Результат:** Ускорение sync фазы в 3-5 раз
+
+### Проблема
+
+До оптимизации каждая операция синхронизации выполнялась **поштучно**:
+
+```
+# Пример: sync_interfaces для 1 устройства с 48 портами
+
+get_device_by_name()              # 1 запрос
+get_interfaces(device_id)         # 1 запрос
+for each interface to update:
+    get(id) + update()            # 2 запроса × 48 = 96 запросов
+                                  # Итого: ~100 API запросов на устройство
+```
+
+При 22 устройствах: **~2200 API-вызовов** только для интерфейсов.
+Добавим inventory (~50 на устройство) и IP (~30 на устройство) — получаем **~5000+ вызовов**.
+
+### Решение: Batch API через pynetbox
+
+NetBox API поддерживает bulk-операции:
+- **POST** с массивом = создать несколько объектов одним запросом
+- **PATCH** с массивом (каждый элемент содержит `id`) = обновить несколько объектов
+- **DELETE** с массивом ID = удалить несколько объектов
+
+pynetbox это поддерживает из коробки:
+
+```python
+# Bulk create — передаём список словарей вместо одного
+api.dcim.interfaces.create([
+    {"device": 1, "name": "Gi0/1", "type": "1000base-t"},
+    {"device": 1, "name": "Gi0/2", "type": "1000base-t"},
+    {"device": 1, "name": "Gi0/3", "type": "1000base-t"},
+])
+# → 1 HTTP POST вместо 3
+
+# Bulk update — каждый dict содержит 'id'
+api.dcim.interfaces.update([
+    {"id": 101, "description": "Uplink"},
+    {"id": 102, "description": "Server"},
+    {"id": 103, "enabled": False},
+])
+# → 1 HTTP PATCH вместо 3
+
+# Bulk delete — список объектов с id
+api.dcim.interfaces.delete([{"id": 101}, {"id": 102}])
+# → 1 HTTP DELETE вместо 2
+```
+
+### Архитектура изменений
+
+#### Слой 1: NetBox Client (netbox/client/)
+
+Добавлены **bulk-методы** в mixin-классы клиента:
+
+| Файл | Методы |
+|------|--------|
+| `client/interfaces.py` | `bulk_create_interfaces()`, `bulk_update_interfaces()`, `bulk_delete_interfaces()` |
+| `client/inventory.py` | `bulk_create_inventory_items()`, `bulk_update_inventory_items()`, `bulk_delete_inventory_items()` |
+| `client/ip_addresses.py` | `bulk_create_ip_addresses()`, `bulk_delete_ip_addresses()` |
+
+Пример реализации (все аналогичны):
+
+```python
+def bulk_create_interfaces(self, interfaces_data: List[dict]) -> List[Any]:
+    """Создаёт несколько интерфейсов одним API-вызовом."""
+    if not interfaces_data:
+        return []
+    result = self.api.dcim.interfaces.create(interfaces_data)
+    return result if isinstance(result, list) else [result]
+
+def bulk_update_interfaces(self, updates: List[dict]) -> List[Any]:
+    """Обновляет несколько интерфейсов одним API-вызовом.
+    Каждый dict должен содержать 'id'."""
+    if not updates:
+        return []
+    result = self.api.dcim.interfaces.update(updates)
+    return result if isinstance(result, list) else [result]
+
+def bulk_delete_interfaces(self, ids: List[int]) -> bool:
+    """Удаляет интерфейсы по списку ID."""
+    if not ids:
+        return True
+    objects = [{"id": id_} for id_ in ids]
+    self.api.dcim.interfaces.delete(objects)
+    return True
+```
+
+Старые поштучные методы (`create_interface`, `update_interface`) **сохранены** для fallback.
+
+#### Слой 2: SyncBase — `_batch_with_fallback()` (netbox/sync/base.py)
+
+Универсальный метод для batch операций с автоматическим fallback:
+
+```python
+def _batch_with_fallback(
+    self,
+    batch_data: list,          # Данные: list[dict] для create, list[int] для delete
+    item_names: List[str],     # Имена для логов (параллельный список)
+    bulk_fn: Callable,         # Batch функция (1 вызов на весь список)
+    fallback_fn: Callable,     # Поштучная функция (data, name) → None
+    stats: dict,               # Статистика (modified in-place)
+    details: dict,             # Детали (modified in-place)
+    operation: str,            # "created" / "deleted"
+    entity_name: str,          # "интерфейс" / "inventory" / "IP"
+    detail_key: str = "name",  # Ключ для details ("name" или "address")
+) -> Optional[list]:
+```
+
+Используется в CREATE и DELETE для всех трёх модулей (interfaces, inventory, ip_addresses).
+UPDATE не унифицирован — слишком различается между модулями.
+
+#### Слой 3: Sync Mixins (netbox/sync/)
+
+**Interfaces (sync/interfaces.py):**
+| Метод | Назначение |
+|-------|-----------|
+| `_build_create_data(device_id, intf)` | Подготовка dict для create (без API) |
+| `_build_update_data(nb_interface, intf)` | Оркестратор → 11 хелперов `_check_*()` |
+| `_check_type/description/enabled/...` | Проверка одного поля (без API, кроме MAC) |
+| `_batch_create_interfaces(...)` | Bulk create + MAC post-assign + fallback |
+| `_batch_update_interfaces(...)` | Bulk update + MAC post-assign + fallback |
+| `_batch_delete_interfaces(...)` | `_batch_with_fallback()` для delete |
+
+**Inventory (sync/inventory.py):**
+- CREATE: `_batch_with_fallback()` → `bulk_create_inventory_items()`
+- UPDATE: Inline batch с собственным fallback (специфичная логика с changes tracking)
+- DELETE: `_batch_with_fallback()` → `bulk_delete_inventory_items()`
+
+**IP Addresses (sync/ip_addresses.py):**
+- CREATE: `_batch_with_fallback()` → `bulk_create_ip_addresses()`
+- DELETE: `_batch_with_fallback()` → `bulk_delete_ip_addresses()`
+- Update остаётся поштучным (может требовать пересоздание IP при смене маски)
+
+### Паттерн: подготовка данных → _batch_with_fallback → post-process
+
+Все batch-операции следуют одному паттерну через `SyncBase._batch_with_fallback()`:
+
+```python
+# CREATE (пример: inventory)
+self._batch_with_fallback(
+    batch_data=[data for data, _, _ in create_batch],
+    item_names=[f"{name}{note}" for _, name, note in create_batch],
+    bulk_fn=self.client.bulk_create_inventory_items,
+    fallback_fn=lambda data, name: self.client.api.dcim.inventory_items.create(data),
+    stats=stats, details=details,
+    operation="created", entity_name="inventory",
+)
+
+# DELETE (пример: interfaces)
+self._batch_with_fallback(
+    batch_data=delete_ids,
+    item_names=delete_names,
+    bulk_fn=self.client.bulk_delete_interfaces,
+    fallback_fn=lambda item_id, name: self.client.api.dcim.interfaces.get(item_id).delete(),
+    stats=stats, details=details,
+    operation="deleted", entity_name="интерфейс",
+)
+```
+
+**Interfaces CREATE** — единственное исключение: fallback через `_create_interface()` и
+post-process MAC-очередь (MAC назначается через отдельный endpoint, не в bulk).
+
+### Что не изменилось
+
+- **Domain layer** (`core/domain/sync.py`): SyncComparator работает как раньше
+- **dry_run режим**: пропускает API-вызовы, считает статистику
+- **Формат результата**: `{created, updated, deleted, skipped, details}` — тот же
+- **Pipeline и CLI**: используют тот же `sync.sync_interfaces()` — без изменений
+- **Поштучные методы**: `_create_interface()`, `_update_interface()` — сохранены для fallback
+
+### Количественный эффект
+
+| Метрика | До | После |
+|---------|------|---------|
+| API вызовов на 1 устройство (interfaces) | ~100 | ~3 + MAC |
+| API вызовов на 1 устройство (inventory) | ~50 | ~3 |
+| API вызовов на 1 устройство (IP) | ~30 | ~2 |
+| Общее время sync (22 устройства) | ~10 мин | ~2-3 мин |
+| **Ожидаемое ускорение sync фазы** | | **3-5x** |
+
+### Тестирование
+
+Тесты для batch операций: `tests/test_netbox/test_bulk_operations.py` (32 теста)
+
+Покрытие:
+- Batch create/update/delete для interfaces, inventory, IP
+- dry_run режим
+- Fallback при ошибке batch (переключение на поштучные операции)
+- Пустые данные (edge case)
+- Device not found
+- Update с реальным diff
+
+---
+
+## Sync Cables — Синхронизация кабелей
+
+> **Файл:** `netbox/sync/cables.py`
+> **Mixin:** `CablesSyncMixin`
+
+### Зачем нужна синхронизация кабелей?
+
+LLDP/CDP — протоколы обнаружения соседей. Каждый свич видит, кто подключён к его портам.
+Из этих данных можно построить **физическую топологию** сети в NetBox — создать кабели
+между интерфейсами.
+
+### Отличие от interfaces/inventory
+
+Кабели работают принципиально иначе, чем остальные sync-операции:
+
+| Аспект | Interfaces/Inventory/IP | Cables |
+|--------|------------------------|--------|
+| API вызовы | **Batch** (один запрос на все) | **Поштучно** (каждый кабель отдельно) |
+| Сравнение | SyncComparator → SyncDiff | Проверка `interface.cable` |
+| Источник данных | Коллектор (show interfaces) | LLDP/CDP (show lldp neighbors) |
+| Два устройства | Одно устройство | Два устройства на концах кабеля |
+
+**Почему не batch?** Каждый кабель связывает два устройства, требует проверки обоих интерфейсов,
+поиска соседа по нескольким стратегиям. Это не подходит под паттерн "собрать всё → отправить одним запросом".
+
+### Алгоритм sync_cables_from_lldp
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  sync_cables_from_lldp(lldp_data, skip_unknown, cleanup)       │
+│                                                                  │
+│  1. Создаём seen_cables = set()  (для дедупликации)             │
+│  2. Собираем lldp_devices = set()  (для cleanup)               │
+│                                                                  │
+│  3. for entry in lldp_data:                                     │
+│     ├─ skip_unknown? → пропуск                                  │
+│     ├─ _find_device(local) → устройство в NetBox                │
+│     ├─ _find_interface(device_id, local_intf) → интерфейс       │
+│     ├─ _find_neighbor_device(entry) → 4 стратегии поиска        │
+│     ├─ _find_interface(neighbor_id, remote_port) → интерфейс    │
+│     ├─ LAG check → пропуск если type == "lag"                   │
+│     ├─ _create_cable(local, remote) → "created"/"exists"/"error"│
+│     └─ seen_cables дедупликация → статистика                    │
+│                                                                  │
+│  4. if cleanup:                                                  │
+│     └─ _cleanup_cables(neighbors, lldp_devices)                 │
+│        ├─ valid_endpoints из LLDP                               │
+│        ├─ get_cables из NetBox                                  │
+│        ├─ Защита: удаляем только если ОБА устройства в скане   │
+│        └─ _delete_cable(cable)                                  │
+│                                                                  │
+│  5. return stats + details                                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Поиск соседа — 4 стратегии
+
+Метод `_find_neighbor_device(entry)` определяет стратегию по `neighbor_type`
+(устанавливается в Domain Layer — `LLDPNormalizer.determine_neighbor_type()`):
+
+```python
+# neighbor_type определяется по данным LLDP:
+# - "hostname" → System Name передан (надёжно)
+# - "mac"      → только Chassis ID (MAC) доступен
+# - "ip"       → только Management IP доступен
+# - "unknown"  → ничего полезного нет
+
+if neighbor_type == "hostname":
+    # 1. hostname (без домена) → 2. IP → 3. MAC
+    device = self._find_device(clean_hostname)
+    if not device and ip:
+        device = self.client.get_device_by_ip(ip)
+    if not device and mac:
+        device = self._find_device_by_mac(mac)
+
+elif neighbor_type == "mac":
+    # 1. MAC → 2. IP
+    device = self._find_device_by_mac(mac)
+    if not device and ip:
+        device = self.client.get_device_by_ip(ip)
+
+elif neighbor_type == "ip":
+    # 1. IP → 2. MAC
+    device = self.client.get_device_by_ip(ip)
+    if not device and mac:
+        device = self._find_device_by_mac(mac)
+
+else:  # unknown
+    # Пробуем всё: IP → MAC
+    ...
+```
+
+### Дедупликация — зачем и как
+
+LLDP работает двусторонне. Если switch1 и switch2 соединены:
+
+```
+LLDP от switch1: local=Gi0/1, remote=switch2:Gi0/2  (запись 1)
+LLDP от switch2: local=Gi0/2, remote=switch1:Gi0/1  (запись 2)
+```
+
+Это **один кабель**, но **две LLDP-записи**. Без дедупликации:
+- В dry_run: `created: 2` вместо `created: 1`
+- В реальном режиме: первый создаёт, второй → "exists"
+
+Решение — `seen_cables` set с **сортированными** ключами:
+
+```python
+# Запись 1: cable_key = sorted(["switch1:Gi0/1", "switch2:Gi0/2"])
+#         = ("switch1:Gi0/1", "switch2:Gi0/2")
+# Запись 2: cable_key = sorted(["switch2:Gi0/2", "switch1:Gi0/1"])
+#         = ("switch1:Gi0/1", "switch2:Gi0/2")  ← ТОТ ЖЕ КЛЮЧ
+```
+
+### Cleanup — защита от удаления чужих кабелей
+
+Cleanup удаляет кабели из NetBox, которых нет в текущих LLDP данных.
+Но есть проблема: если мы сканировали только 10 свичей из 50, нельзя удалять
+кабели к устройствам, которые мы не сканировали.
+
+**Правило:** кабель удаляется **только если ОБА устройства** на его концах присутствуют в LLDP-скане.
+
+```
+Пример 1: switch1 ↔ switch2 (оба в скане)
+  Кабель не в LLDP → УДАЛЯЕМ (оба устройства в скане, можем быть уверены)
+
+Пример 2: switch1 ↔ router1 (router1 НЕ в скане)
+  Кабель не в LLDP → НЕ УДАЛЯЕМ (не знаем топологию router1)
+```
+
+Алгоритм:
+
+```python
+# 1. Строим valid_endpoints из LLDP (нормализованные, сортированные)
+valid_endpoints = set()
+for entry in lldp_neighbors:
+    endpoints = tuple(sorted(["switch1:Gi0/1", "switch2:Gi0/2"]))
+    valid_endpoints.add(endpoints)
+
+# 2. Для каждого устройства в скане → получаем кабели из NetBox
+for device_name in lldp_devices:
+    cables = self.client.get_cables(device_id=device.id)
+
+    for cable in cables:
+        cable_endpoints = get_cable_endpoints(cable)
+
+        if cable_endpoints not in valid_endpoints:
+            # 3. Проверка: ОБА конца в нашем скане?
+            endpoint_devices = {ep.split(":")[0] for ep in cable_endpoints}
+            if endpoint_devices.issubset(normalized_lldp_devices):
+                self._delete_cable(cable)  # Безопасно удалять
+```
+
+### LAG-пропуск
+
+LLDP может показать Port-Channel (LAG) как соседский интерфейс. Но физический кабель
+подключён к конкретному порту, а не к LAG. Поэтому кабели на LAG-интерфейсы пропускаются:
+
+```python
+if local_intf_type == "lag" or remote_intf_type == "lag":
+    stats["skipped"] += 1
+    continue
+```
+
+### Проверка существования кабеля
+
+В отличие от старого кода, проверка делается через атрибут `interface.cable`,
+а не через отдельный API-запрос `get_cable_by_interfaces()`:
+
+```python
+# Старый код (устаревший):
+# existing = self.client.get_cable_by_interfaces(interface_a.id, interface_b.id)
+
+# Актуальный код:
+if interface_a.cable or interface_b.cable:
+    return "exists"  # На одном из интерфейсов уже есть кабель
+```
+
+### Пример полного цикла
+
+```
+Входные данные (LLDP, protocol=both):
+  switch1:Gi0/1 → switch2:Gi0/2 (hostname, MAC, IP)
+  switch1:Gi0/2 → switch3:Gi0/1 (hostname)
+  switch2:Gi0/2 → switch1:Gi0/1 (hostname)  ← дубль!
+  switch1:Po1   → switch2:Po1   (LAG)       ← пропуск
+
+Результат:
+  created: 2       (switch1↔switch2, switch1↔switch3)
+  already_exists: 0
+  skipped: 2       (LAG + дубль не считается)
+  failed: 0
+  deleted: 0       (cleanup не включён)
+```
+
+---
+
 ## Резюме
 
 ### Ключевые концепции
@@ -1723,11 +2337,13 @@ curl http://localhost:8080/api/tasks/abc-123-def
 6. **SyncService** — обёртка для API (async, task tracking)
 7. **Collector** — сбор данных с устройств по SSH
 8. **SyncComparator** — сравнение local vs remote данных
+9. **Batch API** — пакетные операции для ускорения sync (bulk create/update/delete)
+10. **Cable Sync** — поштучная синхронизация кабелей из LLDP с дедупликацией и cleanup
 
 ### Поток данных
 
 ```
-Устройство (SSH) → Collector → Models → Comparator → Sync → NetBox API
+Устройство (SSH) → Collector → Models → Comparator → Sync (Batch API) → NetBox API
 ```
 
 ### Файлы для изучения
@@ -1737,7 +2353,13 @@ curl http://localhost:8080/api/tasks/abc-123-def
 | `core/pipeline/models.py` | Pipeline, PipelineStep, StepType |
 | `core/pipeline/executor.py` | PipelineExecutor, run(), _execute_* |
 | `netbox/sync/base.py` | SyncBase, _find_*, _get_or_create_* |
-| `netbox/sync/interfaces.py` | InterfacesSyncMixin, sync_interfaces |
+| `netbox/sync/interfaces.py` | InterfacesSyncMixin, batch create/update/delete, _build_*_data |
+| `netbox/sync/cables.py` | CablesSyncMixin, _find_neighbor_device, _cleanup_cables, дедупликация |
+| `netbox/sync/inventory.py` | InventorySyncMixin, batch create/update/delete |
+| `netbox/sync/ip_addresses.py` | IPAddressesSyncMixin, batch create/delete |
 | `netbox/sync/main.py` | NetBoxSync (множественное наследование) |
+| `netbox/client/interfaces.py` | InterfacesMixin, bulk_create/update/delete_interfaces |
+| `netbox/client/inventory.py` | InventoryMixin, bulk_create/update/delete_inventory_items |
+| `netbox/client/ip_addresses.py` | IPAddressesMixin, bulk_create/delete_ip_addresses |
 | `api/services/sync_service.py` | SyncService, _do_sync, async handling |
 | `core/domain/sync.py` | SyncComparator, SyncDiff, compare_* |

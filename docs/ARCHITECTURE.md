@@ -162,7 +162,7 @@ cli/
 
 **Ответственность:**
 - Синхронизация данных с NetBox API
-- CRUD операции через pynetbox
+- CRUD операции через pynetbox (batch и поштучные)
 - Diff и preview изменений
 
 **Архитектура:**
@@ -174,30 +174,64 @@ netbox/sync/
 ├── __init__.py          # re-export NetBoxSync
 ├── base.py              # SyncBase — общие методы
 ├── main.py              # NetBoxSync — объединяет mixins
-├── interfaces.py        # InterfacesSyncMixin
+├── interfaces.py        # InterfacesSyncMixin (batch API)
 ├── cables.py            # CablesSyncMixin
-├── ip_addresses.py      # IPAddressesSyncMixin
+├── ip_addresses.py      # IPAddressesSyncMixin (batch API)
 ├── devices.py           # DevicesSyncMixin
 ├── vlans.py             # VLANsSyncMixin
-└── inventory.py         # InventorySyncMixin
+└── inventory.py         # InventorySyncMixin (batch API)
 ```
 
 **Классы:**
-- `NetBoxClient` — обёртка над pynetbox (`netbox/client.py`)
+- `NetBoxClient` — обёртка над pynetbox (`netbox/client/`) — mixin архитектура с bulk-методами
 - `NetBoxSync` — объединяет все mixins (`netbox/sync/main.py`)
 - `SyncBase` — базовый класс с общими методами (`netbox/sync/base.py`)
+  - `_batch_with_fallback()` — универсальный batch с автоматическим fallback на поштучные операции
   - `_vlan_cache` — кэш VLAN для производительности (batch загрузка)
   - `_get_vlan_by_vid()` — поиск VLAN по VID с кэшированием
   - `_load_site_vlans()` — загрузка всех VLAN сайта одним запросом
 - `DiffCalculator` — предпросмотр изменений (`netbox/diff.py`)
 
 **Mixins:**
-- `InterfacesSyncMixin` — sync_interfaces() + sync_vlans (untagged_vlan, tagged_vlans)
-- `CablesSyncMixin` — sync_cables_from_lldp()
-- `IPAddressesSyncMixin` — sync_ip_addresses()
+- `InterfacesSyncMixin` — sync_interfaces() + batch create/update/delete + VLAN sync
+  - `_build_update_data()` — оркестратор, делегирует 11 хелперам `_check_*()`
+  - `_check_type/description/enabled/mac/mtu/speed/duplex/mode/untagged_vlan/tagged_vlans/lag`
+- `CablesSyncMixin` — sync_cables_from_lldp() + cleanup + дедупликация
+- `IPAddressesSyncMixin` — sync_ip_addresses() + batch create/delete
 - `DevicesSyncMixin` — create_device(), sync_devices_from_inventory()
 - `VLANsSyncMixin` — sync_vlans_from_interfaces() (создание VLAN из SVI)
-- `InventorySyncMixin` — sync_inventory()
+- `InventorySyncMixin` — sync_inventory() + batch create/update/delete
+
+**Batch API (Февраль 2026):**
+
+Sync операции для interfaces, inventory и IP используют **пакетные API-вызовы**:
+- Все данные подготавливаются через `_build_create_data()` / `_build_update_data()` без API
+- Один `bulk_create/update/delete()` вместо цикла поштучных вызовов
+- `SyncBase._batch_with_fallback()` — единый метод для batch с автоматическим fallback
+- MAC-адреса назначаются через отдельный endpoint (не в bulk)
+
+```
+Подготовка данных → _batch_with_fallback(bulk_fn, fallback_fn) → Post-process (MAC)
+                         ↓ (при ошибке batch)
+                    Fallback → Поштучные операции
+```
+
+**Cable Sync — отличия от других sync-операций:**
+
+`CablesSyncMixin` работает принципиально иначе, чем interfaces/inventory/IP:
+
+| Аспект | Interfaces/Inventory/IP | Cables |
+|--------|------------------------|--------|
+| API вызовы | Batch (bulk create/update/delete) | Поштучно |
+| Сравнение | SyncComparator → SyncDiff | Проверка `interface.cable` |
+| Источник | Коллектор (1 устройство) | LLDP (2 устройства на кабель) |
+
+Ключевые особенности cable sync:
+- **Поиск соседа** — 4 стратегии по `neighbor_type`: hostname → IP → MAC
+- **Дедупликация** — `seen_cables` set (LLDP видит кабель с обеих сторон)
+- **LAG-пропуск** — кабели на LAG интерфейсы не создаются
+- **skip_unknown** — пропуск соседей без идентификационных данных
+- **Cleanup защита** — кабель удаляется только если ОБА устройства в LLDP-скане
 
 ### 2.5 Export Layer (exporters/*.py)
 
@@ -317,25 +351,39 @@ netbox/sync/
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ 5. NETBOX API OPERATIONS                                                     │
+│ 5. NETBOX API OPERATIONS (Batch API)                                         │
 │                                                                              │
-│    Для каждого интерфейса:                                                   │
+│    Для каждого устройства:                                                   │
 │    ┌─────────────────────────────────────────────────────────────────────┐   │
 │    │ a) client.get_device_by_name(hostname)                              │   │
-│    │    → Найти устройство в NetBox                                      │   │
+│    │    → Найти устройство в NetBox (1 запрос)                           │   │
 │    │                                                                     │   │
 │    │ b) client.get_interfaces(device_id)                                 │   │
-│    │    → Получить существующие интерфейсы                               │   │
+│    │    → Получить существующие интерфейсы (1 запрос)                    │   │
 │    │                                                                     │   │
-│    │ c) Сравнение:                                                       │   │
-│    │    - Нет в NetBox? → CREATE                                         │   │
-│    │    - Есть изменения? → UPDATE                                       │   │
-│    │    - Нет изменений? → SKIP                                          │   │
+│    │ c) SyncComparator.compare_interfaces(local, remote)                 │   │
+│    │    → diff: to_create[], to_update[], to_delete[], to_skip[]        │   │
 │    │                                                                     │   │
-│    │ d) Если dry_run: только логирование                                 │   │
+│    │ d) Batch create — _build_create_data() для каждого → 1 POST         │   │
+│    │    client.bulk_create_interfaces([{...}, {...}, ...])               │   │
+│    │                                                                     │   │
+│    │ e) Batch update — _build_update_data() для каждого → 1 PATCH        │   │
+│    │    client.bulk_update_interfaces([{id:1,...}, {id:2,...}])          │   │
+│    │                                                                     │   │
+│    │ f) Batch delete → 1 DELETE                                          │   │
+│    │    client.bulk_delete_interfaces([id1, id2, ...])                  │   │
+│    │                                                                     │   │
+│    │ g) Post-process: MAC назначение (по одному, отдельный endpoint)     │   │
+│    │                                                                     │   │
+│    │ h) Если dry_run: шаги d-g пропускаются, только логирование          │   │
+│    │                                                                     │   │
+│    │ i) Если batch упал: fallback на поштучные операции                   │   │
 │    └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
-│    → {"created": 5, "updated": 3, "skipped": 2, "failed": 0}                 │
+│    Раньше: ~100 API-запросов на устройство (48 портов)                       │
+│    Сейчас: ~3 API-запроса + MAC                                              │
+│                                                                              │
+│    → {"created": 5, "updated": 3, "skipped": 2, "failed": 0}                │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1073,25 +1121,33 @@ Field Registry Statistics:
 
 ### 10.4 NetBox
 
+**Client (netbox/client/) — обёртка над pynetbox:**
+
 | Файл | Описание |
 |------|----------|
 | `netbox/client/__init__.py` | Re-export NetBoxClient |
 | `netbox/client/base.py` | NetBoxClientBase — инициализация |
 | `netbox/client/main.py` | NetBoxClient — объединяет mixins |
 | `netbox/client/devices.py` | DevicesMixin (get_devices, get_device_by_*) |
-| `netbox/client/interfaces.py` | InterfacesMixin (get/create/update_interface) |
+| `netbox/client/interfaces.py` | InterfacesMixin — get/create/update + **bulk_create/update/delete_interfaces** |
 | `netbox/client/vlans.py` | VLANsMixin (get_vlans, create_vlan) |
-| `netbox/client/inventory.py` | InventoryMixin (inventory items CRUD) |
+| `netbox/client/inventory.py` | InventoryMixin — CRUD + **bulk_create/update/delete_inventory_items** |
+| `netbox/client/ip_addresses.py` | IPAddressesMixin — get/cables + **bulk_create/delete_ip_addresses** |
 | `netbox/client/dcim.py` | DCIMMixin (device types, manufacturers, etc.) |
+
+**Sync (netbox/sync/) — логика синхронизации:**
+
+| Файл | Описание |
+|------|----------|
 | `netbox/sync/__init__.py` | Re-export NetBoxSync |
 | `netbox/sync/base.py` | SyncBase — общие методы синхронизации |
 | `netbox/sync/main.py` | NetBoxSync — объединяет все mixins |
-| `netbox/sync/interfaces.py` | InterfacesSyncMixin (sync_interfaces) |
+| `netbox/sync/interfaces.py` | InterfacesSyncMixin — **batch API**: _build_create/update_data, _batch_create/update/delete |
 | `netbox/sync/cables.py` | CablesSyncMixin (sync_cables_from_lldp) |
-| `netbox/sync/ip_addresses.py` | IPAddressesSyncMixin (sync_ip_addresses) |
+| `netbox/sync/ip_addresses.py` | IPAddressesSyncMixin — **batch API**: _batch_create/delete_ip_addresses |
 | `netbox/sync/devices.py` | DevicesSyncMixin (sync_devices_from_inventory) |
 | `netbox/sync/vlans.py` | VLANsSyncMixin (sync_vlans_from_interfaces) |
-| `netbox/sync/inventory.py` | InventorySyncMixin (sync_inventory) |
+| `netbox/sync/inventory.py` | InventorySyncMixin — **batch API**: batch create/update/delete inventory |
 | `netbox/diff.py` | DiffCalculator (preview changes) |
 
 ### 10.5 Web API
