@@ -188,6 +188,7 @@ netbox/sync/
 - `SyncBase` — базовый класс с общими методами (`netbox/sync/base.py`)
   - `_batch_with_fallback()` — универсальный batch с автоматическим fallback на поштучные операции
   - `_vlan_cache` — кэш VLAN для производительности (batch загрузка)
+  - `_vlan_id_to_vid` — обратный кэш (NetBox ID → VID) для избежания lazy-load
   - `_get_vlan_by_vid()` — поиск VLAN по VID с кэшированием
   - `_load_site_vlans()` — загрузка всех VLAN сайта одним запросом
 - `DiffCalculator` — предпросмотр изменений (`netbox/diff.py`)
@@ -215,6 +216,20 @@ Sync операции для interfaces, inventory и IP используют **
                          ↓ (при ошибке batch)
                     Fallback → Поштучные операции
 ```
+
+**Оптимизация N+1 запросов (Февраль 2026):**
+
+pynetbox использует lazy-loading: обращение к атрибуту вложенного объекта (Record)
+вызывает `full_details()` — дополнительный API-запрос. Это приводит к N+1 паттерну:
+
+| Проблема | Где | Решение |
+|----------|-----|---------|
+| `hasattr(val, "value")` на VLAN Record | SyncComparator._get_remote_field() | Прямое обращение к `.vid` (есть в brief serializer) |
+| `nb_interface.device.site.name` на каждый интерфейс | _check_untagged_vlan / _check_tagged_vlans | Кэширование `site_name` в sync_interfaces() |
+| Per-item `get_inventory_item()` в цикле | sync_inventory() | Pre-fetch всех items одним запросом |
+| VLAN ID → VID lookup через lazy-load | _check_untagged_vlan | Обратный кэш `_vlan_id_to_vid` |
+
+Результат: ~95 лишних запросов на устройство → 0 (для 55 интерфейсов).
 
 **Cable Sync — отличия от других sync-операций:**
 

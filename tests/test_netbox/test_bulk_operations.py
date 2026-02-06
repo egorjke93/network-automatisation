@@ -489,11 +489,13 @@ class TestBatchSyncInventory:
         # Существующий item с другим serial
         existing = Mock()
         existing.id = 10
+        existing.name = "PSU 1"
         existing.part_id = "PWR-123"
         existing.serial = "OLD"
         existing.description = ""
         existing.manufacturer = None
-        mock_client.get_inventory_item.return_value = existing
+        # Pre-fetch: get_inventory_items возвращает все items устройства
+        mock_client.get_inventory_items.return_value = [existing]
 
         items = [
             InventoryItem(name="PSU 1", pid="PWR-123", serial="NEW"),

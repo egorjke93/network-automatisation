@@ -75,6 +75,16 @@ class InterfacesSyncMixin:
             stats["errors"] = [f"Device not found in NetBox: {device_name}"]
             return stats
 
+        # Кэшируем site_name один раз — чтобы не делать GET /api/dcim/devices/{id}/
+        # на каждом интерфейсе в _check_untagged_vlan (N+1 проблема)
+        site_name = None
+        if hasattr(device, 'site') and device.site:
+            site_name = getattr(device.site, 'name', None)
+
+        # Предзагружаем кэш VLAN для сайта (один API-запрос)
+        if sync_cfg.get_option("sync_vlans", False) and site_name:
+            self._get_vlan_by_vid(1, site_name)  # Форсирует загрузку всех VLAN сайта
+
         existing = list(self.client.get_interfaces(device_id=device.id))
         exclude_patterns = sync_cfg.get_option("exclude_interfaces", [])
         interface_models = Interface.ensure_list(interfaces)
@@ -138,7 +148,7 @@ class InterfacesSyncMixin:
 
         # === BATCH UPDATE ===
         self._batch_update_interfaces(
-            diff.to_update, sorted_interfaces, stats, details
+            diff.to_update, sorted_interfaces, stats, details, site_name=site_name
         )
 
         # === BATCH DELETE ===
@@ -238,6 +248,7 @@ class InterfacesSyncMixin:
         sorted_interfaces: List[Interface],
         stats: dict,
         details: dict,
+        site_name: Optional[str] = None,
     ) -> None:
         """Batch обновление интерфейсов."""
         if not to_update:
@@ -252,7 +263,9 @@ class InterfacesSyncMixin:
             if not intf or not item.remote_data:
                 continue
 
-            updates, actual_changes, mac = self._build_update_data(item.remote_data, intf)
+            updates, actual_changes, mac = self._build_update_data(
+                item.remote_data, intf, site_name=site_name
+            )
 
             if not updates and not mac:
                 logger.debug(f"  → нет изменений для интерфейса {item.remote_data.name}")
@@ -509,6 +522,7 @@ class InterfacesSyncMixin:
     def _check_untagged_vlan(
         self: SyncBase, nb_interface, intf: Interface,
         sync_cfg, updates: Dict, actual_changes: List[str],
+        site_name: Optional[str] = None,
     ) -> None:
         """Проверяет и обновляет untagged VLAN (access_vlan / native_vlan)."""
         if not (sync_cfg.is_field_enabled("untagged_vlan") and sync_cfg.get_option("sync_vlans", False)):
@@ -526,17 +540,26 @@ class InterfacesSyncMixin:
             except ValueError:
                 pass
 
+        # Получаем текущий VLAN без lazy-load pynetbox
+        # .id доступен в brief response (не вызывает GET /api/ipam/vlans/{id}/)
         current_vlan_id = None
         current_vlan_vid = None
         if nb_interface.untagged_vlan:
             current_vlan_id = getattr(nb_interface.untagged_vlan, 'id', None)
-            current_vlan_vid = getattr(nb_interface.untagged_vlan, 'vid', None)
+            # VID из обратного кэша (без lazy-load), fallback на .vid
+            if current_vlan_id:
+                current_vlan_vid = self._vlan_id_to_vid.get(current_vlan_id)
+            if current_vlan_vid is None:
+                current_vlan_vid = getattr(nb_interface.untagged_vlan, 'vid', None)
 
         if target_vid:
-            device = nb_interface.device
-            site_name = None
-            if device and hasattr(device, 'site') and device.site:
-                site_name = getattr(device.site, 'name', None)
+            # site_name передаётся из sync_interfaces() — избегаем N+1 запросов
+            # к GET /api/dcim/devices/{id}/ на каждом интерфейсе
+            if site_name is None:
+                # Fallback для legacy-вызовов (напр. _update_interface)
+                device = nb_interface.device
+                if device and hasattr(device, 'site') and device.site:
+                    site_name = getattr(device.site, 'name', None)
 
             vlan = self._get_vlan_by_vid(target_vid, site_name)
             if vlan:
@@ -552,6 +575,7 @@ class InterfacesSyncMixin:
     def _check_tagged_vlans(
         self: SyncBase, nb_interface, intf: Interface,
         sync_cfg, updates: Dict, actual_changes: List[str],
+        site_name: Optional[str] = None,
     ) -> None:
         """Проверяет и обновляет tagged VLANs (trunk порты)."""
         if not (sync_cfg.is_field_enabled("tagged_vlans") and sync_cfg.get_option("sync_vlans", False)):
@@ -564,10 +588,11 @@ class InterfacesSyncMixin:
             )
 
             if target_vids:
-                device = nb_interface.device
-                site_name = None
-                if device and hasattr(device, 'site') and device.site:
-                    site_name = getattr(device.site, 'name', None)
+                # site_name передаётся из sync_interfaces() — избегаем N+1 запросов
+                if site_name is None:
+                    device = nb_interface.device
+                    if device and hasattr(device, 'site') and device.site:
+                        site_name = getattr(device.site, 'name', None)
 
                 target_vlan_ids = []
                 matched_vids = []
@@ -637,11 +662,17 @@ class InterfacesSyncMixin:
         self: SyncBase,
         nb_interface,
         intf: Interface,
+        site_name: Optional[str] = None,
     ) -> Tuple[Dict, List[str], Optional[str]]:
         """
         Подготавливает данные для обновления интерфейса.
 
         Делегирует проверку каждого поля в отдельный _check_* хелпер.
+
+        Args:
+            nb_interface: Интерфейс из NetBox
+            intf: Локальный интерфейс
+            site_name: Имя сайта (кэшированное, чтобы избежать N+1 запросов)
 
         Returns:
             Tuple: (updates_dict, actual_changes_list, mac_to_assign или None)
@@ -671,8 +702,8 @@ class InterfacesSyncMixin:
         sync_vlans_enabled = sync_cfg.get_option("sync_vlans", False)
         logger.debug(f"  {nb_interface.name}: sync_vlans={sync_vlans_enabled}")
 
-        self._check_untagged_vlan(nb_interface, intf, sync_cfg, updates, actual_changes)
-        self._check_tagged_vlans(nb_interface, intf, sync_cfg, updates, actual_changes)
+        self._check_untagged_vlan(nb_interface, intf, sync_cfg, updates, actual_changes, site_name=site_name)
+        self._check_tagged_vlans(nb_interface, intf, sync_cfg, updates, actual_changes, site_name=site_name)
         self._check_lag(nb_interface, intf, sync_cfg, updates, actual_changes)
 
         return updates, actual_changes, mac_to_assign

@@ -566,6 +566,7 @@ sync-netbox --ip-addresses --update-ips --cleanup-ips
 | **DELETE** | `--cleanup-cables` | Удаляет кабели которых нет в LLDP/CDP |
 | **SKIP** | Интерфейс уже имеет кабель | Пропуск |
 | **SKIP** | LAG интерфейс | Пропуск (кабели на LAG не поддерживаются) |
+| **SKIP** | `skip_unknown` (по умолчанию) | Пропуск соседей с типом "unknown" |
 
 ```bash
 sync-netbox --cables --protocol both  # LLDP + CDP
@@ -575,6 +576,24 @@ sync-netbox --cables --protocol cdp   # Только CDP
 # С удалением устаревших кабелей
 sync-netbox --cables --cleanup-cables --dry-run
 ```
+
+**Дедупликация:** LLDP видит кабель с обеих сторон (switch1→switch2 и switch2→switch1).
+Система автоматически дедуплицирует — один кабель = одна запись в статистике.
+
+**Поиск соседа:** Устройство-сосед ищется по `neighbor_type` (определяется из LLDP данных):
+- `hostname` → поиск по имени, fallback на IP и MAC
+- `mac` → поиск по MAC-адресу, fallback на IP
+- `ip` → поиск по IP-адресу, fallback на MAC
+- `unknown` → пропускается (если `skip_unknown=true`, по умолчанию)
+
+**LAG-пропуск:** Если локальный или удалённый интерфейс имеет тип `lag` (Port-channel),
+кабель не создаётся. Физические кабели подключаются к конкретным портам, а не к LAG.
+
+**Cleanup поведение (`--cleanup-cables`):**
+- Удаляет кабели из NetBox, которых нет в текущих LLDP/CDP данных
+- **Защита:** кабель удаляется **только если ОБА устройства** на его концах присутствуют в LLDP-скане
+- Кабели к устройствам, которые не участвовали в скане, **не удаляются**
+- Hostname нормализуется (убирается домен: `switch1.corp.local` → `switch1`)
 
 ##### VLAN
 
@@ -975,12 +994,17 @@ steps:
 ```yaml
 # collect lldp
 options:
-  protocol: both  # lldp, cdp, both
+  protocol: both  # lldp, cdp, both (по умолчанию: both)
+
+# collect cdp (использует protocol: cdp автоматически)
+options: {}
 
 # collect backup
 options:
   output_dir: "backups"
 ```
+
+**Примечание:** Для `collect lldp` по умолчанию используется `protocol: both` (LLDP + CDP), чтобы собирать всех соседей.
 
 **Sync шаги:**
 
@@ -991,12 +1015,28 @@ options:
   role: "switch"
   create: true
   update: true
+  # cleanup НЕ поддерживается (требует tenant, как в CLI)
 
 # sync interfaces
 options:
   sync_mac: true
   sync_mode: true  # 802.1Q mode
+  cleanup: true    # Удалять интерфейсы которых нет на устройстве
+
+# sync cables
+options:
+  cleanup: true    # Удалять кабели которых нет в LLDP/CDP
+
+# sync inventory
+options:
+  cleanup: true    # Удалять inventory items которых нет
+
+# sync ip_addresses
+options:
+  cleanup: true    # Удалять IP которых нет на устройстве
 ```
+
+**Важно:** `cleanup` для `sync devices` **НЕ поддерживается** в pipeline (требует tenant для безопасности, аналогично CLI `--cleanup --tenant`).
 
 **Export шаги:**
 

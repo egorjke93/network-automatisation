@@ -81,6 +81,9 @@ def bind_mixin_methods(mock_obj, mixin_class, method_names):
     for name in method_names:
         method = getattr(mixin_class, name)
         setattr(mock_obj, name, lambda *args, _m=method, **kw: _m(mock_obj, *args, **kw))
+    # Инициализируем кэши SyncBase, которые используют _check_* хелперы
+    if not hasattr(mock_obj, '_vlan_id_to_vid') or isinstance(getattr(mock_obj, '_vlan_id_to_vid', None), type(mock_obj)):
+        mock_obj._vlan_id_to_vid = {}
 
 
 # Все методы InterfacesSyncMixin, которые нужно привязать к mock

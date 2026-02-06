@@ -1,6 +1,6 @@
 # Network Collector - План развития
 
-> Последнее обновление: Январь 2026
+> Последнее обновление: Февраль 2026
 
 ## Текущее состояние
 
@@ -62,7 +62,7 @@
 | API Routes | `api/routes/pipelines.py` | ✅ OK |
 | Vue UI | `frontend/src/views/Pipelines.vue` | ✅ OK |
 | CLI command | `cli/commands/pipeline.py` | ✅ OK |
-| Tests | `tests/test_core/test_pipeline/` + `tests/test_cli/test_pipeline.py` | 95 тестов |
+| Tests | `tests/test_core/test_pipeline/` + `tests/test_cli/test_pipeline.py` | 102 теста |
 
 ---
 
@@ -514,8 +514,8 @@ sync:
 
 | Тип | Текущее | Нужно |
 |-----|---------|-------|
-| Unit tests | 1175+ | ✅ OK |
-| Integration tests | 200+ (API, pipeline) | ✅ OK |
+| Unit tests | 1200+ | ✅ OK |
+| Integration tests | 250+ (API, pipeline) | ✅ OK |
 | E2E tests | 2 | Расширить |
 | Coverage | ~85% | ✅ OK |
 
@@ -558,13 +558,14 @@ sync:
 
 ## Что уже хорошо ✅
 
-- ✅ 1434 тестов (хорошее покрытие)
+- ✅ 1533+ тестов (хорошее покрытие)
 - ✅ Структурированное JSON логирование
 - ✅ Domain Layer с нормализаторами
 - ✅ Pipeline система с транзакциями
 - ✅ Pydantic модели для валидации
-- ✅ Подробная документация (6 файлов)
-- ✅ Type hints в 344 функциях
+- ✅ Подробная документация (14 файлов)
+- ✅ Batch API для sync (3-5x ускорение)
+- ✅ Type hints в 370+ функциях
 
 ---
 
@@ -616,6 +617,114 @@ collect_devices → sync_devices → collect_interfaces → sync_interfaces → 
 ```
 
 Шаг с `depends_on` не выполнится пока зависимости не завершатся успешно.
+
+---
+
+## Оптимизация производительности (Февраль 2026) ✅ ВЫПОЛНЕНО
+
+### Batch API для синхронизации ✅ ВЫПОЛНЕНО
+
+**Проблема:** Pipeline на 22 устройства выполнялся ~30 минут. Sync фаза выполнялась последовательно —
+по одному API-вызову на каждый интерфейс/inventory/IP.
+
+**Решение:** Переход на batch API (pynetbox bulk create/update/delete):
+
+| Компонент | Файл | Изменение |
+|-----------|------|-----------|
+| Client bulk interfaces | `netbox/client/interfaces.py` | +3 метода: `bulk_create/update/delete_interfaces` |
+| Client bulk inventory | `netbox/client/inventory.py` | +3 метода: `bulk_create/update/delete_inventory_items` |
+| Client bulk IP | `netbox/client/ip_addresses.py` | +3 метода: `bulk_create/update/delete_ip_addresses` |
+| Batch sync interfaces | `netbox/sync/interfaces.py` | Рефакторинг на batch create/update/delete |
+| Batch sync inventory | `netbox/sync/inventory.py` | Рефакторинг на batch create/update/delete |
+| Batch sync IP | `netbox/sync/ip_addresses.py` | Рефакторинг на batch create/update/delete |
+| Параллелизм collect | `config.yaml` | `max_workers: 5` → `10` |
+| Тесты | `tests/test_netbox/test_bulk_operations.py` | 32 теста |
+
+**Архитектура batch sync:**
+```python
+# Было: по одному API-вызову на каждый интерфейс
+for item in diff.to_create:
+    self._create_interface(device.id, intf)  # 1 API call
+
+# Стало: один bulk-вызов на все интерфейсы
+create_batch = [self._build_create_data(device.id, intf) for intf in ...]
+self.client.bulk_create_interfaces(create_batch)  # 1 API call
+```
+
+**Безопасность:**
+- Fallback: если bulk-вызов падает → автоматический переход на поштучные операции
+- dry-run: batch пропускает API-вызовы, логирует как раньше
+- Обратная совместимость: старые методы (`create_interface`, `update_interface`) остаются
+
+**Ожидаемое ускорение:** 3-5x для sync фазы (22 устройства × ~48 портов):
+- До: 22 × ~100 API calls × ~100ms = ~3.5 мин (только interfaces)
+- После: 22 × ~3 API calls (bulk) + MAC = ~1 мин
+
+---
+
+## Bug Fixes (Февраль 2026)
+
+### Pipeline Cleanup Options Fix ✅
+
+**Проблема:** Pipeline не передавал `cleanup` опцию в sync методы.
+
+**Причина:** `executor.py` не извлекал `cleanup` из `options` при вызове sync.
+
+**Решение:**
+- `sync_interfaces`: теперь передаёт `cleanup=options.get("cleanup", False)`
+- `sync_cables_from_lldp`: теперь передаёт `cleanup=options.get("cleanup", False)`
+- `sync_inventory`: теперь передаёт `cleanup=options.get("cleanup", False)`
+- `sync_ip_addresses`: теперь передаёт `cleanup=options.get("cleanup", False)`
+- `sync_devices`: **НЕ передаёт cleanup** (требует tenant для безопасности, как в CLI)
+
+**YAML пример:**
+```yaml
+steps:
+  - id: sync_interfaces
+    type: sync
+    target: interfaces
+    options:
+      cleanup: true  # Теперь работает!
+```
+
+**Файл:** `core/pipeline/executor.py`
+
+**Тесты:** 7 тестов в `tests/test_core/test_pipeline/test_executor_cleanup.py`
+
+### Mode Clearing for Shutdown Ports Fix ✅
+
+**Проблема:** Shutdown порты сохраняли старый mode (Tagged all) в NetBox.
+
+**Причина:** Когда порт без switchport настроек (только shutdown), mode приходил пустым.
+Код пропускал пустой mode вместо очистки значения в NetBox.
+
+**Решение:**
+```python
+# Было: if intf.mode and intf.mode != current_mode:
+# Стало:
+if intf.mode and intf.mode != current_mode:
+    updates["mode"] = intf.mode  # Устанавливаем новый
+elif not intf.mode and current_mode:
+    updates["mode"] = ""  # Очищаем если порт без mode
+```
+
+**Файл:** `netbox/sync/interfaces.py`
+
+**Тесты:** 3 теста в `TestModeClearOnShutdown`
+
+### LLDP Protocol Default in Pipeline Fix ✅
+
+**Проблема:** Pipeline LLDP collect использовал protocol=lldp, не собирая CDP соседей.
+
+**Решение:** Добавлен дефолт `protocol=both` для LLDP сбора в pipeline.
+
+```python
+# executor.py
+if target == "lldp":
+    options.setdefault("protocol", "both")
+```
+
+**Файл:** `core/pipeline/executor.py`
 
 ---
 
@@ -682,10 +791,10 @@ collect_devices → sync_devices → collect_interfaces → sync_interfaces → 
 |---------|----------|
 | Python файлов | ~90 |
 | Строк кода | ~17,000 |
-| Тестов | 1434+ |
+| Тестов | 1533+ |
 | CLI команд | 11 |
 | API endpoints | 13 |
 | Vue компонентов | 14 |
 | Поддерживаемых платформ | 7 |
 | Функций с type hints | 370+ |
-| Документов | 10 |
+| Документов | 14 |

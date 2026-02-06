@@ -712,187 +712,479 @@ lldp:
 
 ---
 
-## Шаг 4b: Синхронизация с NetBox
+## Шаг 4b: Синхронизация с NetBox (Кабели)
 
-### 4b.1 sync_cables_from_lldp()
+### 4b.1 sync_cables_from_lldp() — Главный метод
 
 **Файл:** `netbox/sync/cables.py`
 
+Метод принимает LLDP/CDP данные и создаёт кабели в NetBox. В отличие от interfaces/inventory,
+кабели создаются **поштучно** (не через batch API), потому что каждый кабель требует проверки
+обоих интерфейсов.
+
 ```python
-class NetBoxSync:
+class CablesSyncMixin:
     def sync_cables_from_lldp(
-        self,
+        self: SyncBase,
         lldp_data: List[LLDPNeighbor],
-        skip_unknown: bool = True,
+        skip_unknown: bool = True,    # Пропускать соседей с типом "unknown"
+        cleanup: bool = False,        # Удалять кабели которых нет в LLDP данных
     ) -> Dict[str, int]:
         """
         Создаёт кабели в NetBox на основе LLDP/CDP данных.
 
-        Для каждого соседа:
-        1. Находим локальное устройство и интерфейс
-        2. Находим удалённое устройство (по hostname/MAC/IP)
-        3. Находим удалённый интерфейс
-        4. Создаём кабель
+        Returns:
+            Dict: {created, deleted, skipped, failed, already_exists, details}
         """
+        stats = {"created": 0, "deleted": 0, "skipped": 0, "failed": 0, "already_exists": 0}
+        details = {"create": [], "delete": []}
 
-        stats = {"created": 0, "skipped": 0, "failed": 0}
+        # ══════════════════════════════════════════════════════════
+        # 1. ДЕДУПЛИКАЦИЯ: LLDP видит кабель с обеих сторон
+        #    switch1:Gi0/1 → switch2:Gi0/2  (запись от switch1)
+        #    switch2:Gi0/2 → switch1:Gi0/1  (запись от switch2)
+        #    Это ОДИН кабель, но два LLDP-записи. seen_cables это фильтрует.
+        # ══════════════════════════════════════════════════════════
+        seen_cables = set()
 
-        for entry in lldp_data:
-            # 1. Ищем ЛОКАЛЬНОЕ устройство
-            local_device = self._find_device(entry.hostname)
-            if not local_device:
-                logger.warning(f"Устройство не найдено: {entry.hostname}")
-                stats["failed"] += 1
-                continue
+        neighbors = LLDPNeighbor.ensure_list(lldp_data)
 
-            # 2. Ищем ЛОКАЛЬНЫЙ интерфейс
-            local_intf = self._find_interface(
-                local_device.id,
-                entry.local_interface
-            )
-            if not local_intf:
-                logger.warning(
-                    f"Интерфейс не найден: {entry.hostname}:{entry.local_interface}"
-                )
-                stats["failed"] += 1
-                continue
+        # Собираем множество устройств из LLDP данных (для cleanup)
+        lldp_devices = set()
+        for entry in neighbors:
+            if entry.hostname:
+                lldp_devices.add(entry.hostname)
 
-            # 3. Ищем УДАЛЁННОЕ устройство
-            remote_device = self._find_neighbor_device(entry)
-            if not remote_device:
-                logger.warning(f"Сосед не найден: {entry.remote_hostname}")
+        for entry in neighbors:
+            local_device = entry.hostname
+            local_intf = entry.local_interface
+            remote_hostname = entry.remote_hostname
+            remote_port = entry.remote_port
+            neighbor_type = entry.neighbor_type or "unknown"
+
+            # ══════════════════════════════════════════════════════════
+            # 2. ПРОПУСК UNKNOWN: если skip_unknown=True, пропускаем
+            #    соседей с типом "unknown" (нет ни hostname, ни MAC, ни IP)
+            # ══════════════════════════════════════════════════════════
+            if neighbor_type == "unknown" and skip_unknown:
                 stats["skipped"] += 1
                 continue
 
-            # 4. Ищем УДАЛЁННЫЙ интерфейс
-            remote_intf = self._find_interface(
-                remote_device.id,
-                entry.remote_port
-            )
-            if not remote_intf:
-                logger.warning(
-                    f"Интерфейс соседа не найден: "
-                    f"{remote_device.name}:{entry.remote_port}"
-                )
+            # 3. Ищем ЛОКАЛЬНОЕ устройство и интерфейс
+            local_device_obj = self._find_device(local_device)
+            if not local_device_obj:
+                stats["failed"] += 1
+                continue
+
+            local_intf_obj = self._find_interface(local_device_obj.id, local_intf)
+            if not local_intf_obj:
+                stats["failed"] += 1
+                continue
+
+            # 4. Ищем УДАЛЁННОЕ устройство (4 стратегии поиска)
+            remote_device_obj = self._find_neighbor_device(entry)
+            if not remote_device_obj:
                 stats["skipped"] += 1
                 continue
 
-            # 5. Создаём КАБЕЛЬ
-            result = self._create_cable(local_intf, remote_intf)
+            # 5. Ищем УДАЛЁННЫЙ интерфейс
+            remote_intf_obj = self._find_interface(remote_device_obj.id, remote_port)
+            if not remote_intf_obj:
+                stats["skipped"] += 1
+                continue
+
+            # ══════════════════════════════════════════════════════════
+            # 6. LAG-ПРОПУСК: кабели на LAG интерфейсы не создаём.
+            #    LLDP может показать LAG как сосед, но кабель
+            #    должен быть на физическом интерфейсе.
+            # ══════════════════════════════════════════════════════════
+            local_intf_type = getattr(local_intf_obj.type, 'value', None) if local_intf_obj.type else None
+            remote_intf_type = getattr(remote_intf_obj.type, 'value', None) if remote_intf_obj.type else None
+
+            if local_intf_type == "lag":
+                stats["skipped"] += 1
+                continue
+            if remote_intf_type == "lag":
+                stats["skipped"] += 1
+                continue
+
+            # 7. Создаём КАБЕЛЬ
+            result = self._create_cable(local_intf_obj, remote_intf_obj)
 
             if result == "created":
-                stats["created"] += 1
+                a_name = local_device_obj.name
+                b_name = remote_device_obj.name
+                # Дедупликация: сортируем endpoints чтобы A↔B и B↔A = одинаковый ключ
+                cable_key = tuple(sorted([f"{a_name}:{local_intf}", f"{b_name}:{remote_port}"]))
+                if cable_key not in seen_cables:
+                    seen_cables.add(cable_key)
+                    stats["created"] += 1
+                    details["create"].append({
+                        "name": f"{a_name}:{local_intf} ↔ {b_name}:{remote_port}",
+                        "a_device": a_name,
+                        "a_interface": local_intf,
+                        "b_device": b_name,
+                        "b_interface": remote_port,
+                    })
             elif result == "exists":
                 stats["already_exists"] += 1
             else:
                 stats["failed"] += 1
 
+        # ══════════════════════════════════════════════════════════
+        # 8. CLEANUP: удаление кабелей, которых нет в LLDP данных
+        # ══════════════════════════════════════════════════════════
+        if cleanup and lldp_devices:
+            deleted_details = self._cleanup_cables(neighbors, lldp_devices)
+            stats["deleted"] = len(deleted_details)
+            details["delete"].extend(deleted_details)
+
+        stats["details"] = details
         return stats
 ```
 
-### 4b.2 _find_neighbor_device() — поиск соседа
+**Диаграмма решений для одного LLDP-соседа:**
+
+```
+LLDP запись: switch1:Gi0/1 → switch2:Gi0/2
+    │
+    ├─ neighbor_type == "unknown" && skip_unknown? → SKIP
+    │
+    ├─ Локальное устройство не найдено? → FAILED
+    ├─ Локальный интерфейс не найден? → FAILED
+    │
+    ├─ Удалённое устройство не найдено? → SKIP
+    ├─ Удалённый интерфейс не найден? → SKIP
+    │
+    ├─ Локальный тип == "lag"? → SKIP
+    ├─ Удалённый тип == "lag"? → SKIP
+    │
+    ├─ interface_a.cable или interface_b.cable? → EXISTS
+    │
+    ├─ Дедупликация: cable_key уже в seen_cables? → (не считаем дважды)
+    │
+    └─ Всё ок → CREATE кабель
+```
+
+### 4b.2 _find_neighbor_device() — Поиск соседа (4 стратегии)
 
 **Файл:** `netbox/sync/cables.py`
 
+Ключевой метод — определяет как найти соседа в NetBox. В зависимости от `neighbor_type`
+(определяется в Domain Layer нормализатором) применяется своя цепочка fallback.
+
 ```python
-def _find_neighbor_device(self, entry: LLDPNeighbor):
-    """
-    Ищет устройство-сосед в NetBox.
+def _find_neighbor_device(
+    self: SyncBase,
+    entry: LLDPNeighbor,
+) -> Optional[Any]:
+    """Ищет устройство соседа в NetBox."""
+    hostname = entry.remote_hostname or ""
+    mac = entry.remote_mac
+    ip = entry.remote_ip
+    neighbor_type = entry.neighbor_type or "unknown"
 
-    Порядок поиска:
-    1. По hostname (если neighbor_type == "hostname")
-    2. По MAC адресу (если neighbor_type == "mac")
-    3. По IP адресу (если neighbor_type == "ip")
-    """
-
-    neighbor_type = entry.neighbor_type
-
-    # 1. Поиск по hostname
+    # ═══════════════════════════════════════════════════
+    # СТРАТЕГИЯ 1: neighbor_type == "hostname"
+    #   Приоритет: hostname → IP → MAC
+    #   Самый надёжный тип — сосед передал своё имя.
+    # ═══════════════════════════════════════════════════
     if neighbor_type == "hostname":
-        hostname = entry.remote_hostname
         # Убираем домен: switch1.corp.local → switch1
-        short_name = hostname.split(".")[0]
-
-        device = self.client.get_device_by_name(short_name)
+        clean_hostname = hostname.split(".")[0] if "." in hostname else hostname
+        device = self._find_device(clean_hostname)
         if device:
             return device
 
-        # Пробуем полное имя
-        device = self.client.get_device_by_name(hostname)
-        if device:
-            return device
+        # Fallback: поиск по IP
+        if ip:
+            device = self.client.get_device_by_ip(ip)
+            if device:
+                return device
 
-    # 2. Поиск по MAC
-    if neighbor_type == "mac" or entry.remote_mac:
-        mac = entry.remote_mac
-        device = self.client.get_device_by_mac(mac)
-        if device:
-            return device
+        # Fallback: поиск по MAC
+        if mac:
+            device = self._find_device_by_mac(mac)
+            if device:
+                return device
 
-    # 3. Поиск по IP
-    if neighbor_type == "ip" or entry.remote_ip:
-        ip = entry.remote_ip
-        device = self.client.get_device_by_ip(ip)
-        if device:
-            return device
+    # ═══════════════════════════════════════════════════
+    # СТРАТЕГИЯ 2: neighbor_type == "mac"
+    #   Приоритет: MAC → IP
+    #   Сосед не передал hostname, но передал chassis_id (MAC).
+    # ═══════════════════════════════════════════════════
+    elif neighbor_type == "mac":
+        if mac:
+            device = self._find_device_by_mac(mac)
+            if device:
+                return device
+
+        if ip:
+            device = self.client.get_device_by_ip(ip)
+            if device:
+                return device
+
+    # ═══════════════════════════════════════════════════
+    # СТРАТЕГИЯ 3: neighbor_type == "ip"
+    #   Приоритет: IP → MAC
+    #   Сосед передал management IP.
+    # ═══════════════════════════════════════════════════
+    elif neighbor_type == "ip":
+        if ip:
+            device = self.client.get_device_by_ip(ip)
+            if device:
+                return device
+
+        if mac:
+            device = self._find_device_by_mac(mac)
+            if device:
+                return device
+
+    # ═══════════════════════════════════════════════════
+    # СТРАТЕГИЯ 4: unknown / другие типы
+    #   Пробуем всё что есть: IP → MAC
+    # ═══════════════════════════════════════════════════
+    else:
+        if ip:
+            device = self.client.get_device_by_ip(ip)
+            if device:
+                return device
+        if mac:
+            device = self._find_device_by_mac(mac)
+            if device:
+                return device
 
     return None
 ```
 
-### 4b.3 _create_cable() — создание кабеля
+**Таблица стратегий поиска:**
+
+| neighbor_type | Источник | Цепочка поиска |
+|---------------|----------|----------------|
+| `hostname` | LLDP System Name / CDP Device ID | hostname → IP → MAC |
+| `mac` | LLDP Chassis ID (MAC формат) | MAC → IP |
+| `ip` | LLDP Management IP | IP → MAC |
+| `unknown` | Нет данных для идентификации | IP → MAC |
+
+### 4b.3 _create_cable() — Создание кабеля
 
 **Файл:** `netbox/sync/cables.py`
 
-```python
-def _create_cable(self, interface_a, interface_b):
-    """
-    Создаёт кабель между двумя интерфейсами.
+Проверка существования кабеля выполняется через атрибут `interface.cable` (один атрибут
+вместо отдельного API-запроса).
 
-    Args:
-        interface_a: Локальный интерфейс (объект NetBox)
-        interface_b: Удалённый интерфейс (объект NetBox)
+```python
+def _create_cable(
+    self: SyncBase,
+    interface_a,
+    interface_b,
+) -> str:
+    """
+    Создаёт кабель между интерфейсами.
 
     Returns:
-        str: "created", "exists", или "failed"
+        str: "created", "exists", "error"
     """
-
-    # Проверяем нет ли уже кабеля
-    existing = self.client.get_cable_by_interfaces(
-        interface_a.id,
-        interface_b.id
-    )
-    if existing:
+    # ══════════════════════════════════════════════════════════
+    # Проверка: если на ЛЮБОМ из интерфейсов уже есть кабель → exists.
+    # Используем атрибут interface.cable (pynetbox), не отдельный запрос.
+    # ══════════════════════════════════════════════════════════
+    if interface_a.cable or interface_b.cable:
         return "exists"
 
-    # Создаём кабель
+    # Учёт create_only / update_only режимов
+    if self.create_only is False and self.update_only:
+        return "exists"
+
+    # dry_run: только возвращаем "created", лог пишется в sync_cables_from_lldp
     if self.dry_run:
-        logger.info(
-            f"[DRY-RUN] Создание кабеля: "
-            f"{interface_a.device.name}:{interface_a.name} ↔ "
-            f"{interface_b.device.name}:{interface_b.name}"
-        )
         return "created"
 
+    # Реальное создание через NetBox API
     try:
-        self.client.create_cable(
-            a_terminations=[{
-                "object_type": "dcim.interface",
-                "object_id": interface_a.id,
-            }],
-            b_terminations=[{
-                "object_type": "dcim.interface",
-                "object_id": interface_b.id,
-            }],
-        )
-        logger.info(
-            f"Создан кабель: "
-            f"{interface_a.device.name}:{interface_a.name} ↔ "
-            f"{interface_b.device.name}:{interface_b.name}"
+        self.client.api.dcim.cables.create(
+            {
+                "a_terminations": [
+                    {
+                        "object_type": "dcim.interface",
+                        "object_id": interface_a.id,
+                    }
+                ],
+                "b_terminations": [
+                    {
+                        "object_type": "dcim.interface",
+                        "object_id": interface_b.id,
+                    }
+                ],
+                "status": "connected",
+            }
         )
         return "created"
+    except NetBoxError as e:
+        logger.error(f"Ошибка NetBox при создании кабеля: {format_error_for_log(e)}")
+        return "error"
     except Exception as e:
-        logger.error(f"Ошибка создания кабеля: {e}")
-        return "failed"
+        logger.error(f"Неизвестная ошибка создания кабеля: {e}")
+        return "error"
+```
+
+**Отличие от interfaces/inventory:**
+
+| Аспект | Interfaces/Inventory | Cables |
+|--------|---------------------|--------|
+| API вызовы | Batch (bulk create/update/delete) | Поштучно |
+| Сравнение | SyncComparator → SyncDiff | Проверка `interface.cable` |
+| Cleanup | Batch delete по ID | Поштучное удаление |
+| Причина | Множество полей, diff | Простая проверка наличия |
+
+### 4b.4 _cleanup_cables() — Удаление устаревших кабелей
+
+**Файл:** `netbox/sync/cables.py`
+
+Cleanup удаляет кабели из NetBox, которых нет в LLDP данных. Ключевая защита: кабель удаляется
+**только если ОБА устройства** на его концах присутствуют в LLDP-скане.
+
+```python
+def _cleanup_cables(
+    self: SyncBase,
+    lldp_neighbors: List[LLDPNeighbor],
+    lldp_devices: set,
+) -> List[Dict[str, Any]]:
+    """Удаляет кабели из NetBox которых нет в LLDP данных."""
+    deleted_details = []
+
+    def normalize_hostname(name: str) -> str:
+        """Убирает домен из hostname (switch2.mylab.local -> switch2)."""
+        return name.split(".")[0] if "." in name else name
+
+    # ══════════════════════════════════════════════════════════
+    # 1. Строим set ВАЛИДНЫХ endpoints из LLDP данных.
+    #    Endpoint = "device:interface" в сортированном порядке.
+    #    Сортировка нужна чтобы A→B и B→A давали одинаковый ключ.
+    # ══════════════════════════════════════════════════════════
+    valid_endpoints = set()
+    for entry in lldp_neighbors:
+        if entry.hostname and entry.local_interface and entry.remote_hostname and entry.remote_port:
+            endpoints = tuple(sorted([
+                f"{normalize_hostname(entry.hostname)}:{entry.local_interface}",
+                f"{normalize_hostname(entry.remote_hostname)}:{entry.remote_port}",
+            ]))
+            valid_endpoints.add(endpoints)
+
+    # Нормализуем lldp_devices для проверки
+    normalized_lldp_devices = {normalize_hostname(d) for d in lldp_devices}
+
+    # ══════════════════════════════════════════════════════════
+    # 2. Для каждого устройства из LLDP данных:
+    #    получаем кабели из NetBox и проверяем каждый.
+    # ══════════════════════════════════════════════════════════
+    for device_name in lldp_devices:
+        device = self._find_device(device_name)
+        if not device:
+            continue
+
+        try:
+            cables = self.client.get_cables(device_id=device.id)
+        except Exception as e:
+            logger.error(f"Ошибка получения кабелей для {device_name}: {e}")
+            continue
+
+        for cable in cables:
+            cable_endpoints = get_cable_endpoints(cable)
+
+            # Кабель не в LLDP данных?
+            if cable_endpoints and cable_endpoints not in valid_endpoints:
+                # ══════════════════════════════════════════════════
+                # ЗАЩИТА: удаляем только если ОБА устройства
+                # на концах кабеля есть в нашем LLDP-скане.
+                # Это предотвращает удаление кабелей к устройствам
+                # которые мы не сканировали.
+                # ══════════════════════════════════════════════════
+                endpoint_devices = set()
+                for ep in cable_endpoints:
+                    dev = ep.split(":")[0]
+                    endpoint_devices.add(dev)
+
+                if endpoint_devices.issubset(normalized_lldp_devices):
+                    # Оба устройства в нашем скане → безопасно удалять
+                    self._delete_cable(cable)
+                    deleted_details.append({...})  # Детали для отчёта
+
+    return deleted_details
+```
+
+**Логика защиты cleanup:**
+
+```
+Кабель в NetBox: switch1:Gi0/1 ↔ switch2:Gi0/2
+
+Случай 1: switch1 и switch2 оба в LLDP-скане
+  → Кабеля нет в valid_endpoints
+  → ОБА устройства в lldp_devices → УДАЛЯЕМ
+
+Случай 2: switch1 в скане, router1 НЕ в скане
+  → Кабель switch1:Gi0/48 ↔ router1:Gi0/1
+  → router1 NOT in lldp_devices → НЕ УДАЛЯЕМ
+  → Мы не знаем актуальную топологию router1
+
+Случай 3: Кабель switch1:Gi0/1 ↔ switch2:Gi0/2 ЕСТЬ в LLDP
+  → Кабель в valid_endpoints → НЕ УДАЛЯЕМ (кабель актуален)
+```
+
+### 4b.5 Дедупликация seen_cables
+
+LLDP работает двусторонне: если switch1 и switch2 соединены кабелем, LLDP-скан покажет:
+
+```
+От switch1: local=Gi0/1 → remote=switch2:Gi0/2
+От switch2: local=Gi0/2 → remote=switch1:Gi0/1
+```
+
+Это **один и тот же кабель**. Без дедупликации мы бы:
+1. Попытались создать его дважды (второй раз → "exists")
+2. Считали бы `created: 2` вместо `created: 1` в dry_run
+
+Решение — `seen_cables` set с сортированными ключами:
+
+```python
+# Оба варианта дают одинаковый ключ:
+cable_key = tuple(sorted(["switch1:Gi0/1", "switch2:Gi0/2"]))
+# → ("switch1:Gi0/1", "switch2:Gi0/2")
+
+cable_key = tuple(sorted(["switch2:Gi0/2", "switch1:Gi0/1"]))
+# → ("switch1:Gi0/1", "switch2:Gi0/2")  ← тот же ключ!
+```
+
+### 4b.6 get_cable_endpoints() — Domain Layer
+
+**Файл:** `core/domain/sync.py`
+
+Утилитная функция для извлечения endpoints кабеля в нормализованном виде.
+Используется и в cleanup, и в логировании.
+
+```python
+def get_cable_endpoints(cable: Any) -> Optional[Tuple[str, str]]:
+    """
+    Извлекает endpoints кабеля как ("device:interface", "device:interface").
+    Endpoints сортируются для единообразия (A↔B == B↔A).
+    """
+    a_terms = cable.a_terminations
+    b_terms = cable.b_terminations
+
+    if not a_terms or not b_terms:
+        return None
+
+    a_term = a_terms[0] if isinstance(a_terms, list) else a_terms
+    b_term = b_terms[0] if isinstance(b_terms, list) else b_terms
+
+    # Нормализуем hostname (убираем домен)
+    a_device = a_term.device.name.split(".")[0]
+    b_device = b_term.device.name.split(".")[0]
+
+    a_endpoint = f"{a_device}:{a_term.name}"
+    b_endpoint = f"{b_device}:{b_term.name}"
+
+    return tuple(sorted([a_endpoint, b_endpoint]))
 ```
 
 ---
@@ -920,25 +1212,38 @@ cli/commands/collect.py: cmd_lldp()
     │               └── LLDPNormalizer.normalize_dicts()
     │                       │
     │                       ├── _normalize_row()
-    │                       │       └── {"remote_port": "Gi3/13", ...}
+    │                       │       └── {"remote_port": "Gi3/13", "neighbor_type": "hostname"}
     │                       │
     │                       └── merge_lldp_cdp()  ← если both
     │                               └── CDP база + LLDP MAC
     │
     ├── [Экспорт]
-    │       │
     │       └── ExcelExporter.export(data, "neighbors.xlsx")
-    │               └── DataFrame → Excel
     │
     └── [NetBox Sync]
             │
-            └── NetBoxSync.sync_cables_from_lldp(data)
+            └── NetBoxSync.sync_cables_from_lldp(lldp_data, skip_unknown, cleanup)
                     │
-                    ├── _find_device("switch1")
-                    ├── _find_interface(device_id, "Gi1/0/49")
-                    ├── _find_neighbor_device(entry)
-                    ├── _find_interface(neighbor_id, "Gi3/13")
-                    └── _create_cable(local_intf, remote_intf)
+                    ├── for entry in lldp_data:
+                    │   ├── skip_unknown check
+                    │   ├── _find_device(local_device)
+                    │   ├── _find_interface(device_id, local_intf)
+                    │   ├── _find_neighbor_device(entry)  ← 4 стратегии
+                    │   │       ├── hostname → _find_device(clean_hostname)
+                    │   │       ├── fallback → get_device_by_ip(ip)
+                    │   │       └── fallback → _find_device_by_mac(mac)
+                    │   ├── _find_interface(neighbor_id, remote_port)
+                    │   ├── LAG check (type == "lag" → skip)
+                    │   ├── _create_cable(local_intf, remote_intf)
+                    │   │       └── interface.cable check → exists / create
+                    │   └── seen_cables дедупликация
+                    │
+                    └── cleanup? → _cleanup_cables(neighbors, lldp_devices)
+                            ├── valid_endpoints из LLDP
+                            ├── get_cables(device_id) из NetBox
+                            ├── get_cable_endpoints(cable) → сравнение
+                            ├── ЗАЩИТА: оба устройства в скане?
+                            └── _delete_cable(cable)
 ```
 
 ---

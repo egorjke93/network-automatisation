@@ -75,6 +75,8 @@ class SyncBase:
         self._mac_cache: Dict[str, Any] = {}
         # Кэш VLAN: (vid, site) -> VLAN object
         self._vlan_cache: Dict[Tuple[int, str], Any] = {}
+        # Обратный кэш VLAN: NetBox ID -> VID (для избежания lazy-load pynetbox)
+        self._vlan_id_to_vid: Dict[int, int] = {}
 
     def _log_prefix(self) -> str:
         """Возвращает префикс для логов с run_id."""
@@ -201,6 +203,8 @@ class SyncBase:
             for vlan in vlans:
                 cache_key = (vlan.vid, site or "")
                 self._vlan_cache[cache_key] = vlan
+                # Обратный кэш: ID → VID (для _check_untagged_vlan без lazy-load)
+                self._vlan_id_to_vid[vlan.id] = vlan.vid
                 count += 1
             logger.debug(f"Загружено {count} VLANs для сайта '{site}'")
         except Exception as e:

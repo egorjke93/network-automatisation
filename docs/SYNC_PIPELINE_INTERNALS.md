@@ -2016,8 +2016,8 @@ def bulk_delete_interfaces(self, ids: List[int]) -> bool:
     """Удаляет интерфейсы по списку ID."""
     if not ids:
         return True
-    objects = [{"id": id_} for id_ in ids]
-    self.api.dcim.interfaces.delete(objects)
+    # pynetbox 7.5+ принимает список int ID напрямую
+    self.api.dcim.interfaces.delete(ids)
     return True
 ```
 
@@ -2096,9 +2096,81 @@ self._batch_with_fallback(
 **Interfaces CREATE** — единственное исключение: fallback через `_create_interface()` и
 post-process MAC-очередь (MAC назначается через отдельный endpoint, не в bulk).
 
+### Оптимизация N+1 запросов (pynetbox lazy-load)
+
+> **Добавлено:** Февраль 2026
+> **Причина:** Несмотря на Batch API, pipeline всё ещё занимал ~30 минут.
+> Профилирование показало: 95 лишних API-запросов на 1 устройство с 55 интерфейсами.
+
+#### Проблема
+
+pynetbox использует **lazy loading** для вложенных объектов. Когда вы обращаетесь к
+атрибуту вложенного объекта, pynetbox может сделать отдельный GET-запрос:
+
+```python
+# ПЛОХО: каждое обращение к .vid вызывает GET /api/ipam/vlans/{id}/
+for nb_intf in interfaces:
+    vid = nb_intf.untagged_vlan.vid  # ← lazy-load!
+```
+
+Основные источники N+1 запросов:
+
+| Место | Запрос | Повторений | Причина |
+|-------|--------|-----------|---------|
+| `SyncComparator._get_remote_field()` | `GET /api/ipam/vlans/{id}/` | 41 | `hasattr(val, "value")` на pynetbox Record вызывает `full_details()` |
+| `_check_untagged_vlan()` | `GET /api/dcim/devices/{id}/` | 50 | `nb_interface.device.site.name` — site не в brief response |
+| `sync_inventory()` | `GET /api/dcim/inventory-items/?...` | N | `get_inventory_item(device_id, name)` на каждый item |
+
+Итого для 1 устройства с 55 интерфейсами: **95 лишних запросов за 36 секунд**.
+Для 22 устройств: **~2000 лишних запросов → ~10 минут впустую**.
+
+#### Решение
+
+**1. Comparator: избежать `hasattr()` на pynetbox Record** (`core/domain/sync.py`):
+
+```python
+# _get_remote_field() — для VLAN полей обращаемся напрямую к .vid
+# (vid есть в brief response, не вызывает lazy-load)
+if field_name == "untagged_vlan":
+    return val.vid  # Безопасно: vid в brief response
+
+# НЕ вызываем hasattr(val, "value") на вложенных Record —
+# это запускает full_details() → лишний GET-запрос!
+```
+
+**2. Cache site_name** (`netbox/sync/interfaces.py`):
+
+```python
+# В sync_interfaces() — кэшируем один раз:
+site_name = device.site.name  # 1 обращение
+
+# Передаём через цепочку:
+_batch_update_interfaces(..., site_name=site_name)
+  → _build_update_data(..., site_name=site_name)
+    → _check_untagged_vlan(..., site_name=site_name)
+    → _check_tagged_vlans(..., site_name=site_name)
+```
+
+**3. Pre-fetch inventory items** (`netbox/sync/inventory.py`):
+
+```python
+# Было: N запросов (по одному на каждый item)
+existing = self.client.get_inventory_item(device.id, name)  # N вызовов
+
+# Стало: 1 запрос
+existing_items = {nb.name: nb for nb in self.client.get_inventory_items(device_id=device.id)}
+existing = existing_items.get(name)  # O(1) lookup
+```
+
+**4. Reverse VLAN cache** (`netbox/sync/base.py`):
+
+```python
+# _vlan_id_to_vid: NetBox ID → VID (для получения VID без lazy-load)
+self._vlan_id_to_vid[vlan.id] = vlan.vid  # Заполняется в _load_site_vlans()
+```
+
 ### Что не изменилось
 
-- **Domain layer** (`core/domain/sync.py`): SyncComparator работает как раньше
 - **dry_run режим**: пропускает API-вызовы, считает статистику
 - **Формат результата**: `{created, updated, deleted, skipped, details}` — тот же
 - **Pipeline и CLI**: используют тот же `sync.sync_interfaces()` — без изменений
@@ -2106,13 +2178,14 @@ post-process MAC-очередь (MAC назначается через отде�
 
 ### Количественный эффект
 
-| Метрика | До | После |
-|---------|------|---------|
-| API вызовов на 1 устройство (interfaces) | ~100 | ~3 + MAC |
-| API вызовов на 1 устройство (inventory) | ~50 | ~3 |
-| API вызовов на 1 устройство (IP) | ~30 | ~2 |
-| Общее время sync (22 устройства) | ~10 мин | ~2-3 мин |
-| **Ожидаемое ускорение sync фазы** | | **3-5x** |
+| Метрика | До Batch API | После Batch API | После N+1 fix |
+|---------|-------------|-----------------|----------------|
+| API вызовов (interfaces, 50 портов) | ~100 | ~3 + N+1 (~95) | ~3 |
+| API вызовов (inventory, 20 items) | ~50 | ~3 + N+1 (~20) | ~3 |
+| API вызовов (IP, 10 адресов) | ~30 | ~2 | ~2 |
+| Общее время sync (22 устройства) | ~30 мин | ~30 мин* | ~5 мин |
+
+*Batch API ускорил write-операции, но N+1 в read-фазе нивелировал выигрыш.
 
 ### Тестирование
 

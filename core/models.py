@@ -130,6 +130,8 @@ class Interface:
         result = {k: v for k, v in asdict(self).items() if v is not None and v != ""}
         # Всегда включаем description (пустая строка - валидное значение для очистки)
         result["description"] = self.description
+        # Всегда включаем mode (пустая строка = очистка mode для shutdown портов)
+        result["mode"] = self.mode
         return result
 
     @classmethod

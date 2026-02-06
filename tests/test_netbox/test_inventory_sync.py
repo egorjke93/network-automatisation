@@ -339,10 +339,11 @@ class TestInventoryNameTruncation:
         sync = NetBoxSync(mock_client, dry_run=False)
         sync.sync_inventory("switch-01", items)
 
-        # Проверяем что create_inventory_item вызван с оригинальным именем
-        mock_client.create_inventory_item.assert_called_once()
-        call_kwargs = mock_client.create_inventory_item.call_args
-        assert call_kwargs[1]["name"] == name_64
+        # Проверяем что bulk_create_inventory_items вызван с оригинальным именем
+        mock_client.bulk_create_inventory_items.assert_called_once()
+        batch_data = mock_client.bulk_create_inventory_items.call_args[0][0]
+        assert len(batch_data) == 1
+        assert batch_data[0]["name"] == name_64
 
     def test_name_65_chars_truncated_to_64(self, mock_client):
         """Имя 65 символов - обрезается до 64."""
@@ -354,9 +355,10 @@ class TestInventoryNameTruncation:
         sync = NetBoxSync(mock_client, dry_run=False)
         sync.sync_inventory("switch-01", items)
 
-        mock_client.create_inventory_item.assert_called_once()
-        call_kwargs = mock_client.create_inventory_item.call_args
-        created_name = call_kwargs[1]["name"]
+        mock_client.bulk_create_inventory_items.assert_called_once()
+        batch_data = mock_client.bulk_create_inventory_items.call_args[0][0]
+        assert len(batch_data) == 1
+        created_name = batch_data[0]["name"]
         assert len(created_name) == 64
         assert created_name.endswith("...")
 
@@ -370,9 +372,10 @@ class TestInventoryNameTruncation:
         sync = NetBoxSync(mock_client, dry_run=False)
         sync.sync_inventory("switch-01", items)
 
-        mock_client.create_inventory_item.assert_called_once()
-        call_kwargs = mock_client.create_inventory_item.call_args
-        created_name = call_kwargs[1]["name"]
+        mock_client.bulk_create_inventory_items.assert_called_once()
+        batch_data = mock_client.bulk_create_inventory_items.call_args[0][0]
+        assert len(batch_data) == 1
+        created_name = batch_data[0]["name"]
 
         assert len(created_name) == 64
         assert created_name.startswith("WS-F6700-DFC3C")

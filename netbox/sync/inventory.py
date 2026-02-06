@@ -60,11 +60,11 @@ class InventorySyncMixin:
 
         sync_cfg = get_sync_config("inventory")
 
-        # Получаем все existing inventory items для cleanup
+        # Получаем ВСЕ existing inventory items одним запросом (не только для cleanup).
+        # Это избегает N+1 запросов get_inventory_item() на каждый item в цикле.
         existing_items = {}
-        if cleanup:
-            for nb_item in self.client.get_inventory_items(device_id=device.id):
-                existing_items[nb_item.name] = nb_item
+        for nb_item in self.client.get_inventory_items(device_id=device.id):
+            existing_items[nb_item.name] = nb_item
 
         # Отслеживаем обработанные имена
         processed_names = set()
@@ -105,7 +105,7 @@ class InventorySyncMixin:
 
             truncate_note = f" [обрезано с '{original_name}']" if was_truncated else ""
 
-            existing = self.client.get_inventory_item(device.id, name)
+            existing = existing_items.get(name)
 
             if existing:
                 # Подготавливаем данные обновления

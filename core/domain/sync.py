@@ -553,6 +553,9 @@ class SyncComparator:
             remote_val = self._get_remote_field(remote, field_name)
 
             if local_val is not None and local_val != remote_val:
+                # Для mode: "" (очистка) и None (не задан) — оба означают "нет mode"
+                if field_name == "mode" and not local_val and not remote_val:
+                    continue
                 changes.append(FieldChange(
                     field=field_name,
                     old_value=remote_val,
@@ -565,6 +568,16 @@ class SyncComparator:
         self, data: Dict[str, Any], field_name: str, enabled_mode: str = "admin"
     ) -> Any:
         """Получает значение поля из локальных данных."""
+        # untagged_vlan: конвертируем в int для сравнения с VID из remote
+        if field_name == "untagged_vlan":
+            val = data.get("untagged_vlan")
+            if val is None:
+                return None
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                return None
+
         if field_name == "enabled":
             # Режим определения enabled:
             # "admin" - по административному статусу (up/down = enabled)
@@ -585,7 +598,11 @@ class SyncComparator:
                 return data["description"]
             return None
         elif field_name == "mode":
-            return data.get("mode") or None
+            # Пустая строка — валидное значение (очистка mode для shutdown портов)
+            # None означает "поле отсутствует в данных" — пропустить сравнение
+            if "mode" in data:
+                return data["mode"]
+            return None
         elif field_name == "mtu":
             mtu = data.get("mtu")
             return int(mtu) if mtu else None
@@ -600,15 +617,38 @@ class SyncComparator:
 
     def _get_remote_field(self, remote: Any, field_name: str) -> Any:
         """Получает значение поля из удалённых данных."""
-        if hasattr(remote, field_name):
-            val = getattr(remote, field_name)
-            # Для enum-like объектов извлекаем value
-            if hasattr(val, "value"):
-                return val.value
-            return val
-        elif isinstance(remote, dict):
+        if isinstance(remote, dict):
             return remote.get(field_name)
-        return None
+
+        if not hasattr(remote, field_name):
+            return None
+
+        val = getattr(remote, field_name)
+
+        # Для VLAN полей: извлекаем VID напрямую, БЕЗ hasattr(val, "value").
+        # hasattr на pynetbox nested Record вызывает __getattr__ → full_details()
+        # → лишний GET-запрос к API на каждый интерфейс (N+1 проблема).
+        # .vid доступен в brief response и не вызывает lazy-load.
+        if field_name == "untagged_vlan":
+            if val is None:
+                return None
+            try:
+                return val.vid
+            except (AttributeError, TypeError):
+                return None
+
+        if field_name == "tagged_vlans":
+            if not val:
+                return []
+            try:
+                return sorted(v.vid for v in val)
+            except (AttributeError, TypeError):
+                return []
+
+        # Для enum-like объектов (type, mode, duplex) извлекаем value
+        if hasattr(val, "value"):
+            return val.value
+        return val
 
     def _compare_ip_fields(
         self,
