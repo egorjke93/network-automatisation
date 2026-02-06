@@ -77,6 +77,8 @@ class SyncBase:
         self._vlan_cache: Dict[Tuple[int, str], Any] = {}
         # Обратный кэш VLAN: NetBox ID -> VID (для избежания lazy-load pynetbox)
         self._vlan_id_to_vid: Dict[int, int] = {}
+        # Кэш интерфейсов: device_id -> {name: interface_obj}
+        self._interface_cache: Dict[int, Dict[str, Any]] = {}
 
     def _log_prefix(self) -> str:
         """Возвращает префикс для логов с run_id."""
@@ -106,7 +108,9 @@ class SyncBase:
 
     def _find_interface(self, device_id: int, interface_name: str) -> Optional[Any]:
         """
-        Находит интерфейс устройства.
+        Находит интерфейс устройства (с кэшированием).
+
+        Загружает интерфейсы один раз на device_id, повторные вызовы берут из кэша.
 
         Args:
             device_id: ID устройства
@@ -115,17 +119,21 @@ class SyncBase:
         Returns:
             Interface или None
         """
-        interfaces = self.client.get_interfaces(device_id=device_id)
+        # Загружаем интерфейсы в кэш (1 раз на device_id)
+        if device_id not in self._interface_cache:
+            interfaces = self.client.get_interfaces(device_id=device_id)
+            self._interface_cache[device_id] = {intf.name: intf for intf in interfaces}
+
+        cache = self._interface_cache[device_id]
 
         # Точное совпадение
-        for intf in interfaces:
-            if intf.name == interface_name:
-                return intf
+        if interface_name in cache:
+            return cache[interface_name]
 
         # Попробуем нормализованное имя (Gi0/1 vs GigabitEthernet0/1)
         normalized = self._normalize_interface_name(interface_name)
-        for intf in interfaces:
-            if self._normalize_interface_name(intf.name) == normalized:
+        for name, intf in cache.items():
+            if self._normalize_interface_name(name) == normalized:
                 return intf
 
         return None

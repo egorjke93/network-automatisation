@@ -723,3 +723,80 @@ class TestBuildUpdateData:
         assert "description" in updates
         assert updates["description"] == "new"
         assert len(changes) > 0
+
+
+# ==================== ТЕСТЫ КЭШИРОВАНИЯ ИНТЕРФЕЙСОВ ====================
+
+class TestInterfaceCache:
+    """Тесты кэширования _find_interface."""
+
+    def test_find_interface_caches_by_device_id(self):
+        """get_interfaces вызывается только 1 раз для одного device_id."""
+        client = Mock()
+        nb_intf1 = Mock()
+        nb_intf1.name = "GigabitEthernet0/1"
+        nb_intf2 = Mock()
+        nb_intf2.name = "GigabitEthernet0/2"
+        client.get_interfaces.return_value = [nb_intf1, nb_intf2]
+
+        sync = NetBoxSync(client, dry_run=True)
+
+        # Первый вызов — загружает из API
+        result1 = sync._find_interface(100, "GigabitEthernet0/1")
+        assert result1 == nb_intf1
+
+        # Второй вызов с тем же device_id — из кэша
+        result2 = sync._find_interface(100, "GigabitEthernet0/2")
+        assert result2 == nb_intf2
+
+        # API вызван только 1 раз
+        client.get_interfaces.assert_called_once_with(device_id=100)
+
+    def test_find_interface_different_devices(self):
+        """Разные device_id — отдельные API-вызовы."""
+        client = Mock()
+
+        intf_a = Mock()
+        intf_a.name = "Gi0/1"
+        intf_b = Mock()
+        intf_b.name = "Gi0/1"
+
+        client.get_interfaces.side_effect = [
+            [intf_a],  # device 100
+            [intf_b],  # device 200
+        ]
+
+        sync = NetBoxSync(client, dry_run=True)
+
+        result1 = sync._find_interface(100, "Gi0/1")
+        result2 = sync._find_interface(200, "Gi0/1")
+
+        assert result1 == intf_a
+        assert result2 == intf_b
+        assert client.get_interfaces.call_count == 2
+
+    def test_find_interface_normalized_name(self):
+        """Нормализация имён работает из кэша."""
+        client = Mock()
+        nb_intf = Mock()
+        nb_intf.name = "GigabitEthernet0/1"
+        client.get_interfaces.return_value = [nb_intf]
+
+        sync = NetBoxSync(client, dry_run=True)
+
+        # Ищем по короткому имени — должен найти через нормализацию
+        result = sync._find_interface(100, "Gi0/1")
+        assert result == nb_intf
+        client.get_interfaces.assert_called_once()
+
+    def test_find_interface_not_found(self):
+        """Если интерфейс не найден — возвращает None."""
+        client = Mock()
+        nb_intf = Mock()
+        nb_intf.name = "GigabitEthernet0/1"
+        client.get_interfaces.return_value = [nb_intf]
+
+        sync = NetBoxSync(client, dry_run=True)
+
+        result = sync._find_interface(100, "TenGigabitEthernet1/0/1")
+        assert result is None

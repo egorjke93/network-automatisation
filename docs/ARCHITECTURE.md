@@ -189,6 +189,7 @@ netbox/sync/
   - `_batch_with_fallback()` — универсальный batch с автоматическим fallback на поштучные операции
   - `_vlan_cache` — кэш VLAN для производительности (batch загрузка)
   - `_vlan_id_to_vid` — обратный кэш (NetBox ID → VID) для избежания lazy-load
+  - `_interface_cache` — кэш интерфейсов (device_id → {name: obj}), 1 запрос на устройство
   - `_get_vlan_by_vid()` — поиск VLAN по VID с кэшированием
   - `_load_site_vlans()` — загрузка всех VLAN сайта одним запросом
 - `DiffCalculator` — предпросмотр изменений (`netbox/diff.py`)
