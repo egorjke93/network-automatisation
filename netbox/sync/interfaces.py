@@ -180,21 +180,53 @@ class InterfacesSyncMixin:
         stats: dict,
         details: dict,
     ) -> None:
-        """Batch создание интерфейсов."""
+        """Batch создание интерфейсов.
+
+        Создание разделено на две фазы:
+        1. Сначала LAG интерфейсы (Port-channel/Po)
+        2. Затем member интерфейсы (с привязкой к LAG)
+
+        Это необходимо, т.к. при создании member интерфейса с полем lag
+        нужно знать ID LAG-интерфейса, который должен уже существовать в NetBox.
+        """
         if not to_create:
             return
 
-        # Собираем данные для batch create
-        create_batch = []
-        create_mac_queue = []  # (batch_index, mac_address) для post-create
-        create_names = []  # Имена для логов
-
+        # Разделяем на LAG и остальные интерфейсы
+        lag_items = []
+        member_items = []
         for item in to_create:
             intf = next((i for i in sorted_interfaces if i.name == item.name), None)
             if not intf:
                 logger.warning(f"Интерфейс {item.name} не найден в локальных данных")
                 continue
+            if intf.name.lower().startswith(("port-channel", "po")):
+                lag_items.append((item, intf))
+            else:
+                member_items.append((item, intf))
 
+        # Фаза 1: создаём LAG интерфейсы
+        if lag_items:
+            self._do_batch_create(device_id, lag_items, stats, details, sorted_interfaces)
+
+        # Фаза 2: создаём остальные интерфейсы (теперь LAG существуют в NetBox)
+        if member_items:
+            self._do_batch_create(device_id, member_items, stats, details, sorted_interfaces)
+
+    def _do_batch_create(
+        self: SyncBase,
+        device_id: int,
+        items: List[Tuple],
+        stats: dict,
+        details: dict,
+        sorted_interfaces: List[Interface],
+    ) -> None:
+        """Выполняет batch create для списка интерфейсов."""
+        create_batch = []
+        create_mac_queue = []  # (batch_index, mac_address) для post-create
+        create_names = []  # Имена для логов
+
+        for item, intf in items:
             data, mac = self._build_create_data(device_id, intf)
             if data:
                 create_batch.append(data)
@@ -231,16 +263,13 @@ class InterfacesSyncMixin:
         except Exception as e:
             logger.warning(f"Batch create не удался ({e}), fallback на поштучное создание")
             # Fallback: создаём по одному
-            for i, data in enumerate(create_batch):
-                name = create_names[i]
-                intf = next((x for x in sorted_interfaces if x.name == name), None)
-                if intf:
-                    try:
-                        self._create_interface(device_id, intf)
-                        stats["created"] += 1
-                        details["create"].append({"name": name})
-                    except Exception as exc:
-                        logger.error(f"Ошибка создания интерфейса {name}: {exc}")
+            for _item, intf in items:
+                try:
+                    self._create_interface(device_id, intf)
+                    stats["created"] += 1
+                    details["create"].append({"name": intf.name})
+                except Exception as exc:
+                    logger.error(f"Ошибка создания интерфейса {intf.name}: {exc}")
 
     def _batch_update_interfaces(
         self: SyncBase,
