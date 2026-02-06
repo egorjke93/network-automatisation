@@ -514,8 +514,8 @@ sync:
 
 | Тип | Текущее | Нужно |
 |-----|---------|-------|
-| Unit tests | 1200+ | ✅ OK |
-| Integration tests | 250+ (API, pipeline) | ✅ OK |
+| Unit tests | 1300+ | ✅ OK |
+| Integration tests | 250+ (API, pipeline, bulk) | ✅ OK |
 | E2E tests | 2 | Расширить |
 | Coverage | ~85% | ✅ OK |
 
@@ -558,13 +558,14 @@ sync:
 
 ## Что уже хорошо ✅
 
-- ✅ 1533+ тестов (хорошее покрытие)
+- ✅ 1537+ тестов (хорошее покрытие)
 - ✅ Структурированное JSON логирование
 - ✅ Domain Layer с нормализаторами
 - ✅ Pipeline система с транзакциями
 - ✅ Pydantic модели для валидации
-- ✅ Подробная документация (14 файлов)
+- ✅ Подробная документация (официальная + обучающая)
 - ✅ Batch API для sync (3-5x ускорение)
+- ✅ N+1 оптимизация кэширования (95→3 API запроса на устройство)
 - ✅ Type hints в 370+ функциях
 
 ---
@@ -659,6 +660,32 @@ self.client.bulk_create_interfaces(create_batch)  # 1 API call
 **Ожидаемое ускорение:** 3-5x для sync фазы (22 устройства × ~48 портов):
 - До: 22 × ~100 API calls × ~100ms = ~3.5 мин (только interfaces)
 - После: 22 × ~3 API calls (bulk) + MAC = ~1 мин
+
+### N+1 Query Optimization ✅ ВЫПОЛНЕНО
+
+**Проблема:** Кэш `_find_interface` был по `(device_id, name)` — каждый вызов делал отдельный API запрос.
+При 22 устройствах × ~48 интерфейсов = ~1056 запросов только для поиска интерфейсов.
+
+**Решение:** Кэш по `device_id` — загружаем ВСЕ интерфейсы устройства одним запросом:
+
+```python
+# Было: ~95 API запросов на устройство
+def _find_interface(self, device_id, name):
+    return self.client.get_interfaces(device_id=device_id, name=name)  # 1 запрос на интерфейс
+
+# Стало: ~3 API запроса на устройство
+def _find_interface(self, device_id, name):
+    if device_id not in self._interface_cache:
+        interfaces = self.client.get_interfaces(device_id=device_id)  # 1 запрос на ВСЕ
+        self._interface_cache[device_id] = {intf.name: intf for intf in interfaces}
+    return self._interface_cache[device_id].get(name)
+```
+
+**Результат:**
+- 95 → 3 API запроса на устройство
+- Pipeline 22 устройства: 32 мин → 13 мин
+
+**Файлы:** `netbox/sync/base.py` (кэш), `netbox/sync/interfaces.py`, `netbox/sync/ip_addresses.py`
 
 ---
 
@@ -791,10 +818,10 @@ if target == "lldp":
 |---------|----------|
 | Python файлов | ~90 |
 | Строк кода | ~17,000 |
-| Тестов | 1533+ |
+| Тестов | 1537+ |
 | CLI команд | 11 |
 | API endpoints | 13 |
 | Vue компонентов | 14 |
 | Поддерживаемых платформ | 7 |
 | Функций с type hints | 370+ |
-| Документов | 14 |
+| Документов | 16 (7 официальных + 9 обучающих) |

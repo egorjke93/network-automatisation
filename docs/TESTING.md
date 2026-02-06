@@ -19,7 +19,7 @@
 
 | Метрика | Значение |
 |---------|----------|
-| **Всего тестов** | 1434 |
+| **Всего тестов** | 1537+ |
 | **Framework** | pytest |
 | **Coverage** | ~85% |
 
@@ -27,15 +27,16 @@
 
 | Категория | Описание | Количество |
 |-----------|----------|------------|
-| `test_core/` | Ядро: models, domain, pipeline, constants | ~400 |
+| `test_core/` | Ядро: models, domain, pipeline, constants | ~430 |
 | `test_collectors/` | Парсинг вывода устройств | ~150 |
 | `test_parsers/` | NTC Templates, TextFSM | ~200 |
-| `test_netbox/` | NetBox синхронизация | ~150 |
+| `test_netbox/` | NetBox синхронизация (включая bulk, VLAN) | ~180 |
 | `test_api/` | REST API endpoints | ~200 |
 | `test_exporters/` | Excel, CSV, JSON экспорт | ~50 |
 | `test_contracts/` | Контракты fields.yaml ↔ models | ~50 |
 | `test_fixes/` | Регрессионные тесты для багфиксов | ~100 |
 | `test_e2e/` | End-to-end тесты pipeline и collectors | ~100 |
+| `test_cli/` | CLI команды (pipeline, sync summary) | ~40 |
 
 ---
 
@@ -189,7 +190,8 @@ tests/
 │   ├── test_sync_base.py
 │   ├── test_sync_interfaces_vlan.py  # Interface VLAN sync (19 тестов)
 │   ├── test_inventory_sync.py
-│   └── test_vlans_sync.py
+│   ├── test_vlans_sync.py
+│   └── test_bulk_operations.py       # Bulk API операции (32 теста)
 │
 ├── test_exporters/         # Экспорт
 │   ├── test_csv_exporter.py

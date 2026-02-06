@@ -412,10 +412,10 @@ sync:
       # "link"  - по состоянию линка:
       #           up = enabled (есть соединение)
       #           down/disabled/error = disabled (нет соединения)
-      enabled_mode: "admin"
+      enabled_mode: "link"
       # Исключить интерфейсы из синхронизации (regex паттерны)
       exclude_interfaces:
-        #- "^Vlan1$"          # Vlan1 (дефолтный VLAN)
+        - "^Vlan1$"          # Vlan1 (дефолтный VLAN)
         - "^Null\\d+"       # Null интерфейсы
       # MAC-адрес только на интерфейсы с IP (L3)
       # Если true - MAC добавляется только на интерфейсы где есть ip_address
