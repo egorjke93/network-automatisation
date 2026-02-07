@@ -4,7 +4,7 @@
 >
 > **Предыдущий документ:** [05. Синхронизация с NetBox](05_SYNC_NETBOX.md)
 >
-> **Связанная документация:** [MANUAL.md](../MANUAL.md) -- руководство по использованию, [SYNC_PIPELINE_INTERNALS.md](../SYNC_PIPELINE_INTERNALS.md) -- внутренности sync и pipeline
+> **Связанная документация:** [MANUAL.md](../MANUAL.md) -- руководство по использованию, [ARCHITECTURE.md](../ARCHITECTURE.md) -- архитектура pipeline и sync
 
 Как объединить несколько операций (сбор данных, синхронизация, экспорт)
 в одну цепочку и запускать её одной командой.
@@ -1055,4 +1055,4 @@ AVAILABLE_SYNC_TARGETS = {
 
 Также полезно:
 - [MANUAL.md](../MANUAL.md) -- руководство пользователя (все команды и примеры)
-- [SYNC_PIPELINE_INTERNALS.md](../SYNC_PIPELINE_INTERNALS.md) -- техническое описание pipeline и sync
+- [ARCHITECTURE.md](../ARCHITECTURE.md) -- архитектура pipeline и sync

@@ -7,10 +7,11 @@
 
 **Предыдущий документ:** [06. Pipeline -- автоматизация](06_PIPELINE.md)
 
+**Следующий документ:** [08. Web-архитектура](08_WEB_ARCHITECTURE.md)
+
 **Связанная документация:**
-- [DATA_FLOW_LLDP.md](../DATA_FLOW_LLDP.md) -- детальный поток LLDP/CDP
-- [DATA_FLOW_MATCH_MAC.md](../DATA_FLOW_MATCH_MAC.md) -- детальный поток match-mac
-- [DATA_FLOW_DETAILED.md](../DATA_FLOW_DETAILED.md) -- полный путь данных (MAC)
+- [ARCHITECTURE.md](../ARCHITECTURE.md) -- архитектура, слои, поток данных
+- [MANUAL.md](../MANUAL.md) -- полное руководство: CLI, sync, pipeline
 
 ---
 
@@ -702,12 +703,240 @@ POST /api/dcim/interfaces/ (Gi0/3)
 
 ---
 
-## 5. Диаграмма трансформации данных
+## 5. Полный пример: Синхронизация IP-адресов
+
+IP-адреса -- третий тип данных для синхронизации. В отличие от интерфейсов,
+у IP есть особенность: при смене маски подсети IP нужно **пересоздать**
+(NetBox не позволяет изменить маску напрямую).
+
+### 5.1 Модель IPAddressEntry
+
+**Файл:** `core/models.py`
+
+```python
+@dataclass
+class IPAddressEntry:
+    ip_address: str = ""       # IP без маски: "10.0.0.1"
+    interface: str = ""        # Имя интерфейса: "Gi0/1"
+    mask: str = ""             # Маска подсети: "255.255.255.0"
+
+    @property
+    def with_prefix(self) -> str:
+        """Возвращает IP в CIDR-нотации: '10.0.0.1/24'."""
+        prefix_len = self._mask_to_prefix(self.mask)
+        return f"{self.ip_address}/{prefix_len}"
+```
+
+**Важно:** поле называется `mask` (не `prefix_length`!). Свойство `with_prefix`
+автоматически конвертирует маску в CIDR-нотацию.
+
+### 5.2 Диаграмма потока
+
+```
+[Шаг 1] Сбор IP-адресов с устройства
+
+    SSH: "show ip interface brief" --> TextFSM --> Normalizer
+        |
+        v
+    [IPAddressEntry(ip_address="10.0.0.1", interface="Gi0/1",
+                    mask="255.255.255.0")]
+
+[Шаг 2] Получение IP из NetBox
+
+    client.get_ip_addresses(device_id=42)
+        |
+        v
+    existing_ips = [nb_ip_1, nb_ip_2, ...]
+
+[Шаг 3] Сравнение через SyncComparator
+
+    comparator.compare_ip_addresses(
+        local=local_data,     # IP с устройства
+        remote=existing_ips,  # IP из NetBox
+    )
+        |
+        v
+    SyncDiff(
+        to_create=[SyncItem("10.0.0.1")],  # Нет в NetBox
+        to_update=[SyncItem("10.0.0.2", changes=[mask: /24→/25])],
+        to_delete=[SyncItem("10.0.0.99")], # Нет на устройстве
+    )
+
+[Шаг 4] Batch create / update / delete
+
+    _batch_create_ip_addresses()    # Batch: один POST-запрос
+    _update_ip_address()            # Поштучно (может потребовать пересоздание!)
+    _batch_delete_ip_addresses()    # Batch: один DELETE-запрос
+```
+
+### 5.3 Пересоздание при смене маски
+
+Если маска изменилась (например, /24 → /25), NetBox не позволяет просто обновить
+IP-адрес. Нужно удалить старый и создать новый:
+
+```python
+# netbox/sync/ip_addresses.py — _update_ip_address()
+prefix_change = next((c for c in changes if c.field == "prefix_length"), None)
+if prefix_change and entry:
+    # Нельзя просто обновить маску -- пересоздаём IP
+    ip_obj.delete()                    # Удаляем 10.0.0.1/24
+    new_ip = self.client.api.ipam.ip_addresses.create({
+        "address": "10.0.0.1/25",     # Создаём с новой маской
+        "assigned_object_type": "dcim.interface",
+        "assigned_object_id": interface.id,
+    })
+```
+
+### 5.4 Primary IP
+
+После синхронизации IP устанавливается primary IP для устройства.
+Primary IP -- это "главный" адрес устройства, через который оно управляется:
+
+```python
+# netbox/sync/ip_addresses.py — _set_primary_ip()
+# 1. Ищем IP среди адресов устройства
+# 2. Если не найден -- ищем глобально
+# 3. Если совсем нет -- создаём и привязываем к management-интерфейсу
+# 4. Устанавливаем device.primary_ip4 = ip_obj.id
+```
+
+### 5.5 Трансформация данных (до/после)
+
+```
+[1] Сырой текст:
+    "GigabitEthernet0/1  10.0.0.1  YES manual up  up"
+
+[2] После парсинга и нормализации:
+    {"ip_address": "10.0.0.1", "interface": "Gi0/1", "mask": "255.255.255.0"}
+
+[3] Модель IPAddressEntry:
+    IPAddressEntry(ip_address="10.0.0.1", interface="Gi0/1", mask="255.255.255.0")
+    entry.with_prefix  -->  "10.0.0.1/24"
+
+[4] NetBox API:
+    POST /api/ipam/ip-addresses/
+    {"address": "10.0.0.1/24", "assigned_object_type": "dcim.interface",
+     "assigned_object_id": 42, "status": "active"}
+```
+
+---
+
+## 6. Полный пример: Синхронизация Inventory
+
+Inventory -- это физические компоненты устройства: модули, SFP-трансиверы,
+блоки питания. Синхронизация сравнивает компоненты по имени и использует
+batch API для массовых операций.
+
+### 6.1 Модель InventoryItem
+
+**Файл:** `core/models.py`
+
+```python
+@dataclass
+class InventoryItem:
+    name: str              # Имя компонента ("WS-X6748-GE-TX")
+    pid: str = ""          # Product ID (модель)
+    serial: str = ""       # Серийный номер (обязателен для sync!)
+    description: str = ""  # Описание
+    vid: str = ""          # Version ID
+    manufacturer: str = "" # Производитель
+    hostname: str = ""     # Hostname устройства
+    device_ip: str = ""    # IP устройства
+```
+
+### 6.2 Ключевые особенности
+
+**Обрезка имени (64 символа).** NetBox ограничивает `name` inventory item
+до 64 символов. Если имя длиннее -- обрезаем до 61 символа и добавляем `"..."`:
+
+```python
+# Пример обрезки
+original = "Cisco Nexus 9300 Series 48-Port 10/25G SFP+ with 6 100G Module"
+# len = 65, превышает лимит 64
+
+truncated = original[:61] + "..."
+# "Cisco Nexus 9300 Series 48-Port 10/25G SFP+ with 6 100G Mo..."
+```
+
+**Серийный номер обязателен.** Компоненты без серийного номера пропускаются
+(stats["skipped"] += 1). Это защита от создания "мусорных" записей в NetBox.
+
+### 6.3 Диаграмма потока
+
+```
+[Шаг 1] Сбор inventory с устройства
+
+    SSH: "show inventory"  -->  TextFSM  -->  Normalizer
+        |
+        v
+    [InventoryItem(name="WS-X6748", pid="WS-X6748-GE-TX",
+                   serial="SAL1234ABCD", manufacturer="Cisco")]
+
+
+[Шаг 2] Получение inventory из NetBox
+
+    client.get_inventory_items(device_id=42)
+        |
+        v
+    existing_items = {"WS-X6748": nb_item, "PWR-1400": nb_item2}
+
+
+[Шаг 3] Сравнение по имени + сбор батчей
+
+    Для каждого item:
+        |
+        +-- name пустой?             --> пропускаем
+        +-- len(name) > 64?          --> обрезаем до 61 + "..."
+        +-- serial пустой?           --> skipped (пропускаем)
+        +-- name есть в existing?    --> проверяем поля (pid, serial, description)
+        |       +-- есть изменения?  --> добавляем в update_batch
+        |       +-- нет изменений?   --> skipped
+        +-- name нет в existing?     --> добавляем в create_batch
+
+
+[Шаг 4] Batch операции
+
+    bulk_create_inventory_items(create_batch)
+        |  POST /api/dcim/inventory-items/ (массив)
+        v
+    bulk_update_inventory_items(update_batch)
+        |  PATCH /api/dcim/inventory-items/ (массив с id)
+        v
+    bulk_delete_inventory_items(delete_ids)   # только если cleanup=True
+        |  DELETE /api/dcim/inventory-items/ (массив ID)
+        v
+    Статистика: {created: 2, updated: 1, deleted: 0, skipped: 1}
+```
+
+### 6.4 Трансформация данных (до/после)
+
+```
+[1] Сырой текст:
+    'NAME: "WS-X6748-GE-TX", DESCR: "48-port 10/100/1000"'
+    'PID: WS-X6748-GE-TX, VID: V04, SN: SAL1234ABCD'
+
+[2] После парсинга:
+    {"name": "WS-X6748-GE-TX", "pid": "WS-X6748-GE-TX",
+     "serial": "SAL1234ABCD", "description": "48-port 10/100/1000"}
+
+[3] Модель InventoryItem:
+    InventoryItem(name="WS-X6748-GE-TX", pid="WS-X6748-GE-TX",
+                  serial="SAL1234ABCD", description="48-port 10/100/1000")
+
+[4] NetBox API:
+    POST /api/dcim/inventory-items/
+    {"device": 42, "name": "WS-X6748-GE-TX", "part_id": "WS-X6748-GE-TX",
+     "serial": "SAL1234ABCD", "discovered": true}
+```
+
+---
+
+## 7. Диаграмма трансформации данных
 
 Обобщённая схема, показывающая как данные трансформируются на каждом этапе
 для любого типа коллектора:
 
-### 5.1 От текста до модели
+### 7.1 От текста до модели
 
 ```
 [Этап 1: ТЕКСТ]
@@ -747,7 +976,7 @@ apply_fields_config()         SyncComparator.compare()
 Excel/CSV/JSON файл           NetBox API запросы
 ```
 
-### 5.2 Нормализация по вендорам
+### 7.2 Нормализация по вендорам
 
 Каждый вендор возвращает данные в своём формате. Normalizer делает их одинаковыми:
 
@@ -782,7 +1011,7 @@ normalize_mac("AA:BB:CC:DD:EE:FF", format="cisco")  # --> "aabb.ccdd.eeff"
 
 ---
 
-## 6. Таблица ключевых файлов
+## 8. Таблица ключевых файлов
 
 | Файл | Роль в потоке данных |
 |------|---------------------|
@@ -798,13 +1027,15 @@ normalize_mac("AA:BB:CC:DD:EE:FF", format="cisco")  # --> "aabb.ccdd.eeff"
 | `core/domain/mac.py` | Нормализатор MAC-данных |
 | `core/domain/interface.py` | Нормализатор интерфейсов |
 | `core/domain/sync.py` | SyncComparator: сравнение данных (чистая логика) |
-| `core/models.py` | Dataclass модели: Interface, MACEntry, LLDPNeighbor |
+| `core/models.py` | Dataclass модели: Interface, MACEntry, LLDPNeighbor, IPAddressEntry, InventoryItem |
 | `core/constants.py` | Утилиты: нормализация интерфейсов, MAC, маппинги |
 | `fields_config.py` | Фильтрация полей, reverse mapping |
 | `fields.yaml` | Конфигурация полей для экспорта/синхронизации |
 | `exporters/excel.py` | Экспорт в Excel |
-| `netbox/sync/interfaces.py` | Синхронизация интерфейсов (batch) |
+| `netbox/sync/interfaces.py` | Синхронизация интерфейсов (batch, двухфазный LAG) |
 | `netbox/sync/cables.py` | Синхронизация кабелей (поштучно) |
+| `netbox/sync/ip_addresses.py` | Синхронизация IP-адресов (batch, primary IP) |
+| `netbox/sync/inventory.py` | Синхронизация inventory items (batch, обрезка имён) |
 | `netbox/sync/base.py` | Базовый класс SyncBase: кэши, общие методы |
 | `netbox/client/` | HTTP-клиент NetBox: get/create/update/delete |
 | `configurator/description.py` | DescriptionMatcher для match-mac |
@@ -833,8 +1064,14 @@ normalize_mac("AA:BB:CC:DD:EE:FF", format="cisco")  # --> "aabb.ccdd.eeff"
 6. **Дедупликация в кабелях** -- LLDP видит кабель с обеих сторон,
    поэтому нужен `seen_cables` set с сортированными ключами.
 
+7. **IPAddressEntry.mask** -- поле называется `mask`, а не `prefix_length`.
+   Свойство `with_prefix` автоматически формирует CIDR-нотацию (10.0.0.1/24).
+
+8. **Inventory: обрезка имён** -- NetBox ограничивает name до 64 символов.
+   Компоненты без серийного номера пропускаются.
+
 **Совет:** если хочешь понять конкретный поток глубже, загляни
 в связанные документы:
-- [DATA_FLOW_LLDP.md](../DATA_FLOW_LLDP.md) -- каждый метод LLDP-цепочки с кодом
-- [DATA_FLOW_MATCH_MAC.md](../DATA_FLOW_MATCH_MAC.md) -- reverse mapping пошагово
-- [DATA_FLOW_DETAILED.md](../DATA_FLOW_DETAILED.md) -- каждый шаг MAC-сбора
+- [ARCHITECTURE.md](../ARCHITECTURE.md) -- архитектура слоёв и взаимодействие компонентов
+- [05_SYNC_NETBOX.md](05_SYNC_NETBOX.md) -- batch API, SyncComparator, кэши
+- [MANUAL.md](../MANUAL.md) -- CLI-команды, примеры использования

@@ -749,11 +749,229 @@ interfaces:
 
 ---
 
+## 9. VlanSet -- сравнение VLAN
+
+**Файл:** `core/domain/vlan.py`
+
+VlanSet -- абстракция для работы с множествами VLAN. Инкапсулирует парсинг,
+сравнение и вычисление разницы между двумя наборами VLAN.
+
+### Создание VlanSet
+
+```python
+from network_collector.core.domain.vlan import VlanSet
+
+# Из строки диапазона (данные с устройства: "10,20,30-50")
+local = VlanSet.from_string("10,20,30-50")
+
+# Из списка VID (целые числа)
+target = VlanSet.from_ids([10, 20, 30])
+
+# Из объектов NetBox VLAN (имеющих атрибут .vid)
+current = VlanSet.from_vlan_objects(nb_interface.tagged_vlans)
+```
+
+### Методы сравнения
+
+```python
+local = VlanSet.from_ids([10, 20, 30])
+remote = VlanSet.from_ids([10, 20])
+
+local == remote            # False -- множества не совпадают
+local.added(remote)        # {30} -- есть в local, нет в remote (добавленные)
+local.removed(remote)      # set() -- есть в remote, нет в local (удалённые)
+local.intersection(remote) # {10, 20} -- общие VLAN
+```
+
+### Реальное использование в _check_tagged_vlans
+
+```python
+# netbox/sync/interfaces.py -- _check_tagged_vlans()
+current = VlanSet.from_vlan_objects(nb_interface.tagged_vlans)  # Что сейчас в NetBox
+target = VlanSet.from_ids(matched_vids)                         # Что должно быть
+
+if current != target:
+    updates["tagged_vlans"] = sorted(target_vlan_ids)
+    added = target.added(current)     # Какие VLAN добавить
+    removed = target.removed(current) # Какие VLAN убрать
+    # Лог: "tagged_vlans: +[30, 40], -[50]"
+```
+
+Зачем нужен VlanSet: вместо ручного сравнения множеств через `set()` и
+запутанных конструкций -- единый интерфейс с методами `added()` / `removed()`.
+Это позволяет показать в логах **конкретно** какие VLAN добавлены и удалены,
+а не просто "tagged_vlans изменились".
+
+---
+
+## 10. MAC-адреса -- отдельный endpoint
+
+MAC-адрес интерфейса в NetBox назначается через **отдельный API endpoint**,
+а не через bulk create/update. Это архитектурное ограничение NetBox API.
+
+### Почему MAC не в bulk
+
+NetBox API не принимает `mac_address` в теле bulk create/update для интерфейсов.
+MAC назначается отдельным вызовом `assign_mac_to_interface(interface_id, mac)`.
+
+### _build_create_data возвращает кортеж
+
+```python
+# netbox/sync/interfaces.py -- _build_create_data()
+def _build_create_data(self, device_id, intf):
+    data = {"device": device_id, "name": intf.name, "type": ...}
+    # ... заполняем description, enabled, mtu, speed, duplex, mode ...
+
+    mac_to_assign = None
+    if sync_cfg.is_field_enabled("mac_address") and intf.mac:
+        mac_to_assign = normalize_mac_netbox(intf.mac)  # "AA:BB:CC:DD:EE:FF"
+
+    return data, mac_to_assign  # MAC отдельно от data!
+```
+
+### Post-create: назначение MAC после создания
+
+```python
+# После bulk_create_interfaces -- назначаем MAC по одному
+created = self.client.bulk_create_interfaces(create_batch)
+
+for idx, mac in create_mac_queue:
+    # created[idx].id -- ID только что созданного интерфейса
+    self.client.assign_mac_to_interface(created[idx].id, mac)
+```
+
+### Опция sync_mac_only_with_ip
+
+В `fields.yaml` есть опция `sync_mac_only_with_ip`. Если `true` --
+MAC синхронизируется **только** для интерфейсов с IP-адресом:
+
+```python
+sync_mac_only_with_ip = sync_cfg.get_option("sync_mac_only_with_ip", False)
+if sync_mac_only_with_ip and not intf.ip_address:
+    return None  # MAC не назначаем -- нет IP на интерфейсе
+```
+
+Это полезно когда не нужно засорять NetBox MAC-адресами access-портов,
+а интересуют только management/SVI интерфейсы.
+
+---
+
+## 11. fields_config -- управление полями
+
+**Файл:** `fields_config.py`
+
+Модуль `fields_config` загружает настройки из `fields.yaml` и предоставляет
+API для проверки: какие поля включены, какие опции заданы.
+
+### Основные функции
+
+```python
+from network_collector.fields_config import get_sync_config
+
+# Получаем конфиг для интерфейсов
+cfg = get_sync_config("interfaces")
+
+# Включено ли поле description для синхронизации?
+cfg.is_field_enabled("description")   # True/False
+
+# Получить опцию (из секции options в fields.yaml)
+cfg.get_option("sync_vlans", False)           # True/False
+cfg.get_option("enabled_mode", "admin")       # "admin" или "link"
+cfg.get_option("sync_mac_only_with_ip", False)
+```
+
+### Структура SyncEntityConfig
+
+```python
+@dataclass
+class SyncEntityConfig:
+    fields: Dict[str, SyncFieldConfig]   # Конфигурация полей
+    defaults: Dict[str, Any]             # Значения по умолчанию
+    options: Dict[str, Any]              # Опции поведения
+
+    def is_field_enabled(self, field_name: str) -> bool: ...
+    def get_option(self, key: str, default=None) -> Any: ...
+```
+
+### Пример секции interfaces в fields.yaml
+
+```yaml
+sync:
+  interfaces:
+    fields:
+      description: {enabled: true}
+      enabled: {enabled: true}
+      mac_address: {enabled: true}
+      mode: {enabled: true}
+      mtu: {enabled: true}
+      speed: {enabled: true}
+      duplex: {enabled: true}
+    options:
+      sync_vlans: true
+      enabled_mode: "admin"
+      sync_mac_only_with_ip: false
+      exclude_interfaces: ["Vlan1", "Null.*"]
+```
+
+Как это влияет на sync: каждый `_check_*` хелпер в `_build_update_data()`
+вызывает `sync_cfg.is_field_enabled(...)` перед проверкой поля. Если поле
+выключено в `fields.yaml` -- оно полностью игнорируется при сравнении.
+
+---
+
+## 12. RunContext -- отслеживание выполнения
+
+**Файл:** `core/context.py`
+
+RunContext -- контекст выполнения операции. Создаётся один раз при запуске
+команды и прокидывается через все слои (CLI -> Sync -> Client).
+
+### Создание и использование
+
+```python
+from network_collector.core.context import RunContext
+
+# Создаём контекст (уникальный run_id)
+ctx = RunContext.create(command="sync-netbox", dry_run=True)
+# ctx.run_id = "2025-03-14T12-30-22" (timestamp) или "abc12345" (UUID)
+```
+
+### Как прокидывается в Sync
+
+```python
+# netbox/sync/base.py -- SyncBase.__init__()
+self.ctx = context or get_current_context()
+```
+
+Если контекст не передан явно -- берётся глобальный (установленный в CLI).
+
+### _log_prefix -- привязка логов к запуску
+
+```python
+# netbox/sync/base.py
+def _log_prefix(self) -> str:
+    if self.ctx:
+        return f"[{self.ctx.run_id}] "
+    return ""
+
+# Использование в логах:
+logger.info(f"{self._log_prefix()}Создан интерфейс: Gi0/1")
+# -> "[2025-03-14T12-30-22] Создан интерфейс: Gi0/1"
+```
+
+Зачем: когда несколько sync-операций запускаются параллельно (через API),
+`_log_prefix()` позволяет отличить логи одного запуска от другого.
+Каждый запуск имеет уникальный `run_id`, и все его логи помечены этим ID.
+
+---
+
 ## Ключевые файлы
 
 | Файл | Описание |
 |------|----------|
 | `core/domain/sync.py` | SyncComparator, SyncDiff, SyncItem -- чистая логика сравнения |
+| `core/domain/vlan.py` | VlanSet -- сравнение множеств VLAN |
+| `core/context.py` | RunContext -- контекст выполнения с run_id |
 | `netbox/sync/main.py` | NetBoxSync -- главный класс (объединяет mixin-ы) |
 | `netbox/sync/base.py` | SyncBase -- кэши, _find_device, _batch_with_fallback |
 | `netbox/sync/interfaces.py` | InterfacesSyncMixin -- sync_interfaces, _build_create/update_data |
@@ -765,4 +983,5 @@ interfaces:
 | `netbox/client/interfaces.py` | bulk_create/update/delete_interfaces |
 | `netbox/client/inventory.py` | bulk_create/update/delete_inventory_items |
 | `netbox/client/ip_addresses.py` | bulk_create/update/delete_ip_addresses |
+| `fields_config.py` | API для чтения fields.yaml (get_sync_config) |
 | `fields.yaml` | Настройки полей синхронизации |

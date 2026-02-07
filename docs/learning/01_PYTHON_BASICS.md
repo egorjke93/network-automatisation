@@ -830,6 +830,468 @@ name = data.get("interface") or data.get("name") or ""
 
 ---
 
+## 11. @property -- вычисляемые атрибуты
+
+### Теория
+
+Декоратор `@property` превращает метод в атрибут. Снаружи он выглядит как обычное поле (без скобок), но внутри выполняется код. Это удобно для:
+
+- **Вычисляемых значений** -- значение считается из других полей
+- **Только для чтения** -- нельзя случайно присвоить неправильное значение
+- **Всегда актуально** -- пересчитывается при каждом обращении
+
+```python
+# Без @property -- нужно вызывать как метод (со скобками)
+total = diff.total_changes()
+
+# С @property -- выглядит как обычное поле
+total = diff.total_changes   # Без скобок!
+```
+
+### Пример из проекта
+
+В `SyncDiff` два вычисляемых атрибута -- `total_changes` и `has_changes`:
+
+```python
+# core/domain/sync.py — SyncDiff
+@dataclass
+class SyncDiff:
+    to_create: List[SyncItem] = field(default_factory=list)
+    to_update: List[SyncItem] = field(default_factory=list)
+    to_delete: List[SyncItem] = field(default_factory=list)
+
+    @property
+    def total_changes(self) -> int:
+        """Общее количество изменений."""
+        return len(self.to_create) + len(self.to_update) + len(self.to_delete)
+
+    @property
+    def has_changes(self) -> bool:
+        """Есть ли изменения."""
+        return self.total_changes > 0
+```
+
+Использование -- без скобок, как обычное поле:
+
+```python
+diff = comparator.compare_interfaces(local, remote)
+
+if diff.has_changes:                        # Как поле, не как метод
+    print(f"Изменений: {diff.total_changes}")  # Тоже как поле
+```
+
+Почему не хранить `total_changes` как обычное поле? Потому что списки `to_create`, `to_update`, `to_delete` могут меняться после создания объекта. Обычное поле устареет, а `@property` всегда вернёт актуальное значение.
+
+### Где это в проекте
+
+- `core/domain/sync.py` строки 147-155 -- `SyncDiff.total_changes` и `SyncDiff.has_changes`
+
+---
+
+## 12. Enum -- именованные константы
+
+### Теория
+
+`Enum` -- это набор именованных констант. Вместо "магических строк" (`"create"`, `"update"`) используются имена (`ChangeType.CREATE`, `ChangeType.UPDATE`).
+
+Проблема с обычными строками:
+```python
+# Легко опечататься: "craete" вместо "create" -- и ошибку не найдёшь
+status = "craete"   # Тихо работает с ошибкой!
+```
+
+С Enum:
+```python
+# Опечатка вызовет ошибку сразу
+status = ChangeType.CRAETE  # AttributeError! Такого значения нет
+```
+
+### Пример из проекта
+
+Типы изменений при синхронизации:
+
+```python
+# core/domain/sync.py
+from enum import Enum
+
+class ChangeType(str, Enum):
+    """Тип изменения."""
+    CREATE = "create"
+    UPDATE = "update"
+    DELETE = "delete"
+    SKIP = "skip"
+```
+
+Статусы шагов в pipeline:
+
+```python
+# core/pipeline/models.py
+class StepType(str, Enum):
+    """Тип шага pipeline."""
+    COLLECT = "collect"
+    SYNC = "sync"
+    EXPORT = "export"
+
+class StepStatus(str, Enum):
+    """Статус выполнения шага."""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+```
+
+Трюк `(str, Enum)` -- наследование от `str` и `Enum` одновременно. Это позволяет сериализовать значение в JSON. Без `str` при `json.dumps(ChangeType.CREATE)` была бы ошибка. С `str` результат будет `"create"`.
+
+Использование:
+```python
+# Сравнение
+if item.change_type == ChangeType.CREATE:
+    print(f"+ {item.name}")
+
+# В to_dict() -- .value возвращает строку
+{"change_type": item.change_type.value}  # "create"
+```
+
+### Где это в проекте
+
+- `core/domain/sync.py` строка 64 -- `ChangeType(str, Enum)`
+- `core/pipeline/models.py` строки 19, 26 -- `StepType`, `StepStatus`
+
+---
+
+## 13. Logging -- вместо print()
+
+### Теория
+
+`logging` -- стандартный модуль Python для вывода сообщений. В отличие от `print()`, он:
+
+- **Уровни** -- можно фильтровать: показать только ошибки, или всё включая debug
+- **Формат** -- автоматически добавляет время, имя модуля, уровень
+- **Вывод** -- можно писать в файл, в консоль, или и туда и туда
+
+Уровни (от самого тихого до самого громкого):
+
+| Уровень | Когда использовать |
+|---------|-------------------|
+| `DEBUG` | Детали для отладки (обычно скрыты) |
+| `INFO` | Важные события: "Создан интерфейс", "Подключено к устройству" |
+| `WARNING` | Что-то не так, но работа продолжается |
+| `ERROR` | Ошибка, операция не удалась |
+
+### Пример из проекта
+
+Создание логгера и использование:
+
+```python
+# netbox/sync/interfaces.py
+import logging
+
+logger = logging.getLogger(__name__)
+# __name__ = "network_collector.netbox.sync.interfaces"
+# В логах видно, из какого модуля сообщение
+
+# Использование в коде:
+logger.info(f"Создан интерфейс: {name}")
+logger.warning(f"Batch create не удался ({e}), fallback на поштучное создание")
+logger.error(f"Ошибка создания интерфейса {intf.name}: {exc}")
+logger.debug(f"Привязка {intf.name} к LAG {intf.lag} (id={lag_interface.id})")
+```
+
+В консоли это выглядит примерно так:
+```
+2024-01-15 10:30:15 INFO     Создан интерфейс: GigabitEthernet0/1
+2024-01-15 10:30:16 WARNING  Batch create не удался, fallback на поштучное создание
+2024-01-15 10:30:17 ERROR    Ошибка создания интерфейса Vlan99: ...
+```
+
+`print()` просто выводит текст. `logger.info()` добавляет время и уровень, что помогает при анализе логов.
+
+### Где это в проекте
+
+- `netbox/sync/interfaces.py` строки 8, 17 -- создание логгера
+- `collectors/base.py` -- логирование подключений и ошибок
+- `core/pipeline/executor.py` строка 13 -- логгер для pipeline
+
+---
+
+## 14. *args и **kwargs
+
+### Теория
+
+`*args` и `**kwargs` позволяют функции принимать произвольное количество аргументов:
+
+- `*args` -- собирает **позиционные** аргументы в кортеж (tuple)
+- `**kwargs` -- собирает **именованные** аргументы в словарь (dict)
+
+```python
+def example(*args, **kwargs):
+    print(args)     # (1, 2, 3) -- кортеж
+    print(kwargs)   # {"name": "test", "count": 5} -- словарь
+
+example(1, 2, 3, name="test", count=5)
+```
+
+Главное применение -- **передача аргументов дальше** (pass-through).
+
+### Пример из проекта
+
+Метод `create_interface` принимает `**kwargs` для дополнительных параметров:
+
+```python
+# netbox/client/interfaces.py
+def create_interface(
+    self,
+    device_id: int,
+    name: str,
+    interface_type: str = "1000base-t",
+    description: str = "",
+    enabled: bool = True,
+    **kwargs,                # Все остальные параметры (mtu, speed, mode, lag, ...)
+) -> Any:
+    data = {
+        "device": device_id,
+        "name": name,
+        "type": interface_type,
+        "description": description,
+        "enabled": enabled,
+        **kwargs,            # Распаковываем kwargs в словарь
+    }
+    return self.api.dcim.interfaces.create(data)
+```
+
+Зачем? Если без `**kwargs`, пришлось бы перечислить ВСЕ возможные параметры API (их десятки). С `**kwargs` можно передать любые дополнительные поля.
+
+### Где это в проекте
+
+- `netbox/client/interfaces.py` строка 96 -- `create_interface(..., **kwargs)`
+- `netbox/client/interfaces.py` строка 128 -- `update_interface(interface_id, **updates)`
+- `netbox/client/inventory.py` строка 68 -- `create_inventory_item(..., **kwargs)`
+
+---
+
+## 15. Lambda -- анонимные функции
+
+### Теория
+
+Lambda -- это маленькая одноразовая функция, записанная в одну строку. Используется там, где нужна простая функция на один раз, обычно для сортировки или фильтрации.
+
+```python
+# Обычная функция
+def get_name(item):
+    return item.name
+
+# То же самое через lambda
+get_name = lambda item: item.name
+```
+
+Lambda удобна как аргумент `key=` для сортировки.
+
+### Пример из проекта
+
+Сортировка интерфейсов -- LAG первыми:
+
+```python
+# netbox/sync/interfaces.py — sync_interfaces()
+def is_lag(intf: Interface) -> int:
+    """LAG-интерфейсы (Port-channel) первыми (0), остальные потом (1)."""
+    return 0 if intf.name.lower().startswith(("port-channel", "po")) else 1
+
+sorted_interfaces = sorted(interface_models, key=is_lag)
+```
+
+Lambda в fallback-обработке:
+
+```python
+# netbox/sync/interfaces.py — _batch_delete_interfaces()
+self._batch_with_fallback(
+    bulk_fn=self.client.bulk_delete_interfaces,
+    fallback_fn=lambda item_id, name: self.client.api.dcim.interfaces.get(item_id).delete(),
+    ...
+)
+```
+
+Здесь lambda создаёт маленькую функцию для поштучного удаления, которая нигде больше не нужна.
+
+**Когда lambda, а когда def?** Если функция короткая (1 выражение) и используется один раз -- lambda. Если сложнее или используется повторно -- обычный `def`.
+
+### Где это в проекте
+
+- `netbox/sync/interfaces.py` строки 92-93 -- `is_lag()` (в проекте как def, но мог бы быть lambda)
+- `netbox/sync/interfaces.py` строка 388 -- lambda в `fallback_fn`
+
+---
+
+## 16. Set (множество)
+
+### Теория
+
+Set (`set`) -- это коллекция **уникальных** значений. Дубликаты автоматически отбрасываются. Основные операции:
+
+- `add(x)` -- добавить элемент
+- `x in s` -- проверить наличие (очень быстро, O(1))
+- `s1 - s2` -- разность (что есть в s1, но нет в s2)
+- `s1 & s2` -- пересечение (что есть в обоих)
+
+```python
+names = set()           # Пустое множество
+names.add("Gi0/1")
+names.add("Gi0/2")
+names.add("Gi0/1")     # Дубликат -- не добавится
+print(names)            # {"Gi0/1", "Gi0/2"} -- только уникальные
+print("Gi0/1" in names) # True -- быстрая проверка
+```
+
+### Пример из проекта
+
+Отслеживание обработанных имён (чтобы не обработать дважды):
+
+```python
+# netbox/sync/inventory.py
+processed_names = set()
+
+for item in items:
+    name = item.name.strip()
+    processed_names.add(name)   # Запоминаем обработанное имя
+    ...
+
+# Потом: cleanup удаляет всё, что НЕ в processed_names
+if cleanup:
+    for nb_name, nb_item in existing_items.items():
+        if nb_name not in processed_names:  # Быстрая проверка O(1)
+            # Удаляем лишний элемент из NetBox
+```
+
+Операции над множествами -- сравнение кабелей:
+
+```python
+# core/domain/sync.py — compare_cables()
+local_set = set()   # Кабели с устройств
+remote_set = set()  # Кабели в NetBox
+
+# Новые: есть на устройствах, но нет в NetBox
+for endpoints in local_set - remote_set:
+    diff.to_create.append(...)
+
+# Существующие: есть в обоих
+for endpoints in local_set & remote_set:
+    diff.to_skip.append(...)
+
+# Лишние: есть в NetBox, но нет на устройствах
+for endpoints in remote_set - local_set:
+    diff.to_delete.append(...)
+```
+
+### Где это в проекте
+
+- `netbox/sync/inventory.py` строка 70 -- `processed_names = set()`
+- `netbox/sync/cables.py` строки 41, 45 -- `seen_cables = set()`, `lldp_devices = set()`
+- `core/domain/sync.py` строки 476, 497 -- `local_set`, `remote_set` для кабелей
+
+---
+
+## 17. Генераторы и yield
+
+### Теория
+
+Генератор -- это функция, которая **отдаёт значения по одному** вместо того, чтобы вернуть весь список сразу. Вместо `return` используется `yield`.
+
+```python
+# Обычная функция: создаёт весь список в памяти
+def get_numbers():
+    return [1, 2, 3, 4, 5]  # Весь список сразу
+
+# Генератор: отдаёт по одному
+def get_numbers():
+    yield 1  # Отдали 1, функция "заморозилась"
+    yield 2  # Продолжила, отдала 2
+    yield 3  # И так далее
+```
+
+Зачем? Для больших данных. Если у тебя 10000 устройств, не нужно держать все в памяти -- генератор отдаёт их по одному.
+
+### Пример из проекта
+
+Менеджер контекста для SSH-подключения использует `yield`:
+
+```python
+# core/connection.py — connect()
+@contextmanager
+def connect(self, device, credentials):
+    connection = Scrapli(**params)
+    connection.open()
+
+    try:
+        yield connection      # Отдаём соединение в блок with
+    finally:
+        connection.close()    # Закрываем после выхода из with
+```
+
+Использование:
+```python
+with conn_manager.connect(device, creds) as conn:
+    # conn -- это то, что было yield
+    result = conn.send_command("show version")
+# После выхода: finally-блок закрывает соединение
+```
+
+Здесь `yield` используется не для ленивой итерации, а для менеджера контекста (`@contextmanager`). Это частый паттерн: `yield` "передаёт управление" в блок `with`, а после выхода выполняется код `finally`.
+
+### Где это в проекте
+
+- `core/connection.py` строка 255 -- `yield connection` в менеджере контекста
+
+---
+
+## 18. raise ... from -- цепочка ошибок
+
+### Теория
+
+Когда ловишь одну ошибку и бросаешь другую, `raise ... from e` сохраняет исходную ошибку. Без `from` -- причина теряется.
+
+```python
+# Плохо: исходная ошибка потеряна
+except Exception as e:
+    raise RuntimeError("Что-то пошло не так")
+    # При отладке непонятно: ПОЧЕМУ пошло не так?
+
+# Хорошо: исходная ошибка сохранена как "причина"
+except Exception as e:
+    raise RuntimeError("Что-то пошло не так") from e
+    # В traceback видно обе ошибки: новую и исходную
+```
+
+### Пример из проекта
+
+В pipeline executor, если auto-collect не удался:
+
+```python
+# core/pipeline/executor.py — _execute_sync()
+try:
+    self._execute_collect(auto_collect_step)
+except Exception as e:
+    raise RuntimeError(
+        f"Auto-collect {collect_target} failed for sync {target}: {e}"
+    ) from e
+```
+
+Что произойдёт в traceback:
+```
+ConnectionError: Connection refused to 10.0.0.1
+
+The above exception was the direct cause of the following exception:
+
+RuntimeError: Auto-collect interfaces failed for sync interfaces: Connection refused to 10.0.0.1
+```
+
+Благодаря `from e` видно обе ошибки: и понятное описание ("auto-collect failed"), и настоящую причину ("connection refused"). Без `from e` причина бы потерялась.
+
+### Где это в проекте
+
+- `core/pipeline/executor.py` строки 415-417 -- `raise RuntimeError(...) from e`
+
+---
+
 ## Что дальше
 
-Теперь ты знаешь Python-концепции, которые используются в проекте. В следующем документе ([02 Структура проекта](02_PROJECT_STRUCTURE.md)) разберём, как организованы папки и модули, и зачем проект разделён на слои.
+Теперь ты знаешь Python-концепции, которые используются в проекте. В следующем документе ([02 Обзор проекта](02_PROJECT_OVERVIEW.md)) разберём, как организован проект, его архитектуру и структуру папок.

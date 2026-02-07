@@ -35,13 +35,14 @@
 | 01 | [Python-концепции в проекте](01_PYTHON_BASICS.md) | Словари, comprehensions, dataclass, type hints, наследование, mixin-классы, менеджеры контекста, обработка ошибок, модули, полезные паттерны | ~45 мин |
 | 02 | [Обзор проекта](02_PROJECT_OVERVIEW.md) | Зачем нужен проект, что такое NetBox, архитектура и слои, структура папок, быстрый старт | ~20 мин |
 | 03 | [CLI изнутри](03_CLI_INTERNALS.md) | Как работает CLI: argparse, маршрутизация команд, путь от ввода до результата, как добавить свою команду | ~30 мин |
-| 04 | Модели данных | Dataclass-модели: Interface, MACEntry, LLDPNeighbor, зачем они вместо словарей | ~20 мин |
-| 05 | NetBox Sync | Как данные синхронизируются с NetBox, batch операции, dry_run | ~35 мин |
-| 06 | Pipeline -- автоматизация | Цепочки операций: collect -> sync -> cleanup | ~25 мин |
-| 07 | CLI и Web API | Как работают команды CLI и REST API | ~25 мин |
-| 08 | Тестирование | Как писать и запускать тесты, pytest, моки | ~30 мин |
+| 04 | [Сбор данных](04_DATA_COLLECTION.md) | SSH-подключение (Scrapli), команды, TextFSM-парсинг, нормализация, модели данных | ~20 мин |
+| 05 | [Синхронизация с NetBox](05_SYNC_NETBOX.md) | Mixin-архитектура, batch API, кэширование, dry_run, domain layer | ~35 мин |
+| 06 | [Pipeline -- автоматизация](06_PIPELINE.md) | Pipeline: executor, auto-collect, cleanup, YAML конфиги | ~25 мин |
+| 07 | [Потоки данных](07_DATA_FLOWS.md) | Полный путь данных: LLDP, MAC match, interfaces, IP, inventory | ~25 мин |
+| 08 | [Web-архитектура](08_WEB_ARCHITECTURE.md) | FastAPI backend, Vue.js frontend, REST API, async mode | ~30 мин |
+| 09 | [Mixins и архитектурные паттерны](09_MIXINS_PATTERNS.md) | Mixin-паттерн, composition vs DI, self: SyncBase, MRO, вопросы для собеседования | ~25 мин |
 
-**Итого:** примерно 3.5-4 часа на всю серию.
+**Итого:** примерно 4-4.5 часа на всю серию.
 
 ## Как связана обучающая документация с официальной
 
@@ -51,11 +52,12 @@
 |--------------------|----------------------|
 | 01 Python-концепции | -- (базовые знания) |
 | 02 Обзор проекта | [ARCHITECTURE.md](../ARCHITECTURE.md) -- полная архитектура |
-| 03 CLI изнутри | [CLI_INTERNALS.md](../CLI_INTERNALS.md) -- полное техническое описание CLI |
-| 04 Модели данных | [DATA_FLOW_LLDP.md](../DATA_FLOW_LLDP.md) -- поток данных |
-| 05 NetBox Sync | [SYNC_PIPELINE_INTERNALS.md](../SYNC_PIPELINE_INTERNALS.md) -- внутренности sync |
+| 03 CLI изнутри | [MANUAL.md](../MANUAL.md) -- полное руководство по CLI и командам |
+| 04 Сбор данных | [PLATFORM_GUIDE.md](../PLATFORM_GUIDE.md) -- платформы, шаблоны, парсинг |
+| 05 Синхронизация с NetBox | [ARCHITECTURE.md](../ARCHITECTURE.md) -- архитектура sync слоя |
 | 06 Pipeline | [MANUAL.md](../MANUAL.md) -- руководство по использованию |
-| 07 CLI и Web API | [CLI_INTERNALS.md](../CLI_INTERNALS.md), [WEB_API.md](../WEB_API.md) |
-| 08 Тестирование | [TESTING.md](../TESTING.md) -- структура тестов |
+| 07 Потоки данных | [ARCHITECTURE.md](../ARCHITECTURE.md) -- поток данных между слоями |
+| 08 Web-архитектура | [WEB_API.md](../WEB_API.md) -- REST API документация |
+| 09 Mixins и паттерны | [TESTING.md](../TESTING.md) -- тестирование mixin-классов |
 
 **Рекомендация:** сначала прочитай обучающий документ, чтобы понять концепцию. Потом загляни в связанный документ из основной документации для полной картины.

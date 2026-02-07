@@ -4,7 +4,7 @@
 >
 > **Предыдущий документ:** [02. Обзор проекта](02_PROJECT_OVERVIEW.md)
 >
-> **Связанная документация:** [CLI_INTERNALS.md](../CLI_INTERNALS.md) -- полное техническое описание CLI
+> **Связанная документация:** [MANUAL.md](../MANUAL.md) -- полное руководство по CLI и командам
 
 ---
 
@@ -760,5 +760,5 @@ python -m network_collector arp --format excel
 | 05 | NetBox Sync | Как работает `sync.sync_interfaces()` изнутри: сравнение, batch-операции, dry_run |
 
 Также полезно:
-- [CLI_INTERNALS.md](../CLI_INTERNALS.md) -- полное техническое описание CLI (все команды, все аргументы)
+- [MANUAL.md](../MANUAL.md) -- полное руководство по CLI (все команды, все аргументы)
 - [MANUAL.md](../MANUAL.md) -- руководство пользователя (примеры всех команд)
