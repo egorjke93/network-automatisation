@@ -96,6 +96,7 @@ def load_devices(devices_file: str) -> List:
                 platform=platform,
                 device_type=device_type,
                 role=role,
+                site=d.get("site"),
             )
         )
 

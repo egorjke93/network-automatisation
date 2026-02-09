@@ -130,6 +130,9 @@ class DeviceCollector:
             retry_delay=retry_delay,
         )
 
+        # Флаг для --format parsed: пропускает нормализацию
+        self._skip_normalize = False
+
     def collect(
         self,
         devices: List[Device],
@@ -278,6 +281,14 @@ class DeviceCollector:
                 else:
                     parsed = {}
 
+                # --format parsed: сырые данные NTC Templates, без нормализации
+                if self._skip_normalize:
+                    result = dict(parsed)
+                    result["ip_address"] = device.host
+                    result["platform"] = device.platform
+                    logger.info(f"[SUCCESS] {device.host}: parsed данные получены (без нормализации)")
+                    return result
+
                 # Извлекаем поля
                 for device_key, csv_key in self.device_fields.items():
                     value = self._get_parsed_value(parsed, device_key)
@@ -329,6 +340,10 @@ class DeviceCollector:
                 data[csv_key] = value(data, device)
             else:
                 data[csv_key] = value
+
+        # Передаём site из devices_ips.py (для per-device site в sync)
+        if device.site:
+            data["site"] = device.site
 
         return data
 

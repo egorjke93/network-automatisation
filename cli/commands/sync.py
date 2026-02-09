@@ -54,6 +54,11 @@ def cmd_sync_netbox(args, ctx=None) -> None:
     # Загружаем устройства и учётные данные
     devices, credentials = prepare_collection(args)
 
+    # Определяем default_site: CLI --site > fields.yaml defaults.site > "Main"
+    from ...fields_config import get_sync_config
+    cli_site = getattr(args, "site", None)
+    default_site = cli_site or get_sync_config("devices").get_default("site", "Main")
+
     # Статистика для сводки в конце
     summary = {
         "devices": {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "failed": 0},
@@ -114,7 +119,7 @@ def cmd_sync_netbox(args, ctx=None) -> None:
                 ]
                 diff = diff_calc.diff_devices(
                     inventory_dicts,
-                    site=getattr(args, "site", "Main"),
+                    site=default_site,
                     update_existing=update_devices,
                 )
                 if diff.has_changes:
@@ -124,7 +129,7 @@ def cmd_sync_netbox(args, ctx=None) -> None:
 
             stats = sync.sync_devices_from_inventory(
                 device_infos,
-                site=getattr(args, "site", "Main"),
+                site=default_site,
                 role=getattr(args, "role", "switch"),
                 update_existing=update_devices,
                 cleanup=cleanup,
@@ -281,7 +286,7 @@ def cmd_sync_netbox(args, ctx=None) -> None:
                 stats = sync.sync_vlans_from_interfaces(
                     hostname,
                     interfaces,
-                    site=getattr(args, "site", None),
+                    site=default_site,
                 )
                 for key in ("created", "updated", "deleted", "skipped", "failed"):
                     summary["vlans"][key] += stats.get(key, 0)

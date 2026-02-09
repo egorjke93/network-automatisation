@@ -12,6 +12,12 @@ from ..utils import prepare_collection, get_exporter
 logger = logging.getLogger(__name__)
 
 
+def _export_parsed(data, report_name):
+    """Выводит parsed данные (до нормализации) через RawExporter в stdout."""
+    from ...exporters import RawExporter
+    RawExporter().export(data, report_name)
+
+
 def cmd_devices(args, ctx=None) -> None:
     """Обработчик команды devices (инвентаризация)."""
     from ...collectors import DeviceInventoryCollector
@@ -27,10 +33,19 @@ def cmd_devices(args, ctx=None) -> None:
         transport=args.transport,
     )
 
+    # --format parsed: пропускаем нормализацию
+    if args.format == "parsed":
+        collector._skip_normalize = True
+
     data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
+        return
+
+    # --format parsed: сырые данные TextFSM, без fields.yaml
+    if args.format == "parsed":
+        _export_parsed(data, "device_inventory_parsed")
         return
 
     data = apply_fields_config(data, "devices")
@@ -93,10 +108,19 @@ def cmd_mac(args, ctx=None) -> None:
         transport=args.transport,
     )
 
+    # --format parsed: пропускаем нормализацию
+    if args.format == "parsed":
+        collector._skip_normalize = True
+
     data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
+        return
+
+    # --format parsed: сырые данные TextFSM, без fields.yaml и match
+    if args.format == "parsed":
+        _export_parsed(data, "mac_addresses_parsed")
         return
 
     # Сопоставляем с файлом если указан
@@ -164,10 +188,19 @@ def cmd_lldp(args, ctx=None) -> None:
         transport=args.transport,
     )
 
+    # --format parsed: пропускаем нормализацию
+    if args.format == "parsed":
+        collector._skip_normalize = True
+
     data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
+        return
+
+    # --format parsed: сырые данные TextFSM, без fields.yaml
+    if args.format == "parsed":
+        _export_parsed(data, f"{args.protocol}_neighbors_parsed")
         return
 
     data = apply_fields_config(data, "lldp")
@@ -195,10 +228,19 @@ def cmd_interfaces(args, ctx=None) -> None:
         transport=args.transport,
     )
 
+    # --format parsed: пропускаем нормализацию
+    if args.format == "parsed":
+        collector._skip_normalize = True
+
     data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
+        return
+
+    # --format parsed: сырые данные TextFSM, без fields.yaml
+    if args.format == "parsed":
+        _export_parsed(data, "interfaces_parsed")
         return
 
     data = apply_fields_config(data, "interfaces")
@@ -225,10 +267,19 @@ def cmd_inventory(args, ctx=None) -> None:
         transport=args.transport,
     )
 
+    # --format parsed: пропускаем нормализацию
+    if args.format == "parsed":
+        collector._skip_normalize = True
+
     data = collector.collect_dicts(devices)
 
     if not data:
         logger.warning("Нет данных для экспорта")
+        return
+
+    # --format parsed: сырые данные TextFSM, без fields.yaml
+    if args.format == "parsed":
+        _export_parsed(data, "inventory_parsed")
         return
 
     data = apply_fields_config(data, "inventory")

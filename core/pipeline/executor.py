@@ -432,6 +432,9 @@ class PipelineExecutor:
 
         if target == "devices":
             site = options.get("site")
+            if not site:
+                from ...fields_config import get_sync_config
+                site = get_sync_config("devices").get_default("site", "Main")
             role = options.get("role")
 
             # Считаем устройства с ошибками сбора (но всё равно синхронизируем с fallback данными)

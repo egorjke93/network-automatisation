@@ -143,7 +143,8 @@ class InterfacesSyncMixin:
 
         # === BATCH CREATE ===
         self._batch_create_interfaces(
-            device.id, diff.to_create, sorted_interfaces, stats, details
+            device.id, diff.to_create, sorted_interfaces, stats, details,
+            site_name=site_name,
         )
 
         # === BATCH UPDATE ===
@@ -179,6 +180,7 @@ class InterfacesSyncMixin:
         sorted_interfaces: List[Interface],
         stats: dict,
         details: dict,
+        site_name: Optional[str] = None,
     ) -> None:
         """Batch создание интерфейсов.
 
@@ -207,11 +209,11 @@ class InterfacesSyncMixin:
 
         # Фаза 1: создаём LAG интерфейсы
         if lag_items:
-            self._do_batch_create(device_id, lag_items, stats, details, sorted_interfaces)
+            self._do_batch_create(device_id, lag_items, stats, details, sorted_interfaces, site_name=site_name)
 
         # Фаза 2: создаём остальные интерфейсы (теперь LAG существуют в NetBox)
         if member_items:
-            self._do_batch_create(device_id, member_items, stats, details, sorted_interfaces)
+            self._do_batch_create(device_id, member_items, stats, details, sorted_interfaces, site_name=site_name)
 
     def _do_batch_create(
         self: SyncBase,
@@ -220,6 +222,7 @@ class InterfacesSyncMixin:
         stats: dict,
         details: dict,
         sorted_interfaces: List[Interface],
+        site_name: Optional[str] = None,
     ) -> None:
         """Выполняет batch create для списка интерфейсов."""
         create_batch = []
@@ -227,7 +230,7 @@ class InterfacesSyncMixin:
         create_names = []  # Имена для логов
 
         for item, intf in items:
-            data, mac = self._build_create_data(device_id, intf)
+            data, mac = self._build_create_data(device_id, intf, site_name=site_name)
             if data:
                 create_batch.append(data)
                 create_names.append(item.name)
@@ -396,6 +399,7 @@ class InterfacesSyncMixin:
         self: SyncBase,
         device_id: int,
         intf: Interface,
+        site_name: Optional[str] = None,
     ) -> Tuple[Optional[Dict], Optional[str]]:
         """
         Подготавливает данные для создания интерфейса (без API-вызовов).
@@ -439,6 +443,40 @@ class InterfacesSyncMixin:
                 logger.debug(f"Привязка {intf.name} к LAG {intf.lag} (id={lag_interface.id})")
             else:
                 logger.warning(f"LAG интерфейс {intf.lag} не найден для {intf.name}")
+
+        # VLAN назначение при создании интерфейса
+        if sync_cfg.get_option("sync_vlans", False):
+            # Untagged VLAN (access_vlan для access, native_vlan для trunk)
+            target_vid = None
+            if intf.mode == "access" and intf.access_vlan:
+                try:
+                    target_vid = int(intf.access_vlan)
+                except ValueError:
+                    pass
+            elif intf.mode in ("tagged", "tagged-all") and intf.native_vlan:
+                try:
+                    target_vid = int(intf.native_vlan)
+                except ValueError:
+                    pass
+
+            if target_vid:
+                vlan = self._get_vlan_by_vid(target_vid, site_name)
+                if vlan:
+                    data["untagged_vlan"] = vlan.id
+                else:
+                    logger.debug(f"VLAN {target_vid} не найден в NetBox при создании {intf.name}")
+
+            # Tagged VLANs (trunk порты)
+            if intf.mode == "tagged" and intf.tagged_vlans:
+                target_vids = parse_vlan_range(intf.tagged_vlans)
+                if target_vids:
+                    tagged_ids = []
+                    for vid in target_vids:
+                        vlan = self._get_vlan_by_vid(vid, site_name)
+                        if vlan:
+                            tagged_ids.append(vlan.id)
+                    if tagged_ids:
+                        data["tagged_vlans"] = sorted(tagged_ids)
 
         return data, mac_to_assign
 

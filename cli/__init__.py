@@ -109,7 +109,7 @@ def setup_parser() -> argparse.ArgumentParser:
     devices_parser.add_argument(
         "--format",
         "-f",
-        choices=["excel", "csv", "json", "raw"],
+        choices=["excel", "csv", "json", "raw", "parsed"],
         default="csv",
         help="Формат вывода",
     )
@@ -139,7 +139,7 @@ def setup_parser() -> argparse.ArgumentParser:
     mac_parser.add_argument(
         "--format",
         "-f",
-        choices=["excel", "csv", "json", "raw"],
+        choices=["excel", "csv", "json", "raw", "parsed"],
         default="excel",
         help="Формат вывода",
     )
@@ -198,7 +198,7 @@ def setup_parser() -> argparse.ArgumentParser:
     lldp_parser.add_argument(
         "--format",
         "-f",
-        choices=["excel", "csv", "json", "raw"],
+        choices=["excel", "csv", "json", "raw", "parsed"],
         default="excel",
         help="Формат вывода",
     )
@@ -225,7 +225,7 @@ def setup_parser() -> argparse.ArgumentParser:
     intf_parser.add_argument(
         "--format",
         "-f",
-        choices=["excel", "csv", "json", "raw"],
+        choices=["excel", "csv", "json", "raw", "parsed"],
         default="excel",
         help="Формат вывода",
     )
@@ -246,7 +246,7 @@ def setup_parser() -> argparse.ArgumentParser:
     inv_parser.add_argument(
         "--format",
         "-f",
-        choices=["excel", "csv", "json", "raw"],
+        choices=["excel", "csv", "json", "raw", "parsed"],
         default="json",
         help="Формат вывода",
     )
@@ -273,7 +273,7 @@ def setup_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--format",
         "-f",
-        choices=["excel", "csv", "json", "raw"],
+        choices=["excel", "csv", "json", "raw", "parsed"],
         default="json",
         help="Формат вывода",
     )

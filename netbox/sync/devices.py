@@ -148,7 +148,7 @@ class DevicesSyncMixin:
 
         Args:
             inventory_data: Список DeviceInfo
-            site: Сайт по умолчанию
+            site: Сайт по умолчанию (используется если у устройства нет своего site)
             role: Роль по умолчанию
             update_existing: Обновлять существующие устройства
             cleanup: Удалять устройства не из списка
@@ -171,6 +171,8 @@ class DevicesSyncMixin:
             manufacturer = entry.manufacturer or "Cisco"
             ip_address = entry.ip_address or ""
             platform = entry.platform or ""
+            # Per-device site: берём из устройства, fallback на default
+            device_site = entry.site or site
 
             if not name:
                 logger.warning("Пропущена запись без имени устройства")
@@ -197,7 +199,7 @@ class DevicesSyncMixin:
                         manufacturer=manufacturer,
                         platform=platform,
                         tenant=tenant,
-                        site=site,
+                        site=device_site,
                         role=role,
                         primary_ip=ip_address if set_primary_ip else "",
                     )
@@ -216,7 +218,7 @@ class DevicesSyncMixin:
             result = self.create_device(
                 name=name,
                 device_type=model,
-                site=site,
+                site=device_site,
                 role=role,
                 manufacturer=manufacturer,
                 serial=serial,

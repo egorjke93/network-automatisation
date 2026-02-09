@@ -85,6 +85,9 @@ class Device:
     # Роль устройства для NetBox (Switch, Router, Firewall)
     role: Optional[str] = None
 
+    # Сайт устройства для NetBox (если не указан — берётся из конфига)
+    site: Optional[str] = None
+
     # Опциональные параметры подключения
     port: int = 22
     timeout: int = 10
@@ -192,6 +195,7 @@ class Device:
             platform=data.get("platform"),
             device_type=data.get("device_type"),
             role=data.get("role"),
+            site=data.get("site"),
             port=data.get("port", 22),
             hostname=data.get("hostname"),
             tags=data.get("tags", []),
