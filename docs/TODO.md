@@ -510,21 +510,21 @@ sync:
 
 ---
 
-### 9. Тестирование (Низкий приоритет)
+### 9. Тестирование (Низкий приоритет) ✅
 
 | Тип | Текущее | Нужно |
 |-----|---------|-------|
 | Unit tests | 1300+ | ✅ OK |
 | Integration tests | 250+ (API, pipeline, bulk) | ✅ OK |
-| E2E tests | 2 | Расширить |
+| E2E tests | 186 | ✅ OK |
 | Coverage | ~85% | ✅ OK |
 
 **Задачи:**
 - [x] API integration tests (FastAPI TestClient) — ✅ 200+ тестов
-- [ ] E2E tests для collectors
+- [x] E2E tests для collectors — ✅ 186 тестов (IP, sync, multi-device, NX-OS enrichment)
 - [x] Mock-based tests для NetBox sync — ✅ 150+ тестов
 
-**Статус:** Тестирование в хорошем состоянии
+**Статус:** ✅ Выполнено. Всего 1697+ тестов
 
 ---
 
@@ -558,7 +558,7 @@ sync:
 
 ## Что уже хорошо ✅
 
-- ✅ 1545+ тестов (хорошее покрытие)
+- ✅ 1697+ тестов (хорошее покрытие)
 - ✅ Структурированное JSON логирование
 - ✅ Domain Layer с нормализаторами
 - ✅ Pipeline система с транзакциями
@@ -794,6 +794,51 @@ elif not intf.mode and current_mode:
 
 **Тесты:** 3 теста в `TestModeClearOnShutdown`
 
+### Per-Device Site from devices_ips.py ✅
+
+**Фича:** Каждое устройство в `devices_ips.py` может иметь свой `site`.
+
+**Приоритет site:** CLI `--site` > `device.site` из devices_ips.py > `fields.yaml` defaults.site > `"Main"`
+
+**Файлы:**
+- `core/device.py` — поле `site: Optional[str] = None` в Device
+- `cli/utils.py` — `load_devices()` читает `site=d.get("site")`
+- `collectors/device.py` — `result["site"] = device.site`
+- `netbox/sync/devices.py` — `device_site = entry.site or site` (per-device fallback)
+- `cli/commands/sync.py` — вычисление `default_site` из fields.yaml
+- `core/pipeline/executor.py` — default_site из fields.yaml при отсутствии в options
+
+**Тесты:** 7 тестов в `tests/test_core/test_device.py`
+
+### VLAN Assignment on Interface CREATE ✅
+
+**Проблема:** При первом запуске pipeline VLAN на интерфейсы не назначались.
+Они назначались только при UPDATE (второй запуск).
+
+**Причина:** `_build_create_data()` не включала VLAN-поля (untagged_vlan, tagged_vlans)
+при создании нового интерфейса.
+
+**Решение:** `_build_create_data()` теперь включает `untagged_vlan` и `tagged_vlans`
+при создании, если `sync_vlans` включён в `fields.yaml`.
+
+**Файл:** `netbox/sync/interfaces.py`
+
+### --format parsed (Raw TextFSM Output) ✅
+
+**Фича:** Новый формат экспорта `--format parsed` — показывает сырые данные
+из TextFSM парсинга **до** нормализации. Сохраняются оригинальные ключи NTC Templates.
+
+**Использование:**
+```bash
+python -m network_collector interfaces --format parsed
+python -m network_collector mac --format parsed
+```
+
+**Отличие от raw:** `raw` выводит текст команды с устройства,
+`parsed` — результат TextFSM парсинга (структурированные данные до нормализации).
+
+**Файлы:** `cli/commands/collect.py`, `cli/utils.py`, `cli/__init__.py`
+
 ### LLDP Protocol Default in Pipeline Fix ✅
 
 **Проблема:** Pipeline LLDP collect использовал protocol=lldp, не собирая CDP соседей.
@@ -873,7 +918,7 @@ if target == "lldp":
 |---------|----------|
 | Python файлов | ~90 |
 | Строк кода | ~17,000 |
-| Тестов | 1545+ |
+| Тестов | 1697+ |
 | CLI команд | 11 |
 | API endpoints | 13 |
 | Vue компонентов | 14 |

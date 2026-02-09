@@ -44,9 +44,10 @@ devices_list = [
     {"host": "192.168.1.1", "platform": "cisco_iosxe"},
     {"host": "192.168.1.2", "platform": "cisco_iosxe", "device_type": "C9200L-24P-4X"},
     {"host": "192.168.1.3", "platform": "arista_eos", "role": "switch"},
+    {"host": "192.168.1.4", "platform": "cisco_iosxe", "site": "DC-2"},
 
     # Старый формат (совместимость)
-    {"host": "192.168.1.4", "device_type": "cisco_ios"},
+    {"host": "192.168.1.5", "device_type": "cisco_ios"},
 ]
 ```
 
@@ -58,6 +59,7 @@ devices_list = [
 | `platform` | Драйвер SSH (cisco_iosxe, arista_eos, etc.) | Да* |
 | `device_type` | Модель для NetBox (C9200L-24P-4X) | Нет |
 | `role` | Роль устройства для NetBox | Нет |
+| `site` | Сайт устройства для NetBox (per-device) | Нет |
 | `tenant` | Арендатор для NetBox | Нет |
 
 *Если не указан `platform`, используется `device_type` как драйвер.
@@ -221,8 +223,13 @@ python -m network_collector [команда] [опции]
 |--------|----------|-------|
 | `excel` | Excel файл с форматированием | `reports/имя.xlsx` |
 | `csv` | CSV файл | `reports/имя.csv` |
-| `json` | JSON с метаданными | `reports/имя.json` |
-| `raw` | JSON в stdout (для pipeline) | stdout |
+| `json` | JSON с метаданными (нормализованные данные) | `reports/имя.json` |
+| `raw` | JSON в stdout (нормализованные данные, для pipeline) | stdout |
+| `parsed` | JSON в stdout (сырые данные TextFSM до нормализации, для отладки) | stdout |
+
+**Разница между raw и parsed:**
+- `raw` — данные после нормализации (стандартные имена полей: `hostname`, `mac`, `interface`)
+- `parsed` — данные TextFSM до нормализации (оригинальные ключи NTC Templates: `DESTINATION_ADDRESS`, `DESTINATION_PORT`)
 
 **Пример использования raw:**
 ```bash
@@ -236,13 +243,24 @@ python -m network_collector devices --format raw | jq '.[].hostname'
 python -m network_collector mac --format raw > mac_data.json
 ```
 
+**Пример использования parsed (отладка шаблонов):**
+```bash
+# Данные TextFSM до нормализации — видно оригинальные ключи
+python -m network_collector interfaces --format parsed | jq '.[0] | keys'
+
+# Сравнить parsed (TextFSM) и raw (нормализованные)
+python -m network_collector mac --format parsed > parsed.json
+python -m network_collector mac --format raw > normalized.json
+diff <(jq -S '.[0] | keys' parsed.json) <(jq -S '.[0] | keys' normalized.json)
+```
+
 ### 3.2 devices — Инвентаризация устройств
 
 ```bash
 python -m network_collector devices [опции]
 
 Опции:
-  --format {excel,csv,json,raw}  Формат вывода (default: excel)
+  --format {excel,csv,json,raw,parsed}  Формат вывода (default: excel)
 
 Собирает:
   - hostname, model, serial, version, uptime
@@ -264,7 +282,7 @@ python -m network_collector devices --format csv -o devices.csv
 python -m network_collector mac [опции]
 
 Опции:
-  --format {excel,csv,json,raw}  Формат вывода (default: excel)
+  --format {excel,csv,json,raw,parsed}  Формат вывода (default: excel)
   --with-descriptions        Собрать описания интерфейсов
   --with-port-security       Собрать sticky MAC (offline устройства)
   --include-trunk            Включить trunk порты (по умолчанию исключены)
@@ -293,7 +311,7 @@ python -m network_collector mac --with-port-security
 python -m network_collector lldp [опции]
 
 Опции:
-  --format {excel,csv,json,raw}    Формат вывода
+  --format {excel,csv,json,raw,parsed}    Формат вывода
   --protocol {lldp,cdp,both}   Протокол (default: lldp)
 
 Собирает:
@@ -325,7 +343,7 @@ python -m network_collector lldp --protocol both
 python -m network_collector interfaces [опции]
 
 Опции:
-  --format {excel,csv,json,raw}  Формат вывода
+  --format {excel,csv,json,raw,parsed}  Формат вывода
 
 Собирает:
   - hostname, interface, status, description, ip_address, mac,
@@ -338,7 +356,7 @@ python -m network_collector interfaces [опции]
 python -m network_collector inventory [опции]
 
 Опции:
-  --format {excel,csv,json,raw}  Формат вывода
+  --format {excel,csv,json,raw,parsed}  Формат вывода
 
 Собирает:
   - hostname, name, pid, serial, description, slot
@@ -362,7 +380,7 @@ python -m network_collector backup [опции]
 python -m network_collector run "команда" [опции]
 
 Опции:
-  --format {excel,csv,json,raw}  Формат вывода
+  --format {excel,csv,json,raw,parsed}  Формат вывода
   --platform PLATFORM            Платформа для NTC Templates
 
 Примеры:
@@ -685,6 +703,43 @@ sync-netbox --create-devices --role switch
 # 10.0.0.2 → switch (из CLI)
 ```
 
+### 4.5.1 Приоритет site
+
+Site берётся в порядке:
+
+1. **CLI параметр** `--site` — высший приоритет (применяется ко всем)
+2. **devices_ips.py** `site` — для конкретного устройства
+3. **fields.yaml** `sync.devices.defaults.site` — дефолт из конфига
+4. **Хардкод** `"Main"` — если нигде не указано
+
+```python
+# devices_ips.py
+devices_list = [
+    {"host": "10.0.0.1", "platform": "cisco_ios", "site": "DC-2"},  # → DC-2
+    {"host": "10.0.0.2", "platform": "cisco_ios"},                    # → из CLI или fields.yaml
+]
+```
+
+```bash
+# Без --site: берётся из devices_ips.py или fields.yaml
+sync-netbox --create-devices
+# 10.0.0.1 → DC-2 (из devices_ips.py)
+# 10.0.0.2 → "SU" (из fields.yaml defaults.site)
+
+# С --site: перекрывает всё
+sync-netbox --create-devices --site "Office"
+# 10.0.0.1 → Office (CLI перекрывает)
+# 10.0.0.2 → Office (CLI перекрывает)
+```
+
+```yaml
+# fields.yaml — дефолтное значение site
+sync:
+  devices:
+    defaults:
+      site: "SU"    # Используется если нет --site и нет device.site
+```
+
 ### 4.6 Primary IP
 
 Primary IP устанавливается **только** при использовании `--ip-addresses`:
@@ -739,11 +794,18 @@ sync:
 
 | Сценарий | Действие |
 |----------|----------|
+| Новый интерфейс с VLAN | VLAN назначается при CREATE |
 | VLAN добавлен на порт | Добавляется в NetBox |
 | VLAN удалён с порта | Удаляется из NetBox |
 | VLAN изменился | Обновляется |
 | access → trunk | mode меняется, tagged_vlans добавляются |
 | trunk → access | mode меняется, tagged_vlans очищаются |
+
+**VLAN при создании интерфейса:**
+
+При создании нового интерфейса (CREATE) VLAN назначается сразу, а не только при UPDATE.
+Это гарантирует что VLAN-привязки появляются в NetBox с первого запуска pipeline,
+без необходимости повторного sync.
 
 **Важные моменты:**
 

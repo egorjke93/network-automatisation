@@ -622,7 +622,7 @@ diff = comparator.compare_interfaces(
 )
 ```
 
-### Шаг 5: Batch CREATE (двухфазный для LAG)
+### Шаг 5: Batch CREATE (двухфазный для LAG + VLAN)
 
 Создание интерфейсов разделено на две фазы, чтобы member-интерфейсы
 могли найти свой LAG по имени (он должен уже существовать в NetBox):
@@ -644,6 +644,11 @@ self.client.bulk_create_interfaces(member_batch)
 Без двухфазного создания member-интерфейсы не получали бы `lag` ID,
 потому что Port-channel ещё не существовал в NetBox на момент вызова
 `get_interface_by_name()`.
+
+**VLAN при создании:** Если `sync_vlans: true` в `fields.yaml`, то `_build_create_data()`
+включает `untagged_vlan` и `tagged_vlans` прямо при создании интерфейса.
+Раньше VLAN назначались только при UPDATE (второй запуск pipeline), теперь —
+сразу при CREATE.
 
 ### Шаг 6: Batch UPDATE
 
@@ -978,7 +983,7 @@ logger.info(f"{self._log_prefix()}Создан интерфейс: Gi0/1")
 | `netbox/sync/cables.py` | CablesSyncMixin -- sync_cables_from_lldp |
 | `netbox/sync/ip_addresses.py` | IPAddressesSyncMixin -- sync_ip_addresses |
 | `netbox/sync/inventory.py` | InventorySyncMixin -- sync_inventory |
-| `netbox/sync/devices.py` | DevicesSyncMixin -- create_device, sync_devices_from_inventory |
+| `netbox/sync/devices.py` | DevicesSyncMixin -- create_device, sync_devices_from_inventory (per-device site) |
 | `netbox/sync/vlans.py` | VLANsSyncMixin -- sync_vlans_from_interfaces |
 | `netbox/client/interfaces.py` | bulk_create/update/delete_interfaces |
 | `netbox/client/inventory.py` | bulk_create/update/delete_inventory_items |

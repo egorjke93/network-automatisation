@@ -11,7 +11,10 @@
 5. [Маркеры](#5-маркеры)
 6. [Написание тестов](#6-написание-тестов)
 7. [Примеры тестов](#7-примеры-тестов)
-8. [CI/CD](#8-cicd)
+8. [E2E тесты](#8-e2e-тесты)
+9. [Добавление тестов для новых платформ](#9-добавление-тестов-для-новых-платформ)
+10. [Покрытие и дублирование тестов](#10-покрытие-и-дублирование-тестов)
+11. [CI/CD](#11-cicd)
 
 ---
 
@@ -19,7 +22,7 @@
 
 | Метрика | Значение |
 |---------|----------|
-| **Всего тестов** | 1537+ |
+| **Всего тестов** | 1665+ |
 | **Framework** | pytest |
 | **Coverage** | ~85% |
 
@@ -35,7 +38,7 @@
 | `test_exporters/` | Excel, CSV, JSON экспорт | ~50 |
 | `test_contracts/` | Контракты fields.yaml ↔ models | ~50 |
 | `test_fixes/` | Регрессионные тесты для багфиксов | ~100 |
-| `test_e2e/` | End-to-end тесты pipeline и collectors | ~100 |
+| `test_e2e/` | End-to-end тесты pipeline и collectors | ~186 |
 | `test_cli/` | CLI команды (pipeline, sync summary) | ~40 |
 
 ---
@@ -205,12 +208,16 @@ tests/
 │   ├── test_interface_enabled.py
 │   └── test_platform_mapping.py
 │
-├── test_e2e/               # End-to-end тесты
-│   ├── conftest.py         # E2E fixtures (mock_device)
+├── test_e2e/               # End-to-end тесты (186 тестов)
+│   ├── conftest.py         # E2E fixtures (mock_device, PLATFORM_FIXTURES)
 │   ├── test_interface_collector_e2e.py  # Interface collector E2E
 │   ├── test_mac_collector_e2e.py        # MAC collector E2E
 │   ├── test_lldp_collector_e2e.py       # LLDP collector E2E
 │   ├── test_inventory_collector_e2e.py  # Inventory collector E2E
+│   ├── test_ip_collector_e2e.py         # IP-адреса: parse → IPAddressEntry (24 теста)
+│   ├── test_sync_full_device.py         # Полный sync: inventory, IP, VLAN (16 тестов)
+│   ├── test_multi_device_collection.py  # Параллельный сбор, partial failures (12 тестов)
+│   ├── test_nxos_enrichment_e2e.py      # NX-OS enrichment: switchport, transceiver, LAG (15 тестов)
 │   ├── test_pipeline.py    # Pipeline E2E
 │   └── test_sync_pipeline.py  # Sync pipeline E2E
 │
@@ -537,9 +544,221 @@ class TestLLDPParsing:
 
 ---
 
-## 8. CI/CD
+## 8. E2E тесты
 
-### 8.1 Локальный pre-commit
+End-to-end тесты проверяют полный цикл: fixture → parse → normalize → model → sync.
+Без реального SSH или NetBox — все зависимости замоканы.
+
+### 8.1 Структура E2E тестов
+
+| Файл | Что тестирует | Тестов |
+|------|--------------|--------|
+| `test_ip_collector_e2e.py` | IP из show interfaces → IPAddressEntry, with_prefix, ensure_list | 24 |
+| `test_sync_full_device.py` | Inventory/IP/VLAN sync (dry_run), full device workflow | 16 |
+| `test_multi_device_collection.py` | Параллельный сбор, partial failures, progress callback | 12 |
+| `test_nxos_enrichment_e2e.py` | NX-OS enrichment: switchport, transceiver, LAG, full pipeline | 15 |
+| `test_interface_collector_e2e.py` | Interface collector E2E по платформам | ~30 |
+| `test_mac_collector_e2e.py` | MAC collector E2E | ~20 |
+| `test_lldp_collector_e2e.py` | LLDP/CDP collector E2E | ~25 |
+| `test_inventory_collector_e2e.py` | Inventory collector E2E | ~20 |
+| `test_pipeline.py` | Pipeline: parse → normalize → export | ~20 |
+| `test_sync_pipeline.py` | Sync pipeline: LLDP→cables, interfaces, devices | ~14 |
+
+### 8.2 Паттерн sync E2E теста
+
+```python
+from network_collector.netbox.sync import NetBoxSync
+
+def test_sync_pipeline(parser, mock_netbox_client):
+    """Parse → Model → sync (dry_run)."""
+    # 1. Загружаем fixture
+    output = load_fixture("cisco_ios", "show_inventory.txt")
+    parsed = parser.parse(output, "cisco_ios", "show inventory")
+
+    # 2. Конвертируем в модели
+    items = [InventoryItem.from_dict(row) for row in parsed]
+
+    # 3. Sync (dry_run — без реального NetBox)
+    sync = NetBoxSync(mock_netbox_client, dry_run=True)
+    result = sync.sync_inventory("switch-01", items)
+
+    # 4. Проверяем stats
+    assert result["created"] >= 0
+    assert result["failed"] == 0
+```
+
+### 8.3 Паттерн multi-device теста
+
+```python
+def test_partial_failure():
+    """1 из 3 устройств падает — остальные работают."""
+    def fake_collect(device):
+        if device.host == "10.0.0.2":
+            raise ConnectionError("unreachable")
+        return [{"interface": "Gi0/1", ...}]
+
+    collector = InterfaceCollector(credentials=None)
+    with patch.object(collector, '_collect_from_device', side_effect=fake_collect):
+        result = collector.collect_dicts(devices, parallel=True)
+
+    assert len(result) == 2  # Данные от 2 из 3
+```
+
+### 8.4 Паттерн enrichment теста
+
+```python
+def test_enrichment_pipeline(normalizer):
+    """Базовые данные + enrichment → обогащённые модели."""
+    data = normalizer.normalize_dicts(parsed, hostname="nxos-switch")
+
+    # Enrichment: LAG → switchport → media_type
+    data = normalizer.enrich_with_lag(data, lag_membership)
+    data = normalizer.enrich_with_switchport(data, switchport_modes)
+    data = normalizer.enrich_with_media_type(data, media_types)
+
+    # Конвертируем в модели
+    interfaces = [Interface.from_dict(row) for row in data]
+    assert any(i.lag for i in interfaces)
+```
+
+---
+
+## 9. Добавление тестов для новых платформ
+
+При добавлении новой платформы (например, `arista_eos`, `juniper_junos`) большинство E2E тестов подхватятся **автоматически** — нужно только добавить fixture-файлы и зарегистрировать платформу.
+
+### 9.1 Чеклист
+
+| # | Что сделать | Где |
+|---|-----------|-----|
+| 1 | Создать папку с fixture-файлами | `tests/fixtures/<platform>/` |
+| 2 | Добавить платформу в `SUPPORTED_PLATFORMS` | `tests/test_e2e/conftest.py` |
+| 3 | Добавить маппинг файлов в `PLATFORM_FIXTURES` | `tests/test_e2e/conftest.py` |
+| 4 | (Опционально) Добавить platform-specific тесты | `tests/test_e2e/` |
+
+### 9.2 Шаг 1: Fixture-файлы
+
+Создайте папку `tests/fixtures/<platform>/` и поместите туда реальные выводы команд:
+
+```
+tests/fixtures/arista_eos/
+├── show_interfaces.txt          # show interfaces
+├── show_mac_address_table.txt   # show mac address-table
+├── show_lldp_neighbors_detail.txt  # show lldp neighbors detail
+├── show_inventory.txt           # show inventory
+├── show_version.txt             # show version
+├── show_interfaces_switchport.txt  # show interfaces switchport
+└── show_interface_status.txt    # show interface status
+```
+
+### 9.3 Шаг 2: Регистрация в conftest.py
+
+```python
+# tests/test_e2e/conftest.py
+
+SUPPORTED_PLATFORMS = [
+    "cisco_ios",
+    "cisco_nxos",
+    "qtech",
+    "arista_eos",  # ← добавить
+]
+
+PLATFORM_FIXTURES = {
+    # ... существующие ...
+    "arista_eos": {  # ← добавить
+        "interfaces": "show_interfaces.txt",
+        "mac": "show_mac_address_table.txt",
+        "lldp": "show_lldp_neighbors_detail.txt",
+        "inventory": "show_inventory.txt",
+        "version": "show_version.txt",
+    },
+}
+```
+
+### 9.4 Что запустится автоматически
+
+После регистрации платформы все параметризованные E2E тесты запустятся для неё:
+
+- `test_interface_collector_e2e.py` — парсинг интерфейсов, нормализация, модели
+- `test_mac_collector_e2e.py` — парсинг MAC-таблицы
+- `test_lldp_collector_e2e.py` — парсинг LLDP/CDP
+- `test_inventory_collector_e2e.py` — парсинг inventory
+
+Тесты используют `@pytest.mark.parametrize("platform", SUPPORTED_PLATFORMS)` — новая платформа автоматически включается во все проверки.
+
+### 9.5 Когда нужны отдельные тесты
+
+Отдельные тесты пишутся только при наличии **платформо-специфичной логики**:
+
+| Ситуация | Пример | Действие |
+|----------|--------|----------|
+| Уникальная enrichment-команда | NX-OS: `show interface transceiver` | Отдельный E2E тест |
+| Особый формат вывода | QTech: другой формат MAC | Тест в `test_parsers/` |
+| Специфичная нормализация | Juniper: `xe-0/0/0` → `xe-0/0/0` | Тест в `test_core/test_domain/` |
+| Стандартный вывод | Arista EOS (похож на IOS) | **Не нужен** — хватит E2E |
+
+### 9.6 Проверка
+
+```bash
+# Запустить E2E тесты для новой платформы
+pytest tests/test_e2e/ -v -k "arista_eos"
+
+# Проверить что парсинг работает
+pytest tests/test_e2e/ -v -k "arista_eos" --tb=short
+```
+
+---
+
+## 10. Покрытие и дублирование тестов
+
+### 10.1 Принципы
+
+- **Каждый тест проверяет одну вещь** — unit тест проверяет функцию, E2E проверяет pipeline
+- **Допустимое пересечение** — unit тест проверяет `normalize()` изолированно, E2E проверяет `parse → normalize → model` цепочку
+- **Избегать дублирования** — не писать одинаковые тесты в разных файлах
+
+### 10.2 Слои тестирования
+
+```
+┌─────────────────────────────────────────────┐
+│  E2E тесты (test_e2e/)                      │
+│  fixture → parse → normalize → model → sync │
+│  Проверяют: интеграция слоёв, полный цикл   │
+├─────────────────────────────────────────────┤
+│  Integration тесты (test_netbox/)           │
+│  Проверяют: sync логику, batch API, VLANs   │
+├─────────────────────────────────────────────┤
+│  Unit тесты (test_core/, test_parsers/)     │
+│  Проверяют: отдельные функции, модели       │
+└─────────────────────────────────────────────┘
+```
+
+### 10.3 Где что тестировать
+
+| Что тестируется | Где | Пример |
+|----------------|-----|--------|
+| Маппинг ключей NTC → стандартные | `test_core/test_domain/` | `test_interface_normalizer.py` |
+| Парсинг конкретного вывода | `test_parsers/` | `test_interfaces.py` |
+| Полный pipeline (parse → model) | `test_e2e/` | `test_interface_collector_e2e.py` |
+| Sync логика (create/update/delete) | `test_netbox/` | `test_sync_integration.py` |
+| Sync pipeline (parse → sync dry_run) | `test_e2e/` | `test_sync_full_device.py` |
+| Batch API (bulk операции) | `test_netbox/` | `test_bulk_operations.py` |
+| API endpoints | `test_api/` | `test_sync.py` |
+| Регрессия конкретного бага | `test_fixes/` | `test_interface_enabled.py` |
+
+### 10.4 Известные пересечения
+
+Некоторые E2E collector тесты (`test_interface_collector_e2e.py`, `test_mac_collector_e2e.py` и др.) содержат тесты нормализации, которые частично совпадают с unit тестами в `test_core/test_domain/`. Это **допустимо** — unit тесты проверяют edge cases функции, E2E проверяют что вся цепочка работает с реальным fixture.
+
+**Не допускается** дублирование одинаковых тестов внутри одного слоя (например, два E2E файла проверяющих одно и то же).
+
+---
+
+## 11. CI/CD
+
+
+
+### 11.1 Локальный pre-commit
 
 ```bash
 # Запуск перед коммитом
@@ -549,7 +768,7 @@ pytest tests/ -x -q --tb=short
 pytest tests/ -m unit -x -q
 ```
 
-### 8.2 GitHub Actions (пример)
+### 11.2 GitHub Actions (пример)
 
 ```yaml
 # .github/workflows/tests.yml
@@ -578,7 +797,7 @@ jobs:
         uses: codecov/codecov-action@v3
 ```
 
-### 8.3 Рекомендации
+### 11.3 Рекомендации
 
 1. **Перед коммитом:** `pytest tests/ -x -q`
 2. **Новый код:** писать тесты сразу

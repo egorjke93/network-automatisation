@@ -214,6 +214,24 @@ NTC_PLATFORM_MAP = {
 }
 ```
 
+### Отладка парсинга: --format parsed
+
+Если TextFSM парсинг работает неправильно, можно посмотреть сырые данные **до**
+нормализации — формат `parsed` показывает результат TextFSM с оригинальными ключами
+NTC Templates (например, `destination_address` вместо `mac`):
+
+```bash
+# Посмотреть что вернул TextFSM для MAC-таблицы
+python -m network_collector mac --format parsed
+
+# Сравни с нормализованным форматом
+python -m network_collector mac --format json
+```
+
+**Разница raw vs parsed:**
+- `--format raw` — текст команды с устройства (как если бы набрали руками)
+- `--format parsed` — результат TextFSM парсинга (список словарей до нормализации)
+
 ### Fallback на regex
 
 Если TextFSM шаблон не нашёлся или парсинг не удался, коллектор переключается

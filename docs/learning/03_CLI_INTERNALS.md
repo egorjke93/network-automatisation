@@ -290,7 +290,7 @@ def setup_parser() -> argparse.ArgumentParser:
     # === MAC ===
     mac_parser = subparsers.add_parser("mac", help="Сбор MAC-адресов")
     mac_parser.add_argument("--format", "-f",
-        choices=["excel", "csv", "json", "raw"], default="excel")
+        choices=["excel", "csv", "json", "raw", "parsed"], default="excel")
     mac_parser.add_argument("--mac-format",
         choices=["ieee", "cisco", "unix"], default=None)
     mac_parser.add_argument("--fields", help="Поля для вывода (через запятую)")
@@ -306,7 +306,7 @@ def setup_parser() -> argparse.ArgumentParser:
 
 **Что тут происходит:**
 - Для команды `mac` регистрируются все возможные аргументы.
-- `choices=["excel", "csv", "json", "raw"]` -- argparse сам проверит, что формат допустимый.
+- `choices=["excel", "csv", "json", "raw", "parsed"]` -- argparse сам проверит, что формат допустимый. `parsed` выводит данные после TextFSM парсинга до нормализации (для отладки).
 - `default="excel"` -- если `--format` не указан, будет `"excel"`.
 - `action="store_true"` -- это флаг-переключатель (есть → `True`, нет → `False`).
 
@@ -441,6 +441,8 @@ def load_devices(devices_file: str) -> List:
                 host=d.get("host"),
                 platform=d.get("platform"),
                 device_type=d.get("device_type"),
+                role=d.get("role"),
+                site=d.get("site"),      # Per-device site для NetBox sync
             )
         )
 
@@ -458,9 +460,10 @@ def load_devices(devices_file: str) -> List:
 ```python
 devices_list = [
     {"host": "10.0.0.1", "platform": "cisco_ios", "device_type": "C9200L-24P-4X"},
-    {"host": "10.0.0.2", "platform": "cisco_iosxe", "device_type": "C9300-48T"},
+    {"host": "10.0.0.2", "platform": "cisco_iosxe", "device_type": "C9300-48T", "site": "DC-2"},
     {"host": "10.0.0.3", "platform": "arista_eos", "device_type": "DCS-7050TX"},
 ]
+# site — опциональное поле; если не указан — берётся из fields.yaml (defaults.site) или "Main"
 ```
 
 ### Шаг 6: `get_exporter()` -- выбор экспортёра
@@ -476,8 +479,8 @@ def get_exporter(format_type: str, output_folder: str, delimiter: str = ","):
         return CSVExporter(output_folder=output_folder, delimiter=delimiter)
     elif format_type == "json":
         return JSONExporter(output_folder=output_folder)
-    elif format_type == "raw":
-        return RawExporter()
+    elif format_type in ("raw", "parsed"):
+        return RawExporter()  # parsed использует тот же RawExporter
     else:
         return ExcelExporter(output_folder=output_folder)
 ```

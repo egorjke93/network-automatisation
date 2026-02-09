@@ -196,11 +196,12 @@ netbox/sync/
 
 **Mixins:**
 - `InterfacesSyncMixin` — sync_interfaces() + batch create/update/delete + VLAN sync
+  - `_build_create_data()` — подготовка данных для CREATE (включая VLAN если sync_vlans)
   - `_build_update_data()` — оркестратор, делегирует 11 хелперам `_check_*()`
   - `_check_type/description/enabled/mac/mtu/speed/duplex/mode/untagged_vlan/tagged_vlans/lag`
 - `CablesSyncMixin` — sync_cables_from_lldp() + cleanup + дедупликация
 - `IPAddressesSyncMixin` — sync_ip_addresses() + batch create/delete
-- `DevicesSyncMixin` — create_device(), sync_devices_from_inventory()
+- `DevicesSyncMixin` — create_device(), sync_devices_from_inventory() (per-device site)
 - `VLANsSyncMixin` — sync_vlans_from_interfaces() (создание VLAN из SVI)
 - `InventorySyncMixin` — sync_inventory() + batch create/update/delete
 
@@ -383,6 +384,7 @@ pynetbox использует lazy-loading: обращение к атрибут
 │    │ d) Batch create (двухфазный для LAG):                                │   │
 │    │    Фаза 1: LAG (Port-channel) → bulk_create_interfaces             │   │
 │    │    Фаза 2: Member интерфейсы (с lag ID) → bulk_create_interfaces   │   │
+│    │    VLAN: назначаются при CREATE если sync_vlans включён             │   │
 │    │                                                                     │   │
 │    │ e) Batch update — _build_update_data() для каждого → 1 PATCH        │   │
 │    │    client.bulk_update_interfaces([{id:1,...}, {id:2,...}])          │   │

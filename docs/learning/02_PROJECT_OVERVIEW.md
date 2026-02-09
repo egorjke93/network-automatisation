@@ -126,7 +126,8 @@ python -m network_collector run "show ip arp" --format json
 | **Excel** (.xlsx) | `--format excel` | Отчёт руководству, удобный просмотр |
 | **CSV** | `--format csv` | Импорт в другие системы, скрипты |
 | **JSON** | `--format json` | Программная обработка, API |
-| **Raw** | `--format raw` | Сырой вывод с устройства (для отладки) |
+| **Raw** | `--format raw` | Сырой вывод с устройства (текст команды) |
+| **Parsed** | `--format parsed` | Данные после TextFSM парсинга, до нормализации (для отладки) |
 
 ### 3.3 Синхронизация с NetBox
 
@@ -441,9 +442,9 @@ network_collector/
 │
 ├── config.yaml              # Настройки приложения (таймауты, NetBox URL, форматы)
 ├── fields.yaml              # Какие поля собирать и как называть в экспорте
-├── devices_ips.py           # Список устройств (host, platform, device_type)
+├── devices_ips.py           # Список устройств (host, platform, device_type, role, site)
 │
-└── tests/                   # Тесты (1538 штук!)
+└── tests/                   # Тесты (1697+ штук!)
     ├── conftest.py          #   Общие fixtures для pytest
     ├── test_cli/            #   Тесты CLI
     ├── test_collectors/     #   Тесты коллекторов

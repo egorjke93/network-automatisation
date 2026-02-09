@@ -88,14 +88,20 @@
 # devices_ips.py
 devices_list = [
     {
-        "device_type": "qtech",       # ← платформа (ключ для всех маппингов)
         "host": "192.168.1.100",
+        "platform": "qtech",          # ← платформа (SSH драйвер + парсер)
+        "device_type": "QSW-3470-28T", # ← модель (для NetBox)
     },
     {
-        "device_type": "qtech_qsw",   # ← альтернативный тип для QTech QSW
         "host": "192.168.1.101",
+        "platform": "qtech_qsw",      # ← альтернативный тип для QTech QSW
+        "device_type": "QSW-2800-28T",
+        "role": "access-switch",       # ← роль в NetBox (опционально)
+        "site": "DC-2",               # ← сайт в NetBox (опционально, per-device)
     },
 ]
+# platform — определяет SSH драйвер и парсер (ключ для всех маппингов)
+# site — если не указан, берётся из fields.yaml defaults.site или "Main"
 ```
 
 ### 2.2 Через data/devices.json (для Web UI)
@@ -111,9 +117,9 @@ devices_list = [
 ]
 ```
 
-### 2.3 Поддерживаемые device_type
+### 2.3 Поддерживаемые платформы (platform)
 
-| device_type | Описание | SSH драйвер | Парсер |
+| platform | Описание | SSH драйвер | Парсер |
 |-------------|----------|-------------|--------|
 | `cisco_ios` | Cisco IOS | cisco_iosxe | cisco_ios |
 | `cisco_iosxe` | Cisco IOS-XE | cisco_iosxe | cisco_ios |
@@ -386,53 +392,82 @@ UNIVERSAL_FIELD_MAP = {
 
 ## 7. Проверка вывода
 
-### 7.1 Сырой вывод (raw)
+### 7.1 Сырой текст с устройства (run --format raw)
 
-Показывает что вернуло устройство без парсинга:
+Показывает что вернуло устройство **без парсинга** (только для команды `run`):
 
 ```bash
-# Формат raw — только текст с устройства
-python -m network_collector mac --format raw
-
-# Или конкретная команда
+# Текстовый вывод с устройства (только run)
 python -m network_collector run "show mac address-table" --format raw
+python -m network_collector run "show interfaces" --format raw
 ```
 
-### 7.2 После парсинга (json)
+> **Примечание:** `--format raw` для команд devices/mac/lldp/interfaces/inventory
+> выводит **нормализованные** данные в JSON формате в stdout (не сырой текст).
 
-Показывает результат парсинга TextFSM:
+### 7.2 После парсинга TextFSM (--format parsed)
+
+Показывает данные **сразу после TextFSM парсинга**, до нормализации и обогащения.
+Полезно для отладки шаблонов и проверки что парсер возвращает:
 
 ```bash
-# JSON — распарсенные данные
-python -m network_collector mac --format json
+# Данные TextFSM без нормализации
+python -m network_collector mac --format parsed
+python -m network_collector interfaces --format parsed
+python -m network_collector lldp --format parsed
+python -m network_collector inventory --format parsed
 
 # С pretty-print
-python -m network_collector mac --format json | jq .
+python -m network_collector mac --format parsed | jq '.[0] | keys'
 ```
 
-### 7.3 После нормализации
+Что пропускается при `--format parsed`:
+- Domain Layer нормализация (InterfaceNormalizer, MACNormalizer и т.д.)
+- Обогащение данных (LAG, switchport, media_type)
+- Фильтрация fields.yaml (apply_fields_config)
+- Дополнительные SSH команды (show interfaces status, show interfaces trunk)
+
+### 7.3 После нормализации (json / raw)
+
+`--format json` и `--format raw` выводят **полностью обработанные** данные
+(после нормализации Domain Layer + фильтрация fields.yaml):
 
 ```bash
-# Полный вывод с нормализацией
+# JSON файл с метаданными (в reports/)
 python -m network_collector interfaces --format json
 
+# JSON в stdout (для pipeline)
+python -m network_collector interfaces --format raw
+
 # Проверить конкретные поля
-python -m network_collector interfaces --format json | jq '.[0] | keys'
+python -m network_collector interfaces --format raw | jq '.[0] | keys'
 ```
 
-### 7.4 Сравнение raw vs parsed
+### 7.4 Сравнение parsed vs normalized
 
 ```bash
-# 1. Сохранить сырой вывод
-python -m network_collector run "show mac address-table" --format raw > raw_output.txt
+# 1. Данные TextFSM (до нормализации)
+python -m network_collector mac --format parsed > parsed.json
 
-# 2. Сохранить распарсенный
-python -m network_collector mac --format json > parsed_output.json
+# 2. Нормализованные данные
+python -m network_collector mac --format raw > normalized.json
 
-# 3. Сравнить
-cat raw_output.txt
-cat parsed_output.json | jq .
+# 3. Сравнить ключи — они будут разные!
+diff <(jq -S '.[0] | keys' parsed.json) <(jq -S '.[0] | keys' normalized.json)
+
+# 4. Сырой текст (только через run)
+python -m network_collector run "show mac address-table" --format raw > raw_text.txt
 ```
+
+### 7.5 Таблица форматов
+
+| Формат | Данные | Вывод | Для чего |
+|--------|--------|-------|----------|
+| `parsed` | После TextFSM, до нормализации | stdout (JSON) | Отладка шаблонов |
+| `raw` | Нормализованные + fields.yaml | stdout (JSON) | Pipeline, скрипты |
+| `json` | Нормализованные + fields.yaml | файл reports/ | Сохранение |
+| `csv` | Нормализованные + fields.yaml | файл reports/ | Таблицы |
+| `excel` | Нормализованные + fields.yaml | файл reports/ | Отчёты |
 
 ### 7.5 Проверка какой шаблон используется
 

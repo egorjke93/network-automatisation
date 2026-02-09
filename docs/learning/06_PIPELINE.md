@@ -640,6 +640,17 @@ def _execute_sync(self, step):
 Это важная фича: **Pipeline "default" не содержит collect-шагов**. Каждый sync-шаг
 автоматически собирает нужные данные, если их ещё нет. Это упрощает YAML файл.
 
+### Per-device site в pipeline
+
+При sync devices в pipeline, site для каждого устройства определяется по приоритету:
+1. `options.site` из YAML шага (если указан)
+2. `device.site` из `devices_ips.py` (per-device)
+3. `fields.yaml` → `sync.devices.defaults.site`
+4. Hardcoded `"Main"`
+
+Если в `devices_ips.py` часть устройств имеет `site`, а часть нет —
+каждое получит свой сайт, а для остальных используется дефолт.
+
 ### Результаты: StepResult и PipelineResult
 
 ```python
