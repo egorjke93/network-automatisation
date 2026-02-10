@@ -520,11 +520,11 @@ sync:
 | Coverage | ~85% | ✅ OK |
 
 **Задачи:**
-- [x] API integration tests (FastAPI TestClient) — ✅ 200+ тестов
-- [x] E2E tests для collectors — ✅ 186 тестов (IP, sync, multi-device, NX-OS enrichment)
-- [x] Mock-based tests для NetBox sync — ✅ 150+ тестов
+- [x] API integration tests (FastAPI TestClient) — ✅ 148 тестов
+- [x] E2E tests для collectors — ✅ 189 тестов (IP, sync, multi-device, NX-OS enrichment)
+- [x] Mock-based tests для NetBox sync — ✅ 286 тестов (bulk, VLAN, LAG batch, diff)
 
-**Статус:** ✅ Выполнено. Всего 1697+ тестов
+**Статус:** ✅ Выполнено. Всего 1788 тестов
 
 ---
 
@@ -558,7 +558,7 @@ sync:
 
 ## Что уже хорошо ✅
 
-- ✅ 1697+ тестов (хорошее покрытие)
+- ✅ 1788 тестов (хорошее покрытие)
 - ✅ Структурированное JSON логирование
 - ✅ Domain Layer с нормализаторами
 - ✅ Pipeline система с транзакциями
@@ -686,6 +686,35 @@ def _find_interface(self, device_id, name):
 - Pipeline 22 устройства: 32 мин → 13 мин
 
 **Файлы:** `netbox/sync/base.py` (кэш), `netbox/sync/interfaces.py`, `netbox/sync/ip_addresses.py`
+
+---
+
+## QTech полная поддержка (Февраль 2026) ✅ ВЫПОЛНЕНО
+
+### Что сделано
+
+- Config.get() — исправлен TypeError в cmd_run
+- AggregatePort (QTech LAG) — распознаётся как LAG в detect_port_type, get_netbox_interface_type
+- TFGigabitEthernet (QTech 10G SFP+) — распознаётся как 10g-sfp+ / 10gbase-x-sfpp
+- Маппинги интерфейсов: TF ↔ TFGigabitEthernet, Ag ↔ AggregatePort
+- TextFSM шаблон qtech_show_aggregatePort_summary.textfsm для LAG парсинга
+- LAG парсинг: _parse_lag_membership_qtech() с алиасами всех имён
+- Switchport: универсальная _normalize_switchport_data() для Cisco и QTech форматов
+- TextFSM fix: VLAN regex (\d+) → (\S+) для поддержки "routed"
+- Команда `show interface` (без 's') для QTech
+- normalize_interface_full() — исправлен баг с ложным срабатыванием на полных именах
+- get_interface_aliases() — добавлен HundredGigabitEthernet алиас
+- 75+ новых тестов (1788 всего): QTech support, templates, refactoring utils
+
+### TODO: QTech transceiver (media_type)
+
+- [ ] Добавить `show interface transceiver` в media_type_commands для qtech/qtech_qsw
+- [ ] Написать парсер для QTech transceiver формата (Transceiver Type: 10GBASE-SR-SFP+)
+- [ ] Сопоставить transceiver type с media_type для detect_port_type / get_netbox_interface_type
+- [ ] Сейчас: TFGigabitEthernet fallback на 10g-sfp+ по имени (без учёта реального модуля)
+- [ ] Нужно: если воткнут 25G модуль → тип должен быть 25g-sfp28, не 10g-sfp+
+- [ ] TextFSM шаблон уже есть: qtech_show_interface_transceiver.textfsm (парсит TYPE, SERIAL, BANDWIDTH)
+- [ ] Проверить на реальном устройстве перед реализацией
 
 ---
 
@@ -918,7 +947,8 @@ if target == "lldp":
 |---------|----------|
 | Python файлов | ~90 |
 | Строк кода | ~17,000 |
-| Тестов | 1697+ |
+| Тестов | 1788 |
+| Тестовых категорий | 12 (включая test_configurator, корневые) |
 | CLI команд | 11 |
 | API endpoints | 13 |
 | Vue компонентов | 14 |

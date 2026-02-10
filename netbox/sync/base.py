@@ -38,6 +38,48 @@ from ...fields_config import get_sync_config
 logger = logging.getLogger(__name__)
 
 
+class SyncStats:
+    """
+    Инициализация stats/details для sync-операций.
+
+    Убирает дублирование dict-литералов в каждом sync-методе.
+    Результат — обычные dict, совместимые с существующим кодом.
+
+    Example:
+        s = SyncStats("created", "updated", "deleted", "skipped", "failed")
+        stats, details = s.stats, s.details
+        # stats = {"created": 0, "updated": 0, ...}
+        # details = {"create": [], "update": [], "delete": [], "skip": []}
+    """
+
+    # Маппинг ключей stats → ключей details (created→create, etc.)
+    _DETAIL_KEY_MAP = {
+        "created": "create",
+        "updated": "update",
+        "deleted": "delete",
+        "skipped": "skip",
+    }
+
+    def __init__(self, *operations: str):
+        """
+        Args:
+            *operations: Ключи для stats (created, updated, deleted, skipped, failed)
+        """
+        self.stats: Dict[str, int] = {op: 0 for op in operations}
+        self.details: Dict[str, list] = {}
+        for op in operations:
+            detail_key = self._DETAIL_KEY_MAP.get(op)
+            if detail_key:
+                self.details[detail_key] = []
+
+    def result(self) -> Dict[str, Any]:
+        """Возвращает stats с вложенным details."""
+        result = dict(self.stats)
+        if self.details:
+            result["details"] = dict(self.details)
+        return result
+
+
 class SyncBase:
     """
     Базовый класс для синхронизации с NetBox.
@@ -313,6 +355,50 @@ class SyncBase:
             name,
             use_transliterate=True,
         )
+
+    # ==================== ОБРАБОТКА ОШИБОК ====================
+
+    def _safe_netbox_call(
+        self,
+        operation: str,
+        fn: Callable,
+        *args,
+        default: Any = None,
+        log_level: str = "error",
+        **kwargs,
+    ) -> Any:
+        """
+        Выполняет NetBox API вызов с обработкой ошибок.
+
+        Заменяет повторяющийся паттерн try/except в sync-методах.
+
+        Args:
+            operation: Описание операции (для лога)
+            fn: Функция для вызова
+            *args: Аргументы функции
+            default: Значение по умолчанию при ошибке
+            log_level: Уровень логирования (error/warning)
+            **kwargs: Именованные аргументы функции
+
+        Returns:
+            Результат fn() или default при ошибке
+
+        Example:
+            result = self._safe_netbox_call(
+                "обновление устройства",
+                device.update, updates,
+                default=False,
+            )
+        """
+        log_fn = getattr(logger, log_level)
+        try:
+            return fn(*args, **kwargs)
+        except (NetBoxError, NetBoxValidationError, NetBoxConnectionError) as e:
+            log_fn(f"{self._log_prefix()}Ошибка {operation}: {format_error_for_log(e)}")
+            return default
+        except Exception as e:
+            log_fn(f"{self._log_prefix()}Неизвестная ошибка {operation}: {e}")
+            return default
 
     # ==================== BATCH С FALLBACK ====================
 

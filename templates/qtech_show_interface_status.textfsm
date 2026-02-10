@@ -1,6 +1,6 @@
 Value Required INTERFACE (\S+\s+\d+(?:/\d+)?)
 Value STATUS (up|down|disabled)
-Value VLAN (\d+)
+Value VLAN (\S+)
 Value DUPLEX (\S+)
 Value SPEED (\S+)
 Value TYPE (\S+)

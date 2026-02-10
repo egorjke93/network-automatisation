@@ -345,3 +345,29 @@ class TestInterfaceTypeMapping:
             "media_type='not present' должен игнорироваться!\n"
             f"Expected: '10gbase-x-sfpp', Got: '{result}'"
         )
+
+
+class TestQtechInterfaceTypeMapping:
+    """Тесты get_netbox_interface_type для QTech интерфейсов."""
+
+    @pytest.mark.parametrize("interface_name,expected", [
+        # AggregatePort → LAG
+        ("AggregatePort 1", "lag"),
+        ("AggregatePort 100", "lag"),
+        ("Ag1", "lag"),
+        ("Ag10", "lag"),
+        # TFGigabitEthernet → 10G SFP+
+        ("TFGigabitEthernet 0/1", "10gbase-x-sfpp"),
+        ("TF0/1", "10gbase-x-sfpp"),
+        ("TF0/48", "10gbase-x-sfpp"),
+        # HundredGigabitEthernet → 100G
+        ("HundredGigabitEthernet 0/55", "100gbase-x-qsfp28"),
+        ("Hu0/55", "100gbase-x-qsfp28"),
+    ])
+    def test_qtech_interface_types(self, interface_name, expected):
+        """QTech интерфейсы правильно маппятся в NetBox типы."""
+        result = get_netbox_interface_type(interface_name=interface_name)
+        assert result == expected, (
+            f"Interface: {interface_name}\n"
+            f"Expected: {expected}, Got: {result}"
+        )

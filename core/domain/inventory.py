@@ -147,11 +147,15 @@ class InventoryNormalizer:
         """
         Конвертирует данные show interface transceiver в формат inventory.
 
+        Поддерживает два формата полей:
+        - NTC (Cisco): interface, type, part_number, serial, name (lowercase)
+        - QTech кастомный: INTERFACE, TYPE, SERIAL, BANDWIDTH (uppercase)
+
         Manufacturer определяется по имени трансивера или PID.
         Если не распознан — остаётся пустым.
 
         Args:
-            data: Данные от NTC парсера (show interface transceiver)
+            data: Данные от парсера (show interface transceiver)
             platform: Платформа устройства (не используется для manufacturer)
 
         Returns:
@@ -160,15 +164,29 @@ class InventoryNormalizer:
         items = []
 
         for row in data:
-            # Пропускаем интерфейсы без трансиверов
-            transceiver_type = row.get("type", "")
+            # Универсальное извлечение полей (NTC lowercase + QTech uppercase)
+            transceiver_type = (
+                row.get("type", "") or row.get("TYPE", "")
+            )
             if not transceiver_type or "not present" in str(transceiver_type).lower():
                 continue
+            # Пропускаем "absent" (QTech: "the transceiver is absent!")
+            if "absent" in str(transceiver_type).lower():
+                continue
 
-            interface = row.get("interface", "")
+            interface = row.get("interface", "") or row.get("INTERFACE", "")
             part_number = row.get("part_number", "")
-            serial_number = row.get("serial", row.get("serial_number", ""))
+            serial_number = (
+                row.get("serial", "")
+                or row.get("serial_number", "")
+                or row.get("SERIAL", "")
+            )
             name = row.get("name", "")  # OEM, CISCO-FINISAR, etc.
+
+            # Если нет part_number (QTech), используем type как описание
+            # Пример: "10GBASE-SR-SFP+" — это и тип, и PID
+            if not part_number:
+                part_number = transceiver_type
 
             # Определяем manufacturer по name или PID
             item_manufacturer = self._detect_transceiver_manufacturer(name, part_number)

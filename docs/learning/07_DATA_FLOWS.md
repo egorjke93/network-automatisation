@@ -662,14 +662,16 @@ SyncItem(
 ```python
 def _batch_create_interfaces(self, device_id, to_create, sorted_interfaces, stats, details):
     # 1. Разделяем на LAG и остальные
-    lag_items = [item for item in to_create if item.name.startswith(("Port-channel", "Po"))]
+    # Port-channel (Cisco), AggregatePort (QTech)
+    lag_items = [item for item in to_create
+                 if item.name.startswith(("Port-channel", "Po", "AggregatePort", "Ag"))]
     member_items = [item for item in to_create if item not in lag_items]
 
-    # 2. Фаза 1: создаём LAG (Port-channel) -- они должны существовать ДО member'ов
+    # 2. Фаза 1: создаём LAG -- они должны существовать ДО member'ов
     _do_batch_create(device_id, lag_items)
-    # Теперь Port-channel1 существует в NetBox с реальным ID
+    # Теперь Port-channel1 / AggregatePort 1 существует в NetBox с реальным ID
 
-    # 3. Фаза 2: создаём member'ы -- get_interface_by_name("Port-channel1") найдёт LAG
+    # 3. Фаза 2: создаём member'ы -- найдёт LAG по имени
     _do_batch_create(device_id, member_items)
     # data = {"name": "Gi0/1", "lag": 123, ...}  ← lag ID из фазы 1
 ```
@@ -1001,9 +1003,11 @@ Arista EOS (TextFSM):              |   normalize_dicts()
 ```python
 # core/constants.py
 
-normalize_interface_short("GigabitEthernet0/1")  # --> "Gi0/1"
+normalize_interface_short("GigabitEthernet0/1")      # --> "Gi0/1"
 normalize_interface_short("TenGigabitEthernet1/0/1")  # --> "Te1/0/1"
-normalize_interface_short("Port-channel10")  # --> "Po10"
+normalize_interface_short("Port-channel10")            # --> "Po10"
+normalize_interface_short("TFGigabitEthernet 0/1")    # --> "TF0/1"   (QTech 10G)
+normalize_interface_short("AggregatePort 1")           # --> "Ag1"     (QTech LAG)
 
 normalize_mac("aabb.ccdd.eeff", format="ieee")  # --> "AA:BB:CC:DD:EE:FF"
 normalize_mac("AA:BB:CC:DD:EE:FF", format="cisco")  # --> "aabb.ccdd.eeff"

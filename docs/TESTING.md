@@ -22,7 +22,7 @@
 
 | Метрика | Значение |
 |---------|----------|
-| **Всего тестов** | 1665+ |
+| **Всего тестов** | 1788 |
 | **Framework** | pytest |
 | **Coverage** | ~85% |
 
@@ -30,16 +30,18 @@
 
 | Категория | Описание | Количество |
 |-----------|----------|------------|
-| `test_core/` | Ядро: models, domain, pipeline, constants | ~430 |
-| `test_collectors/` | Парсинг вывода устройств | ~150 |
-| `test_parsers/` | NTC Templates, TextFSM | ~200 |
-| `test_netbox/` | NetBox синхронизация (включая bulk, VLAN) | ~180 |
-| `test_api/` | REST API endpoints | ~200 |
-| `test_exporters/` | Excel, CSV, JSON экспорт | ~50 |
-| `test_contracts/` | Контракты fields.yaml ↔ models | ~50 |
-| `test_fixes/` | Регрессионные тесты для багфиксов | ~100 |
-| `test_e2e/` | End-to-end тесты pipeline и collectors | ~186 |
-| `test_cli/` | CLI команды (pipeline, sync summary) | ~40 |
+| `test_core/` | Ядро: models, domain, pipeline, constants | 763 |
+| `test_collectors/` | Парсинг вывода устройств | 76 |
+| `test_parsers/` | NTC Templates, TextFSM | 66 |
+| `test_netbox/` | NetBox синхронизация (включая bulk, VLAN) | 286 |
+| `test_api/` | REST API endpoints | 148 |
+| `test_exporters/` | Excel, CSV, JSON, Raw экспорт | 61 |
+| `test_contracts/` | Контракты fields.yaml ↔ models | 28 |
+| `test_fixes/` | Регрессионные тесты для багфиксов | 31 |
+| `test_e2e/` | End-to-end тесты pipeline и collectors | 189 |
+| `test_cli/` | CLI команды (pipeline, sync summary, format) | 53 |
+| `test_configurator/` | Push описаний, retry логика | 12 |
+| *корневые* | QTech support, templates, refactoring utils | 75 |
 
 ---
 
@@ -140,13 +142,16 @@ pytest tests/ -n 4
 ```
 tests/
 ├── conftest.py              # Глобальные fixtures
+├── test_qtech_support.py    # QTech: config, interface maps, LAG, inventory
+├── test_qtech_templates.py  # QTech TextFSM шаблоны: парсинг всех команд
+├── test_refactoring_utils.py # SyncStats, SECONDARY_COMMANDS, detect_type
 ├── fixtures/                # Тестовые данные
 │   ├── cisco_ios/          # Вывод команд Cisco IOS
 │   ├── cisco_nxos/         # Вывод команд Cisco NX-OS
 │   ├── qtech/              # Вывод команд QTech
 │   └── real_output/        # Реальные выводы с продакшена
 │
-├── test_api/               # API тесты
+├── test_api/               # API тесты (148)
 │   ├── conftest.py         # API fixtures (TestClient, auth headers)
 │   ├── test_health.py      # Health endpoints
 │   ├── test_auth.py        # Authentication
@@ -154,9 +159,11 @@ tests/
 │   ├── test_sync.py        # /api/sync
 │   ├── test_pipelines.py   # /api/pipelines
 │   ├── test_history_service.py  # History service
-│   └── test_tasks.py       # Task manager
+│   ├── test_tasks.py       # Task manager
+│   ├── test_device_management.py  # CRUD устройств
+│   └── test_integration.py # Интеграционные тесты API
 │
-├── test_core/              # Core модули
+├── test_core/              # Core модули (763)
 │   ├── test_models.py      # Data models (Interface, MACEntry, etc.)
 │   ├── test_constants.py   # Platform mappings
 │   ├── test_credentials.py # Credentials management
@@ -169,18 +176,21 @@ tests/
 │   │   ├── test_mac_normalizer.py
 │   │   ├── test_interface_normalizer.py
 │   │   ├── test_inventory_normalizer.py
-│   │   └── test_sync_comparator.py
+│   │   ├── test_sync_comparator.py
+│   │   ├── test_lldp_real_data.py    # Тесты на реальных LLDP данных
+│   │   └── test_vlan.py              # VlanSet: операции над множествами VLAN
 │   └── test_pipeline/      # Pipeline система
 │       ├── test_models.py
 │       ├── test_executor.py
+│       ├── test_executor_cleanup.py   # Cleanup в pipeline
 │       └── test_executor_integration.py
 │
-├── test_collectors/        # Collectors
-│   ├── test_port_type_detection.py
+├── test_collectors/        # Collectors (76)
+│   ├── test_port_type_detection.py    # Определение типа порта (SFP/RJ45)
 │   ├── test_switchport_mode.py
 │   └── test_lldp_parsing.py
 │
-├── test_parsers/           # Парсинг
+├── test_parsers/           # Парсинг (66)
 │   ├── test_mac.py
 │   ├── test_lldp.py
 │   ├── test_interfaces.py
@@ -188,27 +198,33 @@ tests/
 │   ├── test_version.py
 │   └── test_nxos_enrichment.py
 │
-├── test_netbox/            # NetBox синхронизация
+├── test_netbox/            # NetBox синхронизация (286)
 │   ├── test_sync_integration.py
 │   ├── test_sync_base.py
-│   ├── test_sync_interfaces_vlan.py  # Interface VLAN sync (19 тестов)
+│   ├── test_sync_interfaces_vlan.py   # Interface VLAN sync (19 тестов)
 │   ├── test_inventory_sync.py
 │   ├── test_vlans_sync.py
-│   └── test_bulk_operations.py       # Bulk API операции (32 теста)
+│   ├── test_bulk_operations.py        # Bulk API операции (32 теста)
+│   ├── test_diff.py                   # DiffCalculator тесты
+│   ├── test_interface_type_mapping.py # get_netbox_interface_type() маппинг
+│   ├── test_lag_batch_create.py       # LAG batch create (2-фазное создание)
+│   └── test_polygon_emulation.py      # Polygon эмуляция NetBox
 │
-├── test_exporters/         # Экспорт
+├── test_exporters/         # Экспорт (61)
 │   ├── test_csv_exporter.py
+│   ├── test_excel_exporter.py
+│   ├── test_json_exporter.py
 │   └── test_raw_exporter.py
 │
-├── test_contracts/         # Контракты
+├── test_contracts/         # Контракты (28)
 │   └── test_fields_contract.py
 │
-├── test_fixes/             # Регрессия
+├── test_fixes/             # Регрессия (31)
 │   ├── test_sync_preview.py
 │   ├── test_interface_enabled.py
 │   └── test_platform_mapping.py
 │
-├── test_e2e/               # End-to-end тесты (186 тестов)
+├── test_e2e/               # End-to-end тесты (189)
 │   ├── conftest.py         # E2E fixtures (mock_device, PLATFORM_FIXTURES)
 │   ├── test_interface_collector_e2e.py  # Interface collector E2E
 │   ├── test_mac_collector_e2e.py        # MAC collector E2E
@@ -218,10 +234,16 @@ tests/
 │   ├── test_sync_full_device.py         # Полный sync: inventory, IP, VLAN (16 тестов)
 │   ├── test_multi_device_collection.py  # Параллельный сбор, partial failures (12 тестов)
 │   ├── test_nxos_enrichment_e2e.py      # NX-OS enrichment: switchport, transceiver, LAG (15 тестов)
+│   ├── test_config_backup_e2e.py        # Config backup E2E
+│   ├── test_device_collector_e2e.py     # Device collector E2E
 │   ├── test_pipeline.py    # Pipeline E2E
 │   └── test_sync_pipeline.py  # Sync pipeline E2E
 │
-└── test_cli/               # CLI тесты
+├── test_configurator/      # Push описаний (12)
+│   └── test_pusher_retry.py  # Retry логика push описаний
+│
+└── test_cli/               # CLI тесты (53)
+    ├── test_format_parsed.py  # --format parsed
     ├── test_pipeline.py
     └── test_sync_summary.py
 ```
@@ -239,7 +261,6 @@ tests/
 | `mock_netbox_client` | Mock NetBox клиента |
 | `sample_interface_data` | Примеры данных интерфейсов |
 | `sample_switchport_data` | Примеры switchport данных |
-| `expected_fields` | Обязательные поля для каждого типа данных |
 
 ### 4.2 Использование load_fixture
 
@@ -293,6 +314,7 @@ markers =
     e2e: End-to-end tests (full pipeline)
     integration: Integration tests (real I/O)
     api: API endpoint tests
+    netbox: NetBox sync tests (54 теста)
 ```
 
 ### 5.1 Использование маркеров

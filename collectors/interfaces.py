@@ -30,6 +30,8 @@ from ..core.exceptions import (
 )
 from ..core.domain.interface import InterfaceNormalizer
 from ..core.constants import COLLECTOR_COMMANDS
+from ..core.constants.commands import SECONDARY_COMMANDS
+from ..core.constants.interfaces import get_interface_aliases, normalize_interface_full
 
 logger = get_logger(__name__)
 
@@ -59,36 +61,11 @@ class InterfaceCollector(BaseCollector):
     # Команды для разных платформ (из централизованного хранилища)
     platform_commands = COLLECTOR_COMMANDS.get("interfaces", {})
 
-    # Команды для ошибок
-    error_commands = {
-        "cisco_ios": "show interfaces | include errors|CRC|input|output",
-        "cisco_iosxe": "show interfaces | include errors|CRC|input|output",
-        "cisco_nxos": "show interface counters errors",
-        "arista_eos": "show interfaces counters errors",
-    }
-
-    # Команды для LAG (etherchannel/port-channel)
-    lag_commands = {
-        "cisco_ios": "show etherchannel summary",
-        "cisco_iosxe": "show etherchannel summary",
-        "cisco_nxos": "show port-channel summary",
-        "arista_eos": "show port-channel summary",
-    }
-
-    # Команды для switchport mode
-    switchport_commands = {
-        "cisco_ios": "show interfaces switchport",
-        "cisco_iosxe": "show interfaces switchport",
-        "cisco_nxos": "show interface switchport",
-        "arista_eos": "show interfaces switchport",
-        "qtech": "show interface switchport",
-    }
-
-    # Команды для получения media_type (тип трансивера)
-    # NX-OS: show interface возвращает только "10G", а show interface status - "10Gbase-LR"
-    media_type_commands = {
-        "cisco_nxos": "show interface status",
-    }
+    # Вторичные команды (из централизованного хранилища commands.py)
+    error_commands = SECONDARY_COMMANDS.get("interface_errors", {})
+    lag_commands = SECONDARY_COMMANDS.get("lag", {})
+    switchport_commands = SECONDARY_COMMANDS.get("switchport", {})
+    media_type_commands = SECONDARY_COMMANDS.get("media_type", {})
 
     def __init__(
         self,
@@ -238,13 +215,17 @@ class InterfaceCollector(BaseCollector):
 
         try:
             with self._conn_manager.connect(device, self.credentials) as conn:
-                # Получаем hostname
-                hostname = self._conn_manager.get_hostname(conn)
-                device.metadata["hostname"] = hostname
+                hostname = self._init_device_connection(conn, device)
 
                 # 1. Парсим основную команду show interfaces (СЫРЫЕ данные)
                 response = conn.send_command(command)
                 raw_data = self._parse_output(response.result, device)
+
+                # --format parsed: сырые данные TextFSM, без нормализации
+                if self._skip_normalize:
+                    self._add_metadata_to_rows(raw_data, hostname, device.host)
+                    logger.info(f"{hostname}: собрано {len(raw_data)} интерфейсов (parsed, без нормализации)")
+                    return raw_data
 
                 # 2. Domain Layer: нормализация через InterfaceNormalizer
                 data = self._normalizer.normalize_dicts(
@@ -258,11 +239,17 @@ class InterfaceCollector(BaseCollector):
                     if lag_cmd:
                         try:
                             lag_response = conn.send_command(lag_cmd)
-                            lag_membership = self._parse_lag_membership(
-                                lag_response.result,
-                                get_ntc_platform(device.platform),
-                                lag_cmd,
-                            )
+                            # QTech: отдельный парсер для show aggregatePort summary
+                            if device.platform in ("qtech", "qtech_qsw"):
+                                lag_membership = self._parse_lag_membership_qtech(
+                                    lag_response.result,
+                                )
+                            else:
+                                lag_membership = self._parse_lag_membership(
+                                    lag_response.result,
+                                    get_ntc_platform(device.platform),
+                                    lag_cmd,
+                                )
                         except Exception as e:
                             logger.debug(f"Ошибка получения LAG info: {e}")
 
@@ -275,7 +262,7 @@ class InterfaceCollector(BaseCollector):
                             sw_response = conn.send_command(sw_cmd)
                             switchport_modes = self._parse_switchport_modes(
                                 sw_response.result,
-                                get_ntc_platform(device.platform),
+                                device.platform,
                                 sw_cmd,
                             )
                             logger.debug(f"{hostname}: switchport_modes содержит {len(switchport_modes)} записей")
@@ -317,12 +304,8 @@ class InterfaceCollector(BaseCollector):
                 logger.info(f"{hostname}: собрано {len(data)} интерфейсов")
                 return data
 
-        except (ConnectionError, AuthenticationError, TimeoutError) as e:
-            logger.error(f"Ошибка подключения к {device.host}: {format_error_for_log(e)}")
-            return []
         except Exception as e:
-            logger.error(f"Неизвестная ошибка с {device.host}: {e}")
-            return []
+            return self._handle_collection_error(e, device)
 
     def _parse_lag_membership(
         self,
@@ -341,16 +324,15 @@ class InterfaceCollector(BaseCollector):
         Returns:
             Dict: {member_interface: lag_interface} например {"Gi0/1": "Po1", "Eth1/1": "Po1"}
         """
-        from ntc_templates.parse import parse_output
-
         membership = {}
 
         try:
-            parsed = parse_output(
+            parsed = self._parser.parse(
+                output=output,
                 platform=ntc_platform,
                 command=command,
-                data=output
-            )
+                normalize=False,
+            ) if self._parser else []
 
             for row in parsed:
                 # NTC шаблон возвращает: po_name, po_status, protocol, member_interface
@@ -400,6 +382,72 @@ class InterfaceCollector(BaseCollector):
             logger.debug(f"Ошибка парсинга LAG через NTC: {e}")
             # Fallback на regex
             membership = self._parse_lag_membership_regex(output)
+
+        return membership
+
+    def _add_lag_member_aliases(
+        self, membership: Dict[str, str], member: str, lag_name: str,
+    ) -> None:
+        """Добавляет member и все его алиасы в LAG membership dict."""
+        membership[member] = lag_name
+        # Все алиасы из constants (HundredGigE0/55, HundredGigabitEthernet0/55, ...)
+        for alias in get_interface_aliases(member):
+            membership[alias] = lag_name
+            # Вариант с пробелом перед номером (QTech: HundredGigabitEthernet 0/55)
+            spaced = re.sub(r'(\D)(\d)', r'\1 \2', alias, count=1)
+            if spaced != alias:
+                membership[spaced] = lag_name
+
+    def _parse_lag_membership_qtech(self, output: str) -> Dict[str, str]:
+        """
+        Парсит show aggregatePort summary для QTech.
+
+        TextFSM шаблон парсит текст → этот метод строит dict {member: lag}.
+
+        Args:
+            output: Вывод команды show aggregatePort summary
+
+        Returns:
+            Dict: {member_interface: lag_interface}
+                  Например {"Hu0/55": "Ag1", "HundredGigabitEthernet 0/55": "Ag1"}
+        """
+        membership = {}
+
+        # Сначала пробуем кастомный TextFSM шаблон
+        if self._parser:
+            try:
+                parsed = self._parser.parse(
+                    output=output,
+                    platform="qtech",
+                    command="show aggregatePort summary",
+                    normalize=False,
+                )
+                for row in parsed:
+                    lag_name = row.get("aggregate_port", "")
+                    ports_str = row.get("ports", "")
+                    if not lag_name or not ports_str:
+                        continue
+
+                    # Парсим порты: "Hu0/55  ,Hu0/56" → ["Hu0/55", "Hu0/56"]
+                    members = [p.strip() for p in ports_str.split(",") if p.strip()]
+                    for member in members:
+                        self._add_lag_member_aliases(membership, member, lag_name)
+
+                if membership:
+                    return membership
+            except Exception as e:
+                logger.debug(f"Ошибка парсинга QTech LAG через TextFSM: {e}")
+
+        # Fallback на regex
+        pattern = re.compile(
+            r"^(Ag\d+)\s+\d+\s+\S+\s+\S+\s+\S+\s+(.+)$",
+            re.MULTILINE,
+        )
+        for match in pattern.finditer(output):
+            lag_name = match.group(1)
+            members = [p.strip() for p in match.group(2).split(",") if p.strip()]
+            for member in members:
+                self._add_lag_member_aliases(membership, member, lag_name)
 
         return membership
 
@@ -462,94 +510,180 @@ class InterfaceCollector(BaseCollector):
     def _parse_switchport_modes(
         self,
         output: str,
-        ntc_platform: str,
+        platform: str,
         command: str = "show interfaces switchport",
     ) -> Dict[str, Dict[str, str]]:
         """
-        Парсит show interfaces switchport для определения режимов портов.
+        Парсит show interfaces/interface switchport для определения режимов портов.
+
+        Универсальный метод для всех платформ:
+        1. Кастомный TextFSM шаблон (QTech и другие нестандартные)
+        2. NTC Templates (Cisco, Arista)
+        3. Regex fallback
 
         Args:
             output: Вывод команды
-            ntc_platform: Платформа для NTC
-            command: Команда для NTC парсера
+            platform: Платформа устройства (cisco_ios, qtech, etc.)
+            command: Команда (show interfaces switchport / show interface switchport)
 
         Returns:
-            Dict: {interface: {mode, native_vlan, access_vlan}}
+            Dict: {interface: {mode, native_vlan, access_vlan, tagged_vlans}}
         """
-        from ntc_templates.parse import parse_output
+        from ..core.connection import get_ntc_platform
 
         modes = {}
 
-        try:
-            parsed = parse_output(
-                platform=ntc_platform,
-                command=command,
-                data=output
-            )
+        # 1. Пробуем кастомный шаблон через NTCParser (для QTech и др.)
+        if self._parser:
+            try:
+                parsed = self._parser.parse(
+                    output=output,
+                    platform=platform,
+                    command=command,
+                    normalize=False,
+                )
+                if parsed:
+                    modes = self._normalize_switchport_data(parsed, platform)
+                    if modes:
+                        return modes
+            except Exception as e:
+                logger.debug(f"Кастомный шаблон switchport не сработал: {e}")
 
-            for row in parsed:
-                iface = row.get("interface", "")
-                # Используем admin_mode (Administrative Mode) вместо mode (Operational Mode)
-                # Operational Mode может быть "down" когда порт физически выключен
-                mode = row.get("admin_mode", row.get("mode", "")).lower()
-                native_vlan = row.get("native_vlan", row.get("trunking_native_vlan", ""))
-                access_vlan = row.get("access_vlan", "")
+        # 2. NTC Templates (Cisco, Arista) через NTCParser
+        if self._parser:
+            ntc_platform = get_ntc_platform(platform)
+            try:
+                parsed = self._parser.parse(
+                    output=output,
+                    platform=ntc_platform,
+                    command=command,
+                    normalize=False,
+                )
+                if parsed:
+                    modes = self._normalize_switchport_data(parsed, platform)
+                    if modes:
+                        return modes
+            except Exception as e:
+                logger.debug(f"NTC switchport не сработал: {e}")
 
-                if not iface:
-                    continue
+        # 3. Fallback на regex
+        modes = self._parse_switchport_modes_regex(output)
+        return modes
 
-                # Конвертируем режим в формат NetBox
-                # NetBox: access, tagged, tagged-all
-                # tagged-all = полный транк (все VLAN)
-                # tagged = транк с ограниченным списком VLAN
-                netbox_mode = ""
-                if "access" in mode:
+    def _normalize_switchport_data(
+        self,
+        parsed: List[Dict[str, Any]],
+        platform: str,
+    ) -> Dict[str, Dict[str, str]]:
+        """
+        Нормализует данные switchport из разных форматов в единый.
+
+        Обрабатывает форматы:
+        - NTC (Cisco): admin_mode, native_vlan, access_vlan, trunking_vlans
+        - QTech custom: mode (ACCESS/TRUNK/HYBRID), access_vlan, native_vlan, vlan_lists
+
+        Args:
+            parsed: Распарсенные данные из TextFSM/NTC
+            platform: Платформа устройства
+
+        Returns:
+            Dict: {interface: {mode, native_vlan, access_vlan, tagged_vlans}}
+        """
+        modes = {}
+
+        for row in parsed:
+            iface = row.get("interface", "")
+            if not iface:
+                continue
+
+            # Определяем формат данных:
+            # - Cisco NTC: admin_mode, trunking_vlans
+            # - QTech custom: switchport (enabled/disabled), mode (ACCESS/TRUNK/HYBRID), vlan_lists
+            switchport = row.get("switchport", "").lower()
+            if switchport == "disabled":
+                continue
+
+            admin_mode = row.get("admin_mode", "").lower()
+            native_vlan = row.get("native_vlan", row.get("trunking_native_vlan", ""))
+            access_vlan = row.get("access_vlan", "")
+
+            netbox_mode = ""
+            trunking_vlans = ""
+
+            if admin_mode:
+                # Cisco/Arista NTC формат (admin_mode — определяющее поле)
+                if "access" in admin_mode:
                     netbox_mode = "access"
-                elif "trunk" in mode or "dynamic" in mode:
-                    # Проверяем список VLAN - если ALL или полный диапазон, то tagged-all
-                    # NTC может вернуть список ['ALL'] или строку "ALL"
+                elif "trunk" in admin_mode or "dynamic" in admin_mode:
                     raw_vlans = row.get("trunking_vlans", "")
                     if isinstance(raw_vlans, list):
                         trunking_vlans = ",".join(str(v) for v in raw_vlans).lower().strip()
                     else:
                         trunking_vlans = str(raw_vlans).lower().strip()
-                    # Варианты "все VLAN":
-                    # - "all" (IOS)
-                    # - "" (пустая строка)
-                    # - "1-4094" (NX-OS полный диапазон)
-                    # - "1-4093" (некоторые устройства)
                     if (not trunking_vlans or
                         trunking_vlans == "all" or
                         trunking_vlans in ("1-4094", "1-4093", "1-4095")):
                         netbox_mode = "tagged-all"
+                        trunking_vlans = ""
                     else:
                         netbox_mode = "tagged"
+            elif switchport == "enabled":
+                # QTech формат (switchport=enabled, mode=ACCESS/TRUNK/HYBRID)
+                qtech_mode = row.get("mode", "").upper()
+                vlan_lists = row.get("vlan_lists", "")
+                if qtech_mode == "ACCESS":
+                    netbox_mode = "access"
+                elif qtech_mode == "TRUNK":
+                    vl = str(vlan_lists).strip().upper()
+                    if not vl or vl == "ALL":
+                        netbox_mode = "tagged-all"
+                    else:
+                        netbox_mode = "tagged"
+                        trunking_vlans = str(vlan_lists).strip()
+                elif qtech_mode == "HYBRID":
+                    netbox_mode = "tagged"
+                    vl = str(vlan_lists).strip().upper()
+                    if vl and vl != "ALL":
+                        trunking_vlans = str(vlan_lists).strip()
 
-                modes[iface] = {
-                    "mode": netbox_mode,
-                    "native_vlan": str(native_vlan) if native_vlan else "",
-                    "access_vlan": str(access_vlan) if access_vlan else "",
-                    # Сохраняем список VLAN для tagged портов (для sync tagged_vlans)
-                    "tagged_vlans": trunking_vlans if netbox_mode == "tagged" else "",
-                }
+            modes[iface] = {
+                "mode": netbox_mode,
+                "native_vlan": str(native_vlan) if native_vlan else "",
+                "access_vlan": str(access_vlan) if access_vlan else "",
+                "tagged_vlans": trunking_vlans if netbox_mode == "tagged" else "",
+            }
 
-                # Добавляем альтернативные имена
-                if iface.startswith("Gi"):
-                    modes[f"GigabitEthernet{iface[2:]}"] = modes[iface]
-                elif iface.startswith("Fa"):
-                    modes[f"FastEthernet{iface[2:]}"] = modes[iface]
-                elif iface.startswith("Te"):
-                    modes[f"TenGigabitEthernet{iface[2:]}"] = modes[iface]
-                elif iface.startswith("Eth"):
-                    # NX-OS: Eth1/1 -> Ethernet1/1
-                    modes[f"Ethernet{iface[3:]}"] = modes[iface]
-
-        except Exception as e:
-            logger.debug(f"Ошибка парсинга switchport через NTC: {e}")
-            # Fallback на regex
-            modes = self._parse_switchport_modes_regex(output)
+            # Добавляем альтернативные имена интерфейсов
+            self._add_switchport_aliases(modes, iface)
 
         return modes
+
+    def _add_switchport_aliases(
+        self,
+        modes: Dict[str, Dict[str, str]],
+        iface: str,
+    ) -> None:
+        """Добавляет альтернативные имена интерфейсов в switchport_modes."""
+        data = modes[iface]
+        # Cisco
+        if iface.startswith("Gi"):
+            modes[f"GigabitEthernet{iface[2:]}"] = data
+        elif iface.startswith("Fa"):
+            modes[f"FastEthernet{iface[2:]}"] = data
+        elif iface.startswith("Te"):
+            modes[f"TenGigabitEthernet{iface[2:]}"] = data
+        elif iface.startswith("Eth"):
+            modes[f"Ethernet{iface[3:]}"] = data
+        # QTech (имена с пробелом: "TFGigabitEthernet 0/1")
+        iface_nospace = iface.replace(" ", "")
+        if iface_nospace != iface:
+            modes[iface_nospace] = data
+        if iface.startswith("TFGigabitEthernet"):
+            modes[f"TF{iface[len('TFGigabitEthernet'):]}" .replace(" ", "")] = data
+        elif iface.startswith("HundredGigabitEthernet"):
+            modes[f"Hu{iface[len('HundredGigabitEthernet'):]}" .replace(" ", "")] = data
+        elif iface.startswith("AggregatePort"):
+            modes[f"Ag{iface[len('AggregatePort'):]}" .replace(" ", "")] = data
 
     def _parse_switchport_modes_regex(self, output: str) -> Dict[str, Dict[str, str]]:
         """
@@ -637,16 +771,15 @@ class InterfaceCollector(BaseCollector):
         Returns:
             Dict: {interface: media_type} например {"Ethernet1/1": "10Gbase-LR"}
         """
-        from ntc_templates.parse import parse_output
-
         media_types = {}
 
         try:
-            parsed = parse_output(
+            parsed = self._parser.parse(
+                output=output,
                 platform=ntc_platform,
                 command=command,
-                data=output
-            )
+                normalize=False,
+            ) if self._parser else []
 
             for row in parsed:
                 # NTC возвращает: port, name, status, vlan, duplex, speed, type

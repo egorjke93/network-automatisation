@@ -21,11 +21,12 @@ def cmd_run(args, ctx=None) -> None:
 
     fields = args.fields.split(",") if args.fields else None
 
-    conn_config = config.get("connection", {})
+    # config.connection возвращает ConfigSection с методом .get()
+    conn_config = config.connection
     conn_manager = ConnectionManager(
         transport=args.transport,
-        max_retries=conn_config.get("max_retries", 2),
-        retry_delay=conn_config.get("retry_delay", 5),
+        max_retries=conn_config.get("max_retries", 2) if conn_config else 2,
+        retry_delay=conn_config.get("retry_delay", 5) if conn_config else 5,
     )
     all_data = []
 
@@ -83,6 +84,12 @@ def cmd_run(args, ctx=None) -> None:
 
     if not all_data:
         logger.warning("Нет данных для экспорта")
+        return
+
+    # --format parsed: NTC-парсированные данные в stdout (run не имеет нормализации)
+    if args.format == "parsed":
+        from ...exporters import RawExporter
+        RawExporter().export(all_data, "custom_command_parsed")
         return
 
     exporter = get_exporter(args.format, args.output)

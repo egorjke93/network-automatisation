@@ -37,6 +37,7 @@ from ..core.exceptions import (
     format_error_for_log,
 )
 from ..core.constants import COLLECTOR_COMMANDS, normalize_interface_short
+from ..core.constants.commands import SECONDARY_COMMANDS
 from ..core.domain.lldp import LLDPNormalizer
 
 logger = get_logger(__name__)
@@ -65,13 +66,8 @@ class LLDPCollector(BaseCollector):
     # Команды для LLDP (detail) - из централизованного хранилища
     lldp_commands = COLLECTOR_COMMANDS.get("lldp", {})
 
-    # Команды для LLDP summary (для local interface)
-    lldp_summary_commands = {
-        "cisco_ios": "show lldp neighbors",
-        "cisco_iosxe": "show lldp neighbors",
-        "cisco_nxos": "show lldp neighbors",
-        "arista_eos": "show lldp neighbors",
-    }
+    # Команды для LLDP summary (из централизованного хранилища commands.py)
+    lldp_summary_commands = SECONDARY_COMMANDS.get("lldp_summary", {})
 
     # Команды для CDP - из централизованного хранилища
     cdp_commands = COLLECTOR_COMMANDS.get("cdp", {})
@@ -121,8 +117,31 @@ class LLDPCollector(BaseCollector):
 
         try:
             with self._conn_manager.connect(device, self.credentials) as conn:
-                hostname = self._conn_manager.get_hostname(conn)
-                device.metadata["hostname"] = hostname
+                hostname = self._init_device_connection(conn, device)
+
+                # --format parsed: сырые данные TextFSM, без нормализации
+                if self._skip_normalize:
+                    if self.protocol == "both":
+                        all_raw = []
+                        for proto, cmds in [("lldp", self.lldp_commands), ("cdp", self.cdp_commands)]:
+                            cmd = cmds.get(device.platform)
+                            if cmd:
+                                response = conn.send_command(cmd)
+                                raw = self._parse_output(
+                                    response.result, device, command=cmd, protocol=proto
+                                )
+                                self._add_metadata_to_rows(raw, hostname, device.host)
+                                for row in raw:
+                                    row["_protocol"] = proto
+                                all_raw.extend(raw)
+                        logger.info(f"{hostname}: собрано {len(all_raw)} записей (parsed, без нормализации)")
+                        return all_raw
+                    else:
+                        response = conn.send_command(command)
+                        raw_data = self._parse_output(response.result, device)
+                        self._add_metadata_to_rows(raw_data, hostname, device.host)
+                        logger.info(f"{hostname}: собрано {len(raw_data)} записей (parsed, без нормализации)")
+                        return raw_data
 
                 if self.protocol == "both":
                     # Собираем оба протокола и объединяем
@@ -145,12 +164,8 @@ class LLDPCollector(BaseCollector):
                 logger.info(f"{hostname}: собрано {len(raw_data)} записей")
                 return raw_data
 
-        except (ConnectionError, AuthenticationError, TimeoutError) as e:
-            logger.error(f"Ошибка подключения к {device.host}: {format_error_for_log(e)}")
-            return []
         except Exception as e:
-            logger.error(f"Неизвестная ошибка с {device.host}: {e}")
-            return []
+            return self._handle_collection_error(e, device)
 
     def _collect_both_protocols(
         self, conn, device: Device, hostname: str

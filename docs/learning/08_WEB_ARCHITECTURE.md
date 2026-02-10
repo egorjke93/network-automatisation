@@ -603,6 +603,9 @@ FastAPI автоматически генерирует интерактивну
 | History | `/api/history/` | GET | История операций |
 | History | `/api/history/stats` | GET | Статистика |
 | Tasks | `/api/tasks/{id}` | GET | Статус задачи (для прогресс-бара) |
+| Fields | `/api/fields` | GET | Конфигурация полей (fields.yaml) |
+| Match | `/api/match` | POST | Сопоставление MAC-адресов с хостами |
+| Push | `/api/push` | POST | Push описаний на устройства |
 | Device Mgmt | `/api/device-management/` | GET/POST | Управление устройствами |
 
 ---

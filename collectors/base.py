@@ -144,6 +144,9 @@ class BaseCollector(ABC):
         else:
             self._parser = None
 
+        # Флаг для --format parsed: пропускает нормализацию, возвращает сырые данные TextFSM
+        self._skip_normalize = False
+
     def _log_prefix(self) -> str:
         """Возвращает префикс для логов с run_id."""
         if self.ctx:
@@ -298,45 +301,24 @@ class BaseCollector(ABC):
         Returns:
             List[Dict]: Данные с устройства
         """
-        # Получаем команду для платформы
         command = self._get_command(device)
-
         if not command:
             logger.warning(f"Нет команды для {device.platform}")
             return []
 
         try:
             with self._conn_manager.connect(device, self.credentials) as conn:
-                # Получаем hostname
-                hostname = self._conn_manager.get_hostname(conn)
-                device.metadata["hostname"] = hostname
-                device.status = DeviceStatus.ONLINE
+                hostname = self._init_device_connection(conn, device)
 
-                # Выполняем команду
                 response = conn.send_command(command)
-                output = response.result
+                data = self._parse_output(response.result, device)
 
-                # Парсим вывод
-                data = self._parse_output(output, device)
-
-                # Добавляем hostname ко всем записям
-                for row in data:
-                    row["hostname"] = hostname
-                    row["device_ip"] = device.host
-
+                self._add_metadata_to_rows(data, hostname, device.host)
                 logger.info(f"{hostname}: собрано {len(data)} записей")
                 return data
 
-        except (ConnectionError, AuthenticationError, TimeoutError) as e:
-            # Типизированные ошибки подключения
-            device.status = DeviceStatus.ERROR
-            logger.error(f"Ошибка подключения к {device.host}: {format_error_for_log(e)}")
-            return []
         except Exception as e:
-            # Неизвестные ошибки — логируем и продолжаем
-            device.status = DeviceStatus.ERROR
-            logger.error(f"Неизвестная ошибка с {device.host}: {e}")
-            return []
+            return self._handle_collection_error(e, device)
 
     def _get_command(self, device: Device) -> str:
         """
@@ -354,6 +336,67 @@ class BaseCollector(ABC):
 
         # Иначе используем общую команду
         return self.command
+
+    def _init_device_connection(self, conn, device: Device) -> str:
+        """
+        Инициализирует подключение: hostname, metadata, status.
+
+        Вызывается в начале _collect_from_device для устранения
+        дублирования в каждом коллекторе.
+
+        Args:
+            conn: Активное соединение
+            device: Устройство
+
+        Returns:
+            str: hostname устройства
+        """
+        hostname = self._conn_manager.get_hostname(conn)
+        device.metadata["hostname"] = hostname
+        device.status = DeviceStatus.ONLINE
+        return hostname
+
+    def _add_metadata_to_rows(
+        self,
+        data: List[Dict[str, Any]],
+        hostname: str,
+        device_ip: str,
+    ) -> None:
+        """
+        Добавляет hostname и device_ip к каждой записи (in-place).
+
+        Args:
+            data: Список записей
+            hostname: Hostname устройства
+            device_ip: IP устройства
+        """
+        for row in data:
+            row["hostname"] = hostname
+            row["device_ip"] = device_ip
+
+    def _handle_collection_error(
+        self,
+        e: Exception,
+        device: Device,
+    ) -> List[Dict[str, Any]]:
+        """
+        Обрабатывает ошибку при сборе данных.
+
+        Устанавливает status=ERROR и логирует.
+
+        Args:
+            e: Исключение
+            device: Устройство
+
+        Returns:
+            List: Пустой список (для return)
+        """
+        device.status = DeviceStatus.ERROR
+        if isinstance(e, (ConnectionError, AuthenticationError, TimeoutError)):
+            logger.error(f"Ошибка подключения к {device.host}: {format_error_for_log(e)}")
+        else:
+            logger.error(f"Неизвестная ошибка с {device.host}: {e}")
+        return []
 
     @abstractmethod
     def _parse_output(

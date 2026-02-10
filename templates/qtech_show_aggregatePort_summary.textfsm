@@ -1,0 +1,11 @@
+Value Required AGGREGATE_PORT (Ag\d+)
+Value MAX_PORTS (\d+)
+Value SWITCHPORT (\S+)
+Value MODE (\S+)
+Value LOAD_BALANCE (\S+)
+Value PORTS (.+?)
+
+Start
+  ^AggregatePort\s+MaxPorts -> Continue
+  ^-+ -> Continue
+  ^${AGGREGATE_PORT}\s+${MAX_PORTS}\s+${SWITCHPORT}\s+${MODE}\s+${LOAD_BALANCE}\s+${PORTS}\s*$$ -> Record

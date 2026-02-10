@@ -14,5 +14,8 @@ TransceiverBlock
   ^Wavelength\(nm\)\s+:\s+${WAVELENGTH}
   ^Vendor Serial Number\s+:\s+${SERIAL}
   ^Transfer BandWidth\s+:\s+${BANDWIDTH}
-  ^=+Interface\s+\S+\s+\d+/\d+=+ -> Record Start
+  ^=+Interface\s+\S+\s+\d+/\d+=+ -> Continue.Record
+  ^=+Interface\s+${INTERFACE}=+
   ^$$ -> Record Start
+
+EOF

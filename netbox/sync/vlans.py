@@ -9,7 +9,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from .base import (
-    SyncBase, Interface,
+    SyncBase, SyncStats, Interface,
     NetBoxError, NetBoxValidationError, format_error_for_log, logger,
 )
 
@@ -36,7 +36,8 @@ class VLANsSyncMixin:
         Returns:
             Dict: Статистика {created, skipped, failed}
         """
-        stats = {"created": 0, "skipped": 0, "failed": 0}
+        ss = SyncStats("created", "skipped", "failed")
+        stats, details = ss.stats, ss.details
 
         vlan_pattern = re.compile(r"^[Vv]lan(\d+)$")
         interface_models = Interface.ensure_list(interfaces)

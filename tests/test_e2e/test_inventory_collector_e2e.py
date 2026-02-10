@@ -143,6 +143,44 @@ class TestInventoryCollectorFields:
         assert len(descriptions) > 0, "Должны быть описания"
 
 
+class TestQtechInventoryTransceiverE2E:
+    """E2E тесты QTech inventory через show interface transceiver."""
+
+    @pytest.fixture
+    def collector(self):
+        return InventoryCollector(credentials=None)
+
+    def test_qtech_transceiver_parsing(self, collector, load_fixture):
+        """QTech: transceiver фикстура парсится через NTCParser."""
+        from network_collector.parsers.textfsm_parser import NTCParser
+
+        output = load_fixture("qtech", "show_interface_transceiver.txt")
+        parser = NTCParser()
+        parsed = parser.parse(output, "qtech", "show interface transceiver", normalize=False)
+
+        assert len(parsed) > 0, "Должны быть распарсены трансиверы"
+        present = [r for r in parsed if r.get("type")]
+        assert len(present) == 4, "4 установленных SFP в фикстуре"
+
+    def test_qtech_transceiver_normalization(self, collector, load_fixture):
+        """QTech: transceiver данные нормализуются в inventory формат."""
+        from network_collector.parsers.textfsm_parser import NTCParser
+        from network_collector.core.domain.inventory import InventoryNormalizer
+
+        output = load_fixture("qtech", "show_interface_transceiver.txt")
+        parser = NTCParser()
+        normalizer = InventoryNormalizer()
+
+        parsed = parser.parse(output, "qtech", "show interface transceiver", normalize=False)
+        items = normalizer.normalize_transceivers(parsed, platform="qtech")
+
+        assert len(items) == 4
+        for item in items:
+            assert item["name"].startswith("Transceiver ")
+            assert item["pid"]  # Тип трансивера
+            assert item["serial"]  # Серийный номер
+
+
 class TestInventoryCollectorEdgeCases:
     """Тесты граничных случаев."""
 

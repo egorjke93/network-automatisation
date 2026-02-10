@@ -315,3 +315,49 @@ class TestPortTypeDetection:
         result3 = normalizer.detect_port_type(data3, "eth1/1")
 
         assert result1 == result2 == result3 == "10g-sfp+"
+
+
+@pytest.mark.unit
+class TestQtechPortTypeDetection:
+    """Тесты detect_port_type для QTech интерфейсов."""
+
+    @pytest.fixture
+    def normalizer(self):
+        return InterfaceNormalizer()
+
+    @pytest.mark.parametrize("interface,hardware_type,expected", [
+        # QTech AggregatePort → LAG
+        ("AggregatePort 1", "", "lag"),
+        ("AggregatePort 100", "", "lag"),
+        ("Ag1", "", "lag"),
+        ("Ag10", "", "lag"),
+        # QTech TFGigabitEthernet → 10G
+        ("TFGigabitEthernet 0/1", "Broadcom TFGigabitEthernet", "10g-sfp+"),
+        ("TFGigabitEthernet 0/48", "", "10g-sfp+"),
+        ("TF0/1", "", "10g-sfp+"),
+        ("TF0/48", "", "10g-sfp+"),
+        # QTech HundredGigabitEthernet → 100G (уже работает)
+        ("HundredGigabitEthernet 0/55", "", "100g-qsfp28"),
+        ("Hu0/55", "", "100g-qsfp28"),
+    ])
+    def test_qtech_port_types(self, normalizer, interface, hardware_type, expected):
+        """QTech: TFGigabitEthernet=10G, AggregatePort=LAG, HundredGigabitEthernet=100G."""
+        data = {"interface": interface, "hardware_type": hardware_type, "media_type": ""}
+        result = normalizer.detect_port_type(data, interface.lower())
+        assert result == expected, (
+            f"Interface: {interface}, Hardware: {hardware_type}\n"
+            f"Expected: {expected}, Got: {result}"
+        )
+
+    def test_tfgigabit_hardware_not_1g(self, normalizer):
+        """Регрессия: Broadcom TFGigabitEthernet содержит 'gigabit', но это 10G, не 1G."""
+        data = {
+            "interface": "TFGigabitEthernet 0/1",
+            "hardware_type": "Broadcom TFGigabitEthernet",
+            "media_type": "",
+        }
+        result = normalizer.detect_port_type(data, "tfgigabitethernet 0/1")
+        assert result == "10g-sfp+", (
+            "TFGigabitEthernet с hardware 'Broadcom TFGigabitEthernet' "
+            "должен определяться как 10G, а не 1G!"
+        )

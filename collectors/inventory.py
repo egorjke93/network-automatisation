@@ -23,6 +23,7 @@ from ..core.device import Device
 from ..core.models import InventoryItem
 from ..core.domain.inventory import InventoryNormalizer
 from ..core.constants import COLLECTOR_COMMANDS
+from ..core.constants.commands import SECONDARY_COMMANDS
 from ..core.logging import get_logger
 from ..core.exceptions import (
     ConnectionError,
@@ -30,6 +31,7 @@ from ..core.exceptions import (
     TimeoutError,
     format_error_for_log,
 )
+from ..parsers.textfsm_parser import NTCParser
 
 logger = get_logger(__name__)
 
@@ -54,11 +56,8 @@ class InventoryCollector(BaseCollector):
     # Команды для разных платформ (из централизованного хранилища)
     platform_commands = COLLECTOR_COMMANDS.get("inventory", {})
 
-    # Команды для получения трансиверов
-    # NX-OS: show inventory не содержит SFP/QSFP, они в show interface transceiver
-    transceiver_commands = {
-        "cisco_nxos": "show interface transceiver",
-    }
+    # Команды для трансиверов (из централизованного хранилища commands.py)
+    transceiver_commands = SECONDARY_COMMANDS.get("transceiver", {})
 
     def __init__(
         self,
@@ -75,6 +74,7 @@ class InventoryCollector(BaseCollector):
         super().__init__(**kwargs)
         self.collect_transceivers = collect_transceivers
         self._normalizer = InventoryNormalizer()
+        self._parser = NTCParser()
 
     def _parse_output(
         self,
@@ -140,7 +140,8 @@ class InventoryCollector(BaseCollector):
         """
         Собирает данные инвентаризации с устройства.
 
-        Для NX-OS дополнительно собирает трансиверы из show interface transceiver.
+        Для NX-OS/QTech дополнительно собирает трансиверы из show interface transceiver.
+        QTech: show inventory отсутствует, инвентаризация только через transceiver.
 
         Args:
             device: Устройство
@@ -148,25 +149,29 @@ class InventoryCollector(BaseCollector):
         Returns:
             List[Dict]: Данные инвентаризации
         """
-        from ..core.connection import get_ntc_platform
-        from ..core.device import DeviceStatus
-        from ntc_templates.parse import parse_output
-
         command = self._get_command(device)
-        if not command:
-            logger.warning(f"Нет команды для {device.platform}")
+        tr_cmd = self.transceiver_commands.get(device.platform) if self.collect_transceivers else None
+
+        # Нет ни основной команды, ни transceiver
+        if not command and not tr_cmd:
+            logger.warning(f"Нет команды inventory для {device.platform}")
             return []
 
         try:
             with self._conn_manager.connect(device, self.credentials) as conn:
-                # Получаем hostname
-                hostname = self._conn_manager.get_hostname(conn)
-                device.metadata["hostname"] = hostname
-                device.status = DeviceStatus.ONLINE
+                hostname = self._init_device_connection(conn, device)
 
-                # 1. Парсим сырые данные show inventory
-                response = conn.send_command(command)
-                raw_data = self._parse_output(response.result, device)
+                # 1. Парсим сырые данные show inventory (если команда есть)
+                raw_data = []
+                if command:
+                    response = conn.send_command(command)
+                    raw_data = self._parse_output(response.result, device)
+
+                # --format parsed: сырые данные TextFSM, без нормализации
+                if self._skip_normalize:
+                    self._add_metadata_to_rows(raw_data, hostname, device.host)
+                    logger.info(f"{hostname}: собрано {len(raw_data)} компонентов (parsed, без нормализации)")
+                    return raw_data
 
                 # 2. Domain Layer: нормализация
                 data = self._normalizer.normalize_dicts(
@@ -176,46 +181,36 @@ class InventoryCollector(BaseCollector):
                     device_ip=device.host,
                 )
 
-                # 3. Собираем трансиверы если включено
+                # 3. Собираем трансиверы (NX-OS, QTech)
                 transceiver_items = []
-                if self.collect_transceivers:
-                    tr_cmd = self.transceiver_commands.get(device.platform)
-                    if tr_cmd:
-                        try:
-                            tr_response = conn.send_command(tr_cmd)
-                            # Парсим через NTC
-                            parsed = parse_output(
-                                platform=get_ntc_platform(device.platform),
-                                command=tr_cmd,
-                                data=tr_response.result,
-                            )
-                            # Domain Layer: нормализация трансиверов
-                            transceiver_items = self._normalizer.normalize_transceivers(
-                                parsed,
-                                platform=device.platform,
-                            )
-                            # Добавляем hostname/device_ip
-                            for item in transceiver_items:
-                                item["hostname"] = hostname
-                                item["device_ip"] = device.host
-                        except Exception as e:
-                            logger.debug(f"Ошибка получения transceivers: {e}")
+                if tr_cmd:
+                    try:
+                        tr_response = conn.send_command(tr_cmd)
+                        # Парсим через NTCParser (поддержка кастомных шаблонов)
+                        parsed = self._parser.parse(
+                            output=tr_response.result,
+                            platform=device.platform,
+                            command=tr_cmd,
+                            normalize=False,
+                        )
+                        # Domain Layer: нормализация трансиверов
+                        transceiver_items = self._normalizer.normalize_transceivers(
+                            parsed,
+                            platform=device.platform,
+                        )
+                        # Добавляем hostname/device_ip
+                        self._add_metadata_to_rows(transceiver_items, hostname, device.host)
+                    except Exception as e:
+                        logger.debug(f"Ошибка получения transceivers: {e}")
 
                 # 4. Domain Layer: merge inventory + transceivers
                 all_items = self._normalizer.merge_with_transceivers(data, transceiver_items)
 
-                # Лог: показываем трансиверы только для NX-OS (где они отдельной командой)
                 if transceiver_items:
-                    logger.info(f"{hostname}: собрано {len(all_items)} компонентов inventory (+{len(transceiver_items)} трансиверов из show interface transceiver)")
+                    logger.info(f"{hostname}: собрано {len(all_items)} компонентов inventory (+{len(transceiver_items)} трансиверов)")
                 else:
                     logger.info(f"{hostname}: собрано {len(all_items)} компонентов inventory")
                 return all_items
 
-        except (ConnectionError, AuthenticationError, TimeoutError) as e:
-            device.status = DeviceStatus.ERROR
-            logger.error(f"Ошибка подключения к {device.host}: {format_error_for_log(e)}")
-            return []
         except Exception as e:
-            device.status = DeviceStatus.ERROR
-            logger.error(f"Неизвестная ошибка с {device.host}: {e}")
-            return []
+            return self._handle_collection_error(e, device)

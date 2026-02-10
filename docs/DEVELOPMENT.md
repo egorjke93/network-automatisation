@@ -56,7 +56,7 @@ tests/
 │   ├── cisco_nxos/
 │   ├── qtech/
 │   └── real_output/               # Реальные данные с устройств
-├── test_api/                      # Тесты REST API (132 теста)
+├── test_api/                      # Тесты REST API (148 тестов)
 │   ├── test_auth.py               # Аутентификация
 │   ├── test_collectors.py         # API коллекторов
 │   ├── test_device_management.py  # Device Management API
@@ -67,6 +67,7 @@ tests/
 │   ├── test_sync.py               # Sync API
 │   └── test_tasks.py              # Tasks API (async mode)
 ├── test_cli/                      # Тесты CLI
+│   ├── test_format_parsed.py      # --format parsed
 │   ├── test_pipeline.py           # Pipeline команды
 │   └── test_sync_summary.py       # Sync summary
 ├── test_collectors/               # Тесты коллекторов
@@ -101,7 +102,17 @@ tests/
 │       ├── test_executor_integration.py
 │       └── test_models.py
 ├── test_e2e/                      # E2E тесты
+│   ├── test_config_backup_e2e.py  # Config backup E2E
+│   ├── test_device_collector_e2e.py  # Device collector E2E
+│   ├── test_interface_collector_e2e.py  # Interface collector E2E
+│   ├── test_inventory_collector_e2e.py  # Inventory collector E2E
+│   ├── test_ip_collector_e2e.py   # IP collector E2E
+│   ├── test_lldp_collector_e2e.py # LLDP collector E2E
+│   ├── test_mac_collector_e2e.py  # MAC collector E2E
+│   ├── test_multi_device_collection.py  # Multi-device E2E
+│   ├── test_nxos_enrichment_e2e.py  # NX-OS enrichment E2E
 │   ├── test_pipeline.py           # Pipeline E2E
+│   ├── test_sync_full_device.py   # Full device sync E2E
 │   └── test_sync_pipeline.py      # Sync pipeline E2E
 ├── test_exporters/                # Тесты экспорта
 │   ├── test_csv_exporter.py       # CSV экспорт
@@ -120,16 +131,19 @@ tests/
 │   ├── test_sync_integration.py   # Sync integration
 │   ├── test_sync_interfaces_vlan.py  # Interface VLAN sync (19 тестов)
 │   └── test_vlans_sync.py         # VLANs sync
-└── test_parsers/                  # Тесты парсинга
-    ├── test_interfaces.py
-    ├── test_inventory.py
-    ├── test_lldp.py               # LLDP/CDP парсинг
-    ├── test_mac.py
-    ├── test_nxos_enrichment.py
-    └── test_version.py
+├── test_parsers/                  # Тесты парсинга
+│   ├── test_interfaces.py
+│   ├── test_inventory.py
+│   ├── test_lldp.py               # LLDP/CDP парсинг
+│   ├── test_mac.py
+│   ├── test_nxos_enrichment.py
+│   └── test_version.py
+├── test_qtech_support.py          # Поддержка QTech платформы
+├── test_qtech_templates.py        # QTech TextFSM шаблоны
+└── test_refactoring_utils.py      # Утилиты рефакторинга
 ```
 
-**Всего: 1434 тестов, покрытие ~85%**
+**Всего: 1788 тестов, покрытие ~85%**
 
 ### 2.2 Описание тестовых модулей
 
@@ -188,35 +202,35 @@ pytest tests/ --cov=network_collector --cov-report=term-missing
 """Тесты для определения типа интерфейса."""
 
 import pytest
-from network_collector.collectors.interfaces import InterfaceCollector
+from network_collector.core.domain.interface import InterfaceNormalizer
 
 
 @pytest.fixture
-def collector():
-    """Создаём коллектор для тестирования."""
-    return InterfaceCollector()
+def normalizer():
+    """Создаём нормализатор для тестирования."""
+    return InterfaceNormalizer()
 
 
 @pytest.mark.unit
 class TestPortTypeDetection:
-    """Тесты для _detect_port_type()."""
+    """Тесты для detect_port_type() (Domain Layer)."""
 
     @pytest.mark.parametrize("input_data,expected", [
         ({"interface": "Gi1/0/1", "media_type": "SFP-10GBase-LR"}, "10g-sfp+"),
         ({"interface": "Gi1/0/2", "media_type": "RJ45"}, "1g-rj45"),
     ])
-    def test_basic(self, collector, input_data, expected):
+    def test_basic(self, normalizer, input_data, expected):
         """Базовые кейсы."""
-        result = collector._detect_port_type(input_data, input_data["interface"].lower())
+        result = normalizer.detect_port_type(input_data, input_data["interface"].lower())
         assert result == expected
 
-    def test_production_bug_25g_with_10g_sfp(self, collector):
+    def test_production_bug_25g_with_10g_sfp(self, normalizer):
         """Регрессионный тест для бага из прода."""
         data = {
             "interface": "TwentyFiveGigE1/0/1",
             "media_type": "SFP-10GBase-LR",
         }
-        result = collector._detect_port_type(data, data["interface"].lower())
+        result = normalizer.detect_port_type(data, data["interface"].lower())
         assert result == "10g-sfp+", "Должен определяться по трансиверу, не по порту"
 ```
 
@@ -313,8 +327,9 @@ pytest tests/test_configurator/test_pusher_retry.py -v
 │    • NTC_PLATFORM_MAP      → какой парсер NTC использовать                  │
 │    • VENDOR_MAP            → определение производителя                       │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ 2. collectors/*.py — КОМАНДЫ                                                 │
-│    • platform_commands = {"newvendor": "show ..."}                          │
+│ 2. core/constants/commands.py — КОМАНДЫ (централизованные)                   │
+│    • COLLECTOR_COMMANDS    → основные команды коллекторов                    │
+│    • SECONDARY_COMMANDS    → вторичные команды (lag, switchport, etc.)       │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ 3. templates/*.textfsm — КАСТОМНЫЕ ШАБЛОНЫ (если NTC не парсит)             │
 │    • CUSTOM_TEXTFSM_TEMPLATES + файл шаблона                                │
@@ -346,25 +361,55 @@ VENDOR_MAP = {
 
 ### 3.3 Шаг 2: Команды в коллекторах
 
+Команды централизованы в `core/constants/commands.py`. Коллекторы загружают их оттуда:
+
 ```python
-# collectors/mac.py
+# Команды загружаются из централизованного хранилища
+from network_collector.core.constants.commands import COLLECTOR_COMMANDS
+
 class MACCollector(BaseCollector):
-    platform_commands = {
-        "cisco_ios": "show mac address-table",
-        "eltex": "show mac address-table",      # ← ДОБАВИТЬ
-    }
+    platform_commands = COLLECTOR_COMMANDS.get("mac", {})
 
-# collectors/interfaces.py
 class InterfaceCollector(BaseCollector):
-    platform_commands = {
-        "cisco_ios": "show interfaces",
-        "eltex": "show interfaces",              # ← ДОБАВИТЬ
-    }
+    platform_commands = COLLECTOR_COMMANDS.get("interfaces", {})
+```
 
-    lag_commands = {
-        "cisco_ios": "show etherchannel summary",
-        "eltex": "show lacp summary",            # ← если команда другая
-    }
+**Для добавления новой платформы** — добавьте команду в `core/constants/commands.py` → `COLLECTOR_COMMANDS`:
+
+```python
+# core/constants/commands.py → COLLECTOR_COMMANDS
+"mac": {
+    "cisco_ios": "show mac address-table",
+    "eltex": "show mac address-table",      # ← ДОБАВИТЬ
+},
+"interfaces": {
+    "cisco_ios": "show interfaces",
+    "eltex": "show interfaces",              # ← ДОБАВИТЬ
+},
+```
+
+**Вторичные команды (enrichment)** — тоже в `core/constants/commands.py` → `SECONDARY_COMMANDS`:
+
+```python
+from network_collector.core.constants.commands import SECONDARY_COMMANDS
+
+lag_commands = SECONDARY_COMMANDS.get("lag", {})
+switchport_commands = SECONDARY_COMMANDS.get("switchport", {})
+```
+
+Группы вторичных команд: `lag`, `switchport`, `media_type`, `transceiver`, `lldp_summary`, `interface_errors`.
+
+```python
+# core/constants/commands.py → SECONDARY_COMMANDS
+"lag": {
+    "cisco_ios": "show etherchannel summary",
+    "qtech": "show aggregatePort summary",
+    "eltex": "show lacp summary",            # ← если команда другая
+},
+"switchport": {
+    "cisco_ios": "show interfaces switchport",
+    "eltex": "show interfaces switchport",   # ← ДОБАВИТЬ
+},
 ```
 
 ### 3.4 Шаг 3: Кастомные шаблоны (если нужно)
@@ -410,15 +455,16 @@ python -m network_collector sync-netbox --interfaces --dry-run
 | SSH драйвер | `core/constants.py` | `SCRAPLI_PLATFORM_MAP` |
 | NTC парсер | `core/constants.py` | `NTC_PLATFORM_MAP` |
 | Производитель | `core/constants.py` | `VENDOR_MAP` |
-| Команда MAC | `collectors/mac.py` | `platform_commands` |
-| Команда interfaces | `collectors/interfaces.py` | `platform_commands` |
-| Команда LAG | `collectors/interfaces.py` | `lag_commands` |
-| Команда switchport | `collectors/interfaces.py` | `switchport_commands` |
-| Команда LLDP | `collectors/lldp.py` | `lldp_commands` |
-| Команда CDP | `collectors/lldp.py` | `cdp_commands` |
-| Команда inventory | `collectors/inventory.py` | `platform_commands` |
+| Команда MAC | `core/constants/commands.py` | `COLLECTOR_COMMANDS["mac"]` |
+| Команда interfaces | `core/constants/commands.py` | `COLLECTOR_COMMANDS["interfaces"]` |
+| Команда LAG | `core/constants/commands.py` | `SECONDARY_COMMANDS["lag"]` |
+| Команда switchport | `core/constants/commands.py` | `SECONDARY_COMMANDS["switchport"]` |
+| Команда LLDP | `core/constants/commands.py` | `COLLECTOR_COMMANDS["lldp"]` |
+| Команда CDP | `core/constants/commands.py` | `COLLECTOR_COMMANDS["cdp"]` |
+| Команда inventory | `core/constants/commands.py` | `COLLECTOR_COMMANDS["inventory"]` |
+| Команда transceiver | `core/constants/commands.py` | `SECONDARY_COMMANDS["transceiver"]` |
 | Команда backup | `collectors/config_backup.py` | `BACKUP_COMMANDS` |
-| Кастомный шаблон | `core/constants.py` | `CUSTOM_TEXTFSM_TEMPLATES` |
+| Кастомный шаблон | `core/constants/commands.py` | `CUSTOM_TEXTFSM_TEMPLATES` |
 
 ---
 
@@ -429,7 +475,7 @@ python -m network_collector sync-netbox --interfaces --dry-run
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │ 1. Коллектор → port_type (платформонезависимый)                 │
-│    _detect_port_type() в collectors/interfaces.py               │
+│    InterfaceNormalizer.detect_port_type() в core/domain/interface.py │
 │    Результат: "10g-sfp+", "1g-rj45", "lag", "virtual"          │
 ├────────────────────────────────────────────────────────────────┤
 │ 2. Sync → NetBox type                                           │
@@ -443,14 +489,29 @@ python -m network_collector sync-netbox --interfaces --dry-run
 **Пример: добавить 400G**
 
 ```python
-# 1. collectors/interfaces.py → _detect_port_type()
+# 1. core/domain/interface.py → detect_port_type() → _detect_from_interface_name()
 if iface_lower.startswith(("fourhundredgig", "fh")):
     return "400g-qsfp-dd"
 
-# 2. core/constants.py → PORT_TYPE_MAP
-PORT_TYPE_MAP = {
-    "400g-qsfp-dd": "400gbase-x-qsfpdd",
-}
+# 2. core/constants/netbox.py → get_netbox_interface_type()
+# Добавить в INTERFACE_NAME_PREFIX_MAP или в логику функции
+
+# 3. core/constants/interfaces.py → INTERFACE_SHORT_MAP / INTERFACE_FULL_MAP
+# Если нужны сокращения/расширения имён
+```
+
+**Пример из QTech: TFGigabitEthernet = 10G, AggregatePort = LAG**
+
+```python
+# core/domain/interface.py → detect_port_type()
+if iface_lower.startswith(("tfgigabitethernet", "tf")):
+    return "10g-sfp+"
+if iface_lower.startswith(("aggregateport", "ag")):
+    return "lag"
+
+# core/constants/interfaces.py
+INTERFACE_SHORT_MAP: ("tfgigabitethernet", "TF"), ("aggregateport", "Ag")
+INTERFACE_FULL_MAP: "TF": "TFGigabitEthernet", "Ag": "AggregatePort"
 ```
 
 ### 4.3 Добавление нового media_type
@@ -479,7 +540,7 @@ NETBOX_INTERFACE_TYPE_MAP = {
 
 | Источник | Файл | Переменная | Когда использовать |
 |----------|------|------------|-------------------|
-| Имя интерфейса | `collectors/interfaces.py` | `_detect_port_type()` | Новый тип порта (400G, 800G) |
+| Имя интерфейса | `core/domain/interface.py` | `InterfaceNormalizer.detect_port_type()` | Новый тип порта (400G, 800G) |
 | port_type → NetBox | `core/constants.py` | `PORT_TYPE_MAP` | Маппинг port_type в NetBox |
 | media_type → NetBox | `core/constants.py` | `NETBOX_INTERFACE_TYPE_MAP` | Новый SFP/трансивер |
 | hardware_type → NetBox | `core/constants.py` | `NETBOX_HARDWARE_TYPE_MAP` | Маппинг скорости |
@@ -595,6 +656,7 @@ Interface
 ```python
 from typing import List, Dict, Any
 from ..core.device import Device
+from ..core.constants.commands import COLLECTOR_COMMANDS
 from .base import BaseCollector
 
 class NewCollector(BaseCollector):
@@ -602,10 +664,8 @@ class NewCollector(BaseCollector):
 
     model_class = NewModel  # Модель данных
 
-    platform_commands = {
-        "cisco_ios": "show something",
-        "arista_eos": "show something else",
-    }
+    # Команды загружаются из централизованного хранилища
+    platform_commands = COLLECTOR_COMMANDS.get("new_collector", {})
 
     def _parse_output(
         self,

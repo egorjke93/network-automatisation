@@ -10,4 +10,4 @@ Start
   ^Interface\s+Switchport -> Continue
   ^-+ -> Continue
   ^${INTERFACE}\s+${SWITCHPORT}\s+${MODE}\s+${ACCESS_VLAN}\s+${NATIVE_VLAN}\s+${PROTECTED}\s+${VLAN_LISTS} -> Record
-  ^${INTERFACE}\s+${SWITCHPORT}\s*$$ -> Record
+  ^${INTERFACE}\s+${SWITCHPORT}\s+${PROTECTED}\s*$$ -> Record

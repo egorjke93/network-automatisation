@@ -73,6 +73,10 @@ class Config:
         self._load_yaml()
         self._load_env()
 
+    def get(self, key: str, default: Any = None) -> Any:
+        """Получить значение с дефолтом (аналогично ConfigSection.get)."""
+        return self._data.get(key, default)
+
     def _get_defaults(self) -> dict:
         """Значения по умолчанию."""
         return {

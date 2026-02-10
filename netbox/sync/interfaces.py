@@ -9,7 +9,7 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 
 from .base import (
-    SyncBase, SyncComparator, Interface, get_sync_config,
+    SyncBase, SyncStats, SyncComparator, Interface, get_sync_config,
     normalize_mac_netbox, get_netbox_interface_type, logger,
 )
 from ...core.domain.vlan import parse_vlan_range, VlanSet
@@ -44,8 +44,8 @@ class InterfacesSyncMixin:
         Returns:
             Dict: Статистика {created, updated, deleted, skipped, details}
         """
-        stats = {"created": 0, "updated": 0, "deleted": 0, "skipped": 0}
-        details = {"create": [], "update": [], "delete": [], "skip": []}
+        ss = SyncStats("created", "updated", "deleted", "skipped")
+        stats, details = ss.stats, ss.details
         sync_cfg = get_sync_config("interfaces")
 
         if create_missing is None:

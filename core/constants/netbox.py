@@ -144,6 +144,7 @@ NETBOX_HARDWARE_TYPE_MAP: Dict[str, str] = {
     # 10G
     "ten gig": "10gbase-x-sfpp",
     "tengig": "10gbase-x-sfpp",
+    "tfgigabitethernet": "10gbase-x-sfpp",  # QTech 10G
     "10g": "10gbase-x-sfpp",
     # 1G - SFP на Cisco 6500
     "c6k 1000mb 802.3": "1000base-x-sfp",
@@ -206,6 +207,9 @@ INTERFACE_NAME_PREFIX_MAP: Dict[str, str] = {
     "twe": "25gbase-x-sfp28",
     # 10G
     "tengig": "10gbase-x-sfpp",
+    "tfgigabitethernet": "10gbase-x-sfpp",  # QTech 10G
+    "tf": "10gbase-x-sfpp",  # QTech 10G короткий
+    "te": "10gbase-x-sfpp",  # Te1/1 короткий
     # 1G
     "gigabit": "1000base-t",
     "gi": "1000base-t",
@@ -213,6 +217,48 @@ INTERFACE_NAME_PREFIX_MAP: Dict[str, str] = {
     "fastethernet": "100base-tx",
     "fa": "100base-tx",
 }
+
+
+# Короткие префиксы, требующие проверки цифры после (чтобы "gi" не совпал с "gigabit...")
+_SHORT_PREFIXES = {"hu", "fo", "twe", "tf", "te", "gi", "fa"}
+
+
+def _detect_type_by_name_prefix(
+    name_lower: str,
+    media_lower: str = "",
+    hw_lower: str = "",
+) -> str:
+    """
+    Определяет тип интерфейса NetBox по префиксу имени.
+
+    Использует INTERFACE_NAME_PREFIX_MAP как единый источник маппинга.
+    Для GigabitEthernet учитывает SFP/медь на основе media_type/hardware_type.
+
+    Args:
+        name_lower: Имя интерфейса в нижнем регистре
+        media_lower: media_type в нижнем регистре (для определения SFP у Gi)
+        hw_lower: hardware_type в нижнем регистре (для определения SFP у Gi)
+
+    Returns:
+        str: Тип интерфейса для NetBox или пустая строка
+    """
+    for prefix, netbox_type in INTERFACE_NAME_PREFIX_MAP.items():
+        if not name_lower.startswith(prefix):
+            continue
+
+        # Короткие префиксы: после них должна быть цифра
+        if prefix in _SHORT_PREFIXES:
+            if len(name_lower) <= len(prefix) or not name_lower[len(prefix)].isdigit():
+                continue
+
+        # GigabitEthernet/Gi: SFP или медь
+        if prefix in ("gigabit", "gi"):
+            is_sfp = "sfp" in media_lower or "sfp" in hw_lower or "no transceiver" in media_lower
+            return "1000base-x-sfp" if is_sfp else netbox_type
+
+        return netbox_type
+
+    return ""
 
 
 def _parse_speed_to_mbps(speed_str: str) -> int:
@@ -300,8 +346,12 @@ def get_netbox_interface_type(
     media_lower = media_type.lower() if media_type else ""
     hw_lower = hardware_type.lower() if hardware_type else ""
 
-    # 1. LAG интерфейсы
-    if name_lower.startswith(("port-channel", "po")) or port_type == "lag":
+    # 1. LAG интерфейсы (Cisco Port-channel, QTech AggregatePort)
+    if name_lower.startswith(("port-channel", "po", "aggregateport")) or port_type == "lag":
+        return "lag"
+    # QTech: Ag1, Ag10 (короткое имя AggregatePort)
+    if (len(name_lower) >= 3 and name_lower[:2] == "ag"
+            and name_lower[2].isdigit()):
         return "lag"
 
     # 2. Виртуальные интерфейсы
@@ -344,39 +394,12 @@ def get_netbox_interface_type(
                     return "1000base-x-sfp"
                 return netbox_type
 
-    # 7. По имени интерфейса
-    is_sfp_port = (
-        "sfp" in media_lower or "sfp" in hw_lower or "no transceiver" in media_lower
-    )
+    # 7. По имени интерфейса (через INTERFACE_NAME_PREFIX_MAP)
+    netbox_type = _detect_type_by_name_prefix(name_lower, media_lower, hw_lower)
+    if netbox_type:
+        return netbox_type
 
-    # HundredGigE (100G)
-    if name_lower.startswith(("hu", "hundredgig")):
-        return "100gbase-x-qsfp28"
-
-    # FortyGigE (40G)
-    if name_lower.startswith(("fo", "fortygig")):
-        return "40gbase-x-qsfpp"
-
-    # TwentyFiveGigE (25G)
-    if name_lower.startswith(("twe", "twentyfive")):
-        return "25gbase-x-sfp28"
-
-    # TenGigabitEthernet (10G)
-    if name_lower.startswith("tengig"):
-        return "10gbase-x-sfpp"
-    # Te1/1, Te2/0/1 - короткий формат
-    if len(name_lower) >= 3 and name_lower[:2] == "te" and name_lower[2].isdigit():
-        return "10gbase-x-sfpp"
-
-    # GigabitEthernet (1G)
-    if name_lower.startswith(("gi", "gigabit")):
-        return "1000base-x-sfp" if is_sfp_port else "1000base-t"
-
-    # FastEthernet (100M)
-    if name_lower.startswith(("fa", "fastethernet")):
-        return "100base-tx"
-
-    # Ethernet (NX-OS) - проверяем hardware_type на максимальную скорость
+    # Ethernet (NX-OS) — особый случай: определяем по hardware_type/скорости
     if name_lower.startswith(("eth", "ethernet")) and not name_lower.startswith(
         "ethersvi"
     ):

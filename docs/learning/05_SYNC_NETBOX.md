@@ -563,6 +563,22 @@ class SyncBase:
     def _get_or_create_site(self, name): ...
 ```
 
+### SyncStats -- инициализация статистики
+
+В SyncBase также определён хелпер `SyncStats` -- он убирает дублирование
+dict-литералов `{"created": 0, "updated": 0, ...}` в каждом sync-методе:
+
+```python
+# netbox/sync/base.py
+s = SyncStats("created", "updated", "deleted", "skipped", "failed")
+stats, details = s.stats, s.details
+# stats = {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "failed": 0}
+# details = {"create": [], "update": [], "delete": [], "skip": []}
+```
+
+Все sync-mixin-ы используют `SyncStats` для единообразной инициализации
+stats и details, что упрощает код и гарантирует одинаковую структуру результата.
+
 ### Структура файлов
 
 ```

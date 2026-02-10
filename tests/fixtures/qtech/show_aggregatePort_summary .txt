@@ -1,0 +1,11 @@
+SU-QSW-6900-56F-01#show aggregatePort summary 
+AggregatePort MaxPorts SwitchPort Mode   Load balance                 Ports                              
+------------- -------- ---------- ------ ---------------------------- -----------------------------------
+Ag1           16       Enabled    TRUNK  src-dst-mac                  Hu0/55  ,Hu0/56  
+Ag10          16       Enabled    ACCESS src-dst-mac                  TF0/1   
+Ag20          16       Enabled    ACCESS src-dst-mac                  TF0/2   
+Ag39          16       Enabled    ACCESS src-dst-mac                  TF0/39  
+Ag40          16       Enabled    ACCESS src-dst-mac                  TF0/40  
+Ag50          16       Enabled    TRUNK  src-dst-mac                  Hu0/53  
+Ag100         16       Enabled    TRUNK  src-dst-mac                  Hu0/51  
+SU-QSW-6900-56F-01# 

@@ -169,8 +169,12 @@ class InterfaceNormalizer:
         hardware_type = row.get("hardware_type", "").lower()
         media_type = row.get("media_type", "").lower()
 
-        # LAG интерфейсы
-        if iface_lower.startswith(("port-channel", "po")):
+        # LAG интерфейсы (Cisco Port-channel, QTech AggregatePort)
+        if iface_lower.startswith(("port-channel", "po", "aggregateport")):
+            return "lag"
+        # QTech: Ag1, Ag10 (короткое имя AggregatePort)
+        if (len(iface_lower) >= 3 and iface_lower[:2] == "ag"
+                and iface_lower[2].isdigit()):
             return "lag"
 
         # Виртуальные интерфейсы
@@ -223,6 +227,9 @@ class InterfaceNormalizer:
             return "25g-sfp28"
         if "10000" in hardware_type or "10g" in hardware_type or "ten gig" in hardware_type:
             return "10g-sfp+"
+        # QTech: "Broadcom TFGigabitEthernet" = 10G SFP+
+        if "tfgigabitethernet" in hardware_type:
+            return "10g-sfp+"
         # Только 1G без 10G (Gigabit Ethernet, 1000 Ethernet)
         if ("1000" in hardware_type or "gigabit" in hardware_type) and "10000" not in hardware_type:
             if "sfp" in hardware_type:
@@ -238,6 +245,12 @@ class InterfaceNormalizer:
             return "40g-qsfp"
         if iface_lower.startswith(("twentyfivegig", "twe")):
             return "25g-sfp28"
+        # QTech TFGigabitEthernet (10G)
+        if iface_lower.startswith("tfgigabitethernet"):
+            return "10g-sfp+"
+        # TF0/1 - короткий формат QTech 10G
+        if len(iface_lower) >= 3 and iface_lower[:2] == "tf" and iface_lower[2].isdigit():
+            return "10g-sfp+"
         if iface_lower.startswith("tengig"):
             return "10g-sfp+"
         # Te1/1 - короткий формат
@@ -322,8 +335,10 @@ class InterfaceNormalizer:
                 iface["native_vlan"] = sw_data.get("native_vlan", "")
                 iface["access_vlan"] = sw_data.get("access_vlan", "")
                 iface["tagged_vlans"] = sw_data.get("tagged_vlans", "")
-            elif iface_lower.startswith(("po", "port-channel")):
-                # Для LAG берём mode из members
+            elif iface_lower.startswith(("po", "port-channel", "aggregateport")) or (
+                len(iface_lower) >= 3 and iface_lower[:2] == "ag" and iface_lower[2].isdigit()
+            ):
+                # Для LAG берём mode из members (Cisco Port-channel, QTech AggregatePort)
                 for lag_name, lag_mode in lag_modes.items():
                     if self._is_same_lag(iface_lower, lag_name.lower()):
                         iface["mode"] = lag_mode
@@ -332,13 +347,30 @@ class InterfaceNormalizer:
         return interfaces
 
     def _is_same_lag(self, iface_lower: str, lag_lower: str) -> bool:
-        """Проверяет соответствие имён LAG."""
+        """Проверяет соответствие имён LAG (Cisco Port-channel, QTech AggregatePort)."""
         if iface_lower == lag_lower:
             return True
+        # Cisco: Po1 == Port-channel1
         if f"po{lag_lower}" == iface_lower:
             return True
         if lag_lower.replace("po", "port-channel") == iface_lower:
             return True
+        # QTech: AggregatePort 1 == Ag1 (с учётом пробела)
+        iface_nospace = iface_lower.replace(" ", "")
+        lag_nospace = lag_lower.replace(" ", "")
+        if iface_nospace == lag_nospace:
+            return True
+        if iface_nospace.startswith("aggregateport") and lag_nospace.startswith("ag"):
+            # aggregateport1 == ag1
+            iface_num = iface_nospace.replace("aggregateport", "")
+            lag_num = lag_nospace.replace("ag", "")
+            if iface_num == lag_num:
+                return True
+        if lag_nospace.startswith("aggregateport") and iface_nospace.startswith("ag"):
+            lag_num = lag_nospace.replace("aggregateport", "")
+            iface_num = iface_nospace.replace("ag", "")
+            if iface_num == lag_num:
+                return True
         return False
 
     def _get_interface_name_variants(self, name: str) -> List[str]:
@@ -359,12 +391,14 @@ class InterfaceNormalizer:
         abbrev_map = {
             "GigabitEthernet": "Gi",
             "TenGigabitEthernet": "Te",
+            "TFGigabitEthernet": "TF",  # QTech 10G
             "TwentyFiveGigE": "Twe",
             "TwentyFiveGigabitEthernet": "Twe",
             "FortyGigabitEthernet": "Fo",
             "HundredGigE": "Hu",
             "HundredGigabitEthernet": "Hu",
             "FastEthernet": "Fa",
+            "AggregatePort": "Ag",  # QTech LAG
             "Ethernet": "Eth",
             "Port-channel": "Po",
             "Port-Channel": "Po",

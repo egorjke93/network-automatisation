@@ -19,11 +19,12 @@ INTERFACE_SHORT_MAP: List[tuple] = [
     ("hundredgigabitethernet", "Hu"),
     ("hundredgige", "Hu"),
     ("fortygigabitethernet", "Fo"),
+    ("tfgigabitethernet", "TF"),  # QTech 10G
     ("tengigabitethernet", "Te"),
     ("gigabitethernet", "Gi"),
     ("fastethernet", "Fa"),
+    ("aggregateport", "Ag"),  # QTech LAG
     ("ethernet", "Eth"),  # NX-OS полное: Ethernet1/1 → Eth1/1
-    ("ethernet", "Et"),
     ("port-channel", "Po"),
     ("vlan", "Vl"),
     ("loopback", "Lo"),
@@ -38,11 +39,13 @@ INTERFACE_FULL_MAP: Dict[str, str] = {
     "Gi": "GigabitEthernet",
     "Fa": "FastEthernet",
     "Te": "TenGigabitEthernet",
+    "TF": "TFGigabitEthernet",  # QTech 10G
     "Twe": "TwentyFiveGigE",
     "Fo": "FortyGigabitEthernet",
     "Hu": "HundredGigE",
     "Eth": "Ethernet",
     "Et": "Ethernet",  # Et1/1 → Ethernet1/1
+    "Ag": "AggregatePort",  # QTech LAG
     "Po": "Port-channel",
     "Vl": "Vlan",
     "Lo": "Loopback",
@@ -96,7 +99,13 @@ def normalize_interface_full(interface: str) -> str:
         str: Полное имя
     """
     for short_name, full_name in INTERFACE_FULL_MAP.items():
-        if interface.startswith(short_name) and not interface.startswith(full_name):
+        if (
+            interface.startswith(short_name)
+            and not interface.startswith(full_name)
+            # Убеждаемся что после сокращения идёт цифра (Hu0/55, не HundredGig...)
+            and len(interface) > len(short_name)
+            and interface[len(short_name)].isdigit()
+        ):
             return interface.replace(short_name, full_name, 1)
     return interface
 
@@ -157,6 +166,7 @@ def get_interface_aliases(interface: str) -> List[str]:
     SHORT_TO_EXTRA = {
         "gi": ["Gig"],
         "te": ["Ten"],
+        "hu": ["HundredGigabitEthernet"],  # QTech полное имя
         "eth": ["Et"],
         "et": ["Eth"],
     }

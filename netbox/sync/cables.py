@@ -8,7 +8,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from .base import (
-    SyncBase, LLDPNeighbor, get_cable_endpoints,
+    SyncBase, SyncStats, LLDPNeighbor, get_cable_endpoints,
     NetBoxError, format_error_for_log, logger,
 )
 
@@ -35,8 +35,8 @@ class CablesSyncMixin:
         Returns:
             Dict: Статистика {created, deleted, skipped, failed, already_exists}
         """
-        stats = {"created": 0, "deleted": 0, "skipped": 0, "failed": 0, "already_exists": 0}
-        details = {"create": [], "delete": []}
+        ss = SyncStats("created", "deleted", "skipped", "failed", "already_exists")
+        stats, details = ss.stats, ss.details
         # Для дедупликации кабелей в preview (LLDP видит кабель с обеих сторон)
         seen_cables = set()
 

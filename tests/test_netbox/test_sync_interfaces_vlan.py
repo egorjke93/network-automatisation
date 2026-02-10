@@ -829,3 +829,147 @@ class TestModeDiffDetection:
 
         assert len(diff.to_update) == 0
         assert len(diff.to_skip) == 1
+
+
+class TestVlanOnCreate:
+    """Тесты: VLAN назначается при создании интерфейса (не только при update)."""
+
+    @pytest.fixture
+    def mock_sync_cfg_vlans_enabled(self):
+        """Config с включенным sync_vlans."""
+        cfg = MagicMock()
+        cfg.is_field_enabled.return_value = True
+        cfg.get_option.side_effect = lambda key, default=None: {
+            "sync_vlans": True,
+            "auto_detect_type": False,
+            "sync_mac_only_with_ip": False,
+            "enabled_mode": "admin",
+        }.get(key, default)
+        return cfg
+
+    def test_create_access_port_includes_untagged_vlan(self, mock_sync_cfg_vlans_enabled):
+        """При создании access порта untagged_vlan включается в данные."""
+        from network_collector.netbox.sync.interfaces import InterfacesSyncMixin
+
+        sync = MagicMock(spec=InterfacesSyncMixin)
+        sync.dry_run = False
+        sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
+
+        # VLAN 10 существует в NetBox
+        mock_vlan = MockVLAN(id=100, vid=10, name="Users")
+        sync._get_vlan_by_vid = MagicMock(return_value=mock_vlan)
+
+        intf = MockInterface(
+            name="Gi0/1",
+            mode="access",
+            access_vlan="10",
+        )
+
+        with patch("network_collector.netbox.sync.interfaces.get_sync_config", return_value=mock_sync_cfg_vlans_enabled):
+            data, mac = InterfacesSyncMixin._build_create_data(sync, 1, intf, site_name="Office")
+
+        assert data["untagged_vlan"] == 100
+        sync._get_vlan_by_vid.assert_called_with(10, "Office")
+
+    def test_create_trunk_port_includes_native_vlan(self, mock_sync_cfg_vlans_enabled):
+        """При создании trunk порта native_vlan включается как untagged_vlan."""
+        from network_collector.netbox.sync.interfaces import InterfacesSyncMixin
+
+        sync = MagicMock(spec=InterfacesSyncMixin)
+        sync.dry_run = False
+        sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
+
+        mock_vlan = MockVLAN(id=10, vid=1, name="Default")
+        sync._get_vlan_by_vid = MagicMock(return_value=mock_vlan)
+
+        intf = MockInterface(
+            name="Gi0/24",
+            mode="tagged",
+            native_vlan="1",
+            tagged_vlans="10,20",
+        )
+
+        with patch("network_collector.netbox.sync.interfaces.get_sync_config", return_value=mock_sync_cfg_vlans_enabled):
+            data, mac = InterfacesSyncMixin._build_create_data(sync, 1, intf, site_name="Office")
+
+        assert data["untagged_vlan"] == 10
+
+    def test_create_trunk_port_includes_tagged_vlans(self, mock_sync_cfg_vlans_enabled):
+        """При создании trunk порта tagged_vlans включаются в данные."""
+        from network_collector.netbox.sync.interfaces import InterfacesSyncMixin
+
+        sync = MagicMock(spec=InterfacesSyncMixin)
+        sync.dry_run = False
+        sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
+
+        def get_vlan(vid, site):
+            return MockVLAN(id=vid * 10, vid=vid)
+
+        sync._get_vlan_by_vid = MagicMock(side_effect=get_vlan)
+
+        intf = MockInterface(
+            name="Gi0/24",
+            mode="tagged",
+            native_vlan="1",
+            tagged_vlans="10,20,30",
+        )
+
+        with patch("network_collector.netbox.sync.interfaces.get_sync_config", return_value=mock_sync_cfg_vlans_enabled):
+            data, mac = InterfacesSyncMixin._build_create_data(sync, 1, intf, site_name="Office")
+
+        assert "tagged_vlans" in data
+        assert data["tagged_vlans"] == [100, 200, 300]
+
+    def test_create_vlan_not_found_skips(self, mock_sync_cfg_vlans_enabled):
+        """Если VLAN не найден в NetBox — не включаем в create data."""
+        from network_collector.netbox.sync.interfaces import InterfacesSyncMixin
+
+        sync = MagicMock(spec=InterfacesSyncMixin)
+        sync.dry_run = False
+        sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
+
+        sync._get_vlan_by_vid = MagicMock(return_value=None)
+
+        intf = MockInterface(
+            name="Gi0/1",
+            mode="access",
+            access_vlan="999",
+        )
+
+        with patch("network_collector.netbox.sync.interfaces.get_sync_config", return_value=mock_sync_cfg_vlans_enabled):
+            data, mac = InterfacesSyncMixin._build_create_data(sync, 1, intf, site_name="Office")
+
+        assert "untagged_vlan" not in data
+
+    def test_create_without_sync_vlans_no_vlan_fields(self):
+        """При sync_vlans=false VLAN поля не включаются в create data."""
+        from network_collector.netbox.sync.interfaces import InterfacesSyncMixin
+
+        sync = MagicMock(spec=InterfacesSyncMixin)
+        sync.dry_run = False
+        sync.client = MagicMock()
+        bind_mixin_methods(sync, InterfacesSyncMixin, INTERFACE_SYNC_METHODS)
+
+        cfg = MagicMock()
+        cfg.is_field_enabled.return_value = True
+        cfg.get_option.side_effect = lambda key, default=None: {
+            "sync_vlans": False,
+            "auto_detect_type": False,
+            "sync_mac_only_with_ip": False,
+        }.get(key, default)
+
+        intf = MockInterface(
+            name="Gi0/1",
+            mode="access",
+            access_vlan="10",
+        )
+
+        with patch("network_collector.netbox.sync.interfaces.get_sync_config", return_value=cfg):
+            data, mac = InterfacesSyncMixin._build_create_data(sync, 1, intf, site_name="Office")
+
+        assert "untagged_vlan" not in data
+        assert "tagged_vlans" not in data

@@ -147,12 +147,18 @@ class MACCollector(BaseCollector):
 
         try:
             with self._conn_manager.connect(device, self.credentials) as conn:
-                hostname = self._conn_manager.get_hostname(conn)
-                device.metadata["hostname"] = hostname
+                hostname = self._init_device_connection(conn, device)
 
                 # Получаем MAC-таблицу
                 mac_response = conn.send_command(command)
                 mac_output = mac_response.result
+
+                # --format parsed: только MAC-таблица, без доп. команд и нормализации
+                if self._skip_normalize:
+                    raw_data = self._parse_raw(mac_output, device)
+                    self._add_metadata_to_rows(raw_data, hostname, device.host)
+                    logger.info(f"{hostname}: собрано {len(raw_data)} MAC-адресов (parsed, без нормализации)")
+                    return raw_data
 
                 # Получаем статус интерфейсов для определения online/offline
                 # Используем "show interfaces status" - компактный вывод, быстрый парсинг
@@ -214,14 +220,8 @@ class MACCollector(BaseCollector):
                 logger.info(f"{hostname}: собрано {len(data)} MAC-адресов")
                 return data
 
-        except (ConnectionError, AuthenticationError, TimeoutError) as e:
-            # Типизированные ошибки подключения
-            logger.error(f"Ошибка подключения к {device.host}: {format_error_for_log(e)}")
-            return []
         except Exception as e:
-            # Неизвестные ошибки
-            logger.error(f"Неизвестная ошибка с {device.host}: {e}")
-            return []
+            return self._handle_collection_error(e, device)
 
     def _parse_raw(
         self,

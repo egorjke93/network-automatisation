@@ -13,6 +13,11 @@
 7. [Проверка вывода](#7-проверка-вывода)
 8. [Пример: добавление QTech](#8-пример-добавление-qtech)
 9. [Отладка проблем](#9-отладка-проблем)
+10. [Рецепт: добавление нового TextFSM шаблона](#10-рецепт-добавление-нового-textfsm-шаблона-пошагово)
+11. [QTech: специфика интерфейсов](#11-qtech-специфика-интерфейсов)
+12. [Добавление нового вендора: полное руководство](#12-добавление-нового-вендора-полное-руководство)
+13. [Inventory: show inventory vs transceiver](#1215-inventory-show-inventory-vs-show-interface-transceiver)
+14. [QTech SVI: проверка VLAN интерфейсов](#1216-qtech-svi-добавление-vlan-интерфейсов)
 
 ---
 
@@ -232,7 +237,7 @@ COLLECTOR_COMMANDS: Dict[str, Dict[str, str]] = {
     # Интерфейсы
     "interfaces": {
         "cisco_ios": "show interfaces",
-        "qtech": "show interfaces",
+        "qtech": "show interface",
     },
     # LLDP
     "lldp": {
@@ -247,9 +252,10 @@ COLLECTOR_COMMANDS: Dict[str, Dict[str, str]] = {
     # Inventory
     "inventory": {
         "cisco_ios": "show inventory",
-        "qtech": "show inventory",
     },
 }
+# Примечание: QTech НЕ поддерживает show inventory.
+# Inventory SFP модулей собирается через SECONDARY_COMMANDS["transceiver"].
 ```
 
 ### 4.2 Как узнать команду для коллектора
@@ -298,8 +304,8 @@ CUSTOM_TEXTFSM_TEMPLATES: Dict[tuple, str] = {
     ("qtech_qsw", "show mac address-table"): "qtech_show_mac_address_table.textfsm",
     ("qtech", "show version"): "qtech_show_version.textfsm",
     ("qtech_qsw", "show version"): "qtech_show_version.textfsm",
-    ("qtech", "show interfaces"): "qtech_show_interface.textfsm",
-    ("qtech_qsw", "show interfaces"): "qtech_show_interface.textfsm",
+    ("qtech", "show interface"): "qtech_show_interface.textfsm",
+    ("qtech_qsw", "show interface"): "qtech_show_interface.textfsm",
     ("qtech", "show lldp neighbors detail"): "qtech_show_lldp_neighbors_detail.textfsm",
     ("qtech_qsw", "show lldp neighbors detail"): "qtech_show_lldp_neighbors_detail.textfsm",
 }
@@ -323,7 +329,8 @@ network_collector/
     ├── qtech_show_interface_status.textfsm
     ├── qtech_show_interface_switchport.textfsm
     ├── qtech_show_interface_transceiver.textfsm
-    └── qtech_show_lldp_neighbors_detail.textfsm
+    ├── qtech_show_lldp_neighbors_detail.textfsm
+    └── qtech_show_aggregatePort_summary.textfsm
 ```
 
 ### 5.4 Структура TextFSM шаблона
@@ -529,10 +536,12 @@ VENDOR_MAP = {"qtech": ["qtech", "qtech_qsw"]}
 ```python
 COLLECTOR_COMMANDS = {
     "mac": {"qtech": "show mac address-table", "qtech_qsw": "show mac address-table"},
-    "interfaces": {"qtech": "show interfaces", "qtech_qsw": "show interfaces"},
+    "interfaces": {"qtech": "show interface", "qtech_qsw": "show interface"},
     "lldp": {"qtech": "show lldp neighbors detail", "qtech_qsw": "show lldp neighbors detail"},
     "devices": {"qtech": "show version", "qtech_qsw": "show version"},
-    "inventory": {"qtech": "show inventory", "qtech_qsw": "show inventory"},
+    # Примечание: QTech НЕ поддерживает show inventory.
+    # Inventory SFP собирается через SECONDARY_COMMANDS["transceiver"]:
+    # "qtech": "show interface transceiver", "qtech_qsw": "show interface transceiver"
 }
 ```
 
@@ -543,8 +552,8 @@ CUSTOM_TEXTFSM_TEMPLATES = {
     ("qtech_qsw", "show mac address-table"): "qtech_show_mac_address_table.textfsm",
     ("qtech", "show version"): "qtech_show_version.textfsm",
     ("qtech_qsw", "show version"): "qtech_show_version.textfsm",
-    ("qtech", "show interfaces"): "qtech_show_interface.textfsm",
-    ("qtech_qsw", "show interfaces"): "qtech_show_interface.textfsm",
+    ("qtech", "show interface"): "qtech_show_interface.textfsm",
+    ("qtech_qsw", "show interface"): "qtech_show_interface.textfsm",
     ("qtech", "show lldp neighbors detail"): "qtech_show_lldp_neighbors_detail.textfsm",
     ("qtech_qsw", "show lldp neighbors detail"): "qtech_show_lldp_neighbors_detail.textfsm",
     # Дополнительные шаблоны
@@ -554,6 +563,9 @@ CUSTOM_TEXTFSM_TEMPLATES = {
     ("qtech_qsw", "show interface switchport"): "qtech_show_interface_switchport.textfsm",
     ("qtech", "show interface transceiver"): "qtech_show_interface_transceiver.textfsm",
     ("qtech_qsw", "show interface transceiver"): "qtech_show_interface_transceiver.textfsm",
+    # LAG (AggregatePort)
+    ("qtech", "show aggregateport summary"): "qtech_show_aggregatePort_summary.textfsm",
+    ("qtech_qsw", "show aggregateport summary"): "qtech_show_aggregatePort_summary.textfsm",
 }
 ```
 
@@ -566,7 +578,8 @@ templates/
 ├── qtech_show_interface_status.textfsm
 ├── qtech_show_interface_switchport.textfsm
 ├── qtech_show_interface_transceiver.textfsm
-└── qtech_show_lldp_neighbors_detail.textfsm
+├── qtech_show_lldp_neighbors_detail.textfsm
+└── qtech_show_aggregatePort_summary.textfsm
 ```
 
 ### 8.2 Проверка QTech
@@ -677,18 +690,961 @@ pytest tests/test_collectors/ -v
 
 ---
 
+## 10. Рецепт: добавление нового TextFSM шаблона (пошагово)
+
+Когда на реальном устройстве появляется новый вывод, который не парсится или парсится
+неправильно — нужно добавить/обновить TextFSM шаблон. Вот универсальный рецепт.
+
+### 10.1 Когда нужен новый шаблон
+
+- NTC Templates не имеет шаблона для вашей платформы/команды (QTech, Eltex и т.д.)
+- NTC шаблон парсит неправильно (формат вывода отличается от Cisco)
+- Появился новый вывод, который раньше не встречался (например, тегированные VLAN)
+- Формат данных изменился с новой прошивкой
+
+### 10.2 Шаг 1: Сохранить сырой вывод с устройства
+
+```bash
+# Получить сырой текст (run --format raw)
+python -m network_collector run "show interface switchport" --format raw > raw_switchport.txt
+
+# Или скопировать вывод из SSH-сессии вручную
+```
+
+### 10.3 Шаг 2: Создать фикстуру для тестов
+
+Сохранить реальный вывод в `tests/fixtures/<platform>/`:
+
+```bash
+cp raw_switchport.txt tests/fixtures/qtech/show_interface_switchport.txt
+```
+
+**Важно:** Фикстура — это точная копия вывода с устройства. Она гарантирует,
+что шаблон будет работать с реальными данными.
+
+### 10.4 Шаг 3: Написать TextFSM шаблон
+
+Создать файл в `templates/`:
+
+```textfsm
+# templates/qtech_show_interface_switchport.textfsm
+
+# 1. Объявить поля (Value)
+Value Required INTERFACE (\S+\s+\d+(?:/\d+)?)
+Value SWITCHPORT (enabled|disabled)
+Value MODE (ACCESS|TRUNK|HYBRID)
+Value ACCESS_VLAN (\d+)
+Value NATIVE_VLAN (\d+)
+Value PROTECTED (Enabled|Disabled)
+Value VLAN_LISTS (\S+)
+
+# 2. Правила парсинга
+Start
+  # Пропустить заголовок и разделитель
+  ^Interface\s+Switchport -> Continue
+  ^-+ -> Continue
+  # Основная строка: все поля заполнены (enabled)
+  ^${INTERFACE}\s+${SWITCHPORT}\s+${MODE}\s+${ACCESS_VLAN}\s+${NATIVE_VLAN}\s+${PROTECTED}\s+${VLAN_LISTS} -> Record
+  # Строка disabled: только INTERFACE, SWITCHPORT и PROTECTED
+  ^${INTERFACE}\s+${SWITCHPORT}\s+${PROTECTED}\s*$$ -> Record
+```
+
+**Основные правила TextFSM:**
+- `Value Required FIELD (regex)` — обязательное поле, запись без него не создаётся
+- `Value List FIELD (regex)` — поле-список (для множественных значений)
+- `-> Record` — сохранить текущую запись и начать новую
+- `-> Continue` — продолжить обработку строки (не переходить к следующей)
+- `$$` — конец строки (экранированный `$` в TextFSM)
+- `\s+` — один или более пробелов
+- `\S+` — один или более непробельных символов
+
+### 10.5 Шаг 4: Протестировать шаблон на фикстуре
+
+```python
+import textfsm
+from pathlib import Path
+
+template_path = Path("templates/qtech_show_interface_switchport.textfsm")
+fixture_path = Path("tests/fixtures/qtech/show_interface_switchport.txt")
+
+with open(template_path) as f:
+    tpl = textfsm.TextFSM(f)
+
+with open(fixture_path) as f:
+    output = f.read()
+
+result = tpl.ParseText(output)
+headers = tpl.header
+
+print(f"Распарсено записей: {len(result)}")
+for row in result[:5]:
+    print(dict(zip(headers, row)))
+```
+
+### 10.6 Шаг 5: Зарегистрировать шаблон
+
+Добавить в `core/constants/commands.py` → `CUSTOM_TEXTFSM_TEMPLATES`:
+
+```python
+CUSTOM_TEXTFSM_TEMPLATES = {
+    ...
+    # Ключ: (платформа lowercase, команда lowercase)
+    ("qtech", "show interface switchport"): "qtech_show_interface_switchport.textfsm",
+    ("qtech_qsw", "show interface switchport"): "qtech_show_interface_switchport.textfsm",
+}
+```
+
+**Важно:** Команда в ключе должна быть в **lowercase**. NTCParser автоматически
+приводит команду к lowercase при поиске шаблона.
+
+### 10.7 Шаг 6: Написать тесты
+
+```python
+# tests/test_qtech_templates.py
+
+class TestQtechShowInterfaceSwitchport:
+    def test_parse_switchport(self):
+        result = parse_with_template(
+            "qtech_show_interface_switchport.textfsm",
+            "show_interface_switchport.txt"
+        )
+        assert len(result) > 0
+
+        intf = result[0]
+        assert "INTERFACE" in intf
+        assert "MODE" in intf
+        assert intf["MODE"] in ["ACCESS", "TRUNK", "HYBRID"]
+```
+
+### 10.8 Шаг 7: Проверить что парсер подхватывает шаблон
+
+```bash
+# 1. Проверить регистрацию
+python -c "
+from network_collector.core.constants import CUSTOM_TEXTFSM_TEMPLATES
+key = ('qtech', 'show interface switchport')
+print(CUSTOM_TEXTFSM_TEMPLATES.get(key, 'НЕ ЗАРЕГИСТРИРОВАН!'))
+"
+
+# 2. Проверить парсинг через NTCParser
+python -c "
+from network_collector.parsers.textfsm_parser import NTCParser
+parser = NTCParser()
+with open('tests/fixtures/qtech/show_interface_switchport.txt') as f:
+    output = f.read()
+result = parser.parse(output, 'qtech', 'show interface switchport')
+print(f'Записей: {len(result)}')
+for r in result[:3]:
+    print(r)
+"
+```
+
+### 10.9 Пример: добавление тегированных VLAN для QTech
+
+Допустим, вы увидели на QTech вывод с тегированными VLAN:
+
+```
+Interface                        Switchport Mode   Access Native Protected VLAN lists
+-------------------------------- ---------- ------ ------ ------ --------- ----------
+TFGigabitEthernet 0/1            enabled    TRUNK  1      1      Disabled  10,20,30
+AggregatePort 1                  enabled    TRUNK  1      1      Disabled  ALL
+AggregatePort 10                 enabled    HYBRID 40     40     Disabled  10,20,30,40
+```
+
+**Что делать:**
+
+1. Шаблон уже парсит VLAN_LISTS как `(\S+)` — значение `10,20,30` будет захвачено.
+   Если VLAN на нескольких строках (перенос), нужен `Value List`.
+
+2. Нормализация в `collectors/interfaces.py` → `_normalize_switchport_data()`:
+   - `MODE=TRUNK` + `VLAN_LISTS=ALL` → `mode="tagged-all"`, `vlans=[]`
+   - `MODE=TRUNK` + `VLAN_LISTS=10,20,30` → `mode="tagged"`, `vlans=[10,20,30]`
+   - `MODE=HYBRID` + `VLAN_LISTS=10,20,30,40` → `mode="tagged"`, `vlans=[10,20,30,40]`
+   - `MODE=ACCESS` → `mode="access"`, `vlans=[access_vlan]`
+
+3. Если формат VLAN отличается (например, через дефис `10-30`):
+   Обновить `_normalize_switchport_data()` — добавить распарсивание диапазонов.
+
+4. Если VLAN на нескольких строках, обновить TextFSM шаблон:
+   ```textfsm
+   Value List VLAN_LISTS (\S+)
+
+   Start
+     ^${INTERFACE}\s+${SWITCHPORT}\s+${MODE}\s+... -> Continue
+     ^\s+${VLAN_LISTS} -> Continue
+   ```
+
+### 10.10 Цепочка данных: от TextFSM до NetBox
+
+```
+TextFSM шаблон парсит сырой текст
+     ↓
+NTCParser.parse() → список dict с полями шаблона
+     ↓
+_normalize_switchport_data() → единый формат {interface, mode, vlans}
+     ↓
+_add_switchport_aliases() → добавляет алиасы имён интерфейсов
+     ↓
+enrich_with_switchport() (Domain Layer) → обогащает интерфейс
+     ↓
+NetBox sync → mode, tagged_vlans, untagged_vlan
+```
+
+Ключевой принцип: **TextFSM шаблон только парсит текст в структурированные данные**.
+Вся логика нормализации, конвертации и обогащения — в Domain Layer и коллекторе.
+
+---
+
+## 11. QTech: специфика интерфейсов
+
+### 11.1 Типы интерфейсов QTech
+
+| Полное имя | Сокращение | Скорость | NetBox type | Примечание |
+|------------|-----------|----------|-------------|-----------|
+| TFGigabitEthernet 0/1 | TF0/1 | 10G | 10gbase-x-sfpp | SFP+ порты |
+| HundredGigabitEthernet 0/55 | Hu0/55 | 100G | 100gbase-x-qsfp28 | QSFP28 аплинки |
+| AggregatePort 1 | Ag1 | — | lag | LAG (аналог Port-channel) |
+
+**Важно:** QTech использует пробел между типом и номером: `TFGigabitEthernet 0/1`,
+а не `TFGigabitEthernet0/1`. Это отличие от Cisco, где пробела нет.
+
+### 11.2 Маппинг имён (`core/constants/interfaces.py`)
+
+```python
+# Сокращение → полное
+INTERFACE_SHORT_MAP = [
+    ("tfgigabitethernet", "TF"),   # QTech 10G
+    ("aggregateport", "Ag"),       # QTech LAG
+    ("hundredgigabitethernet", "Hu"),
+    ...
+]
+
+# Полное → сокращение
+INTERFACE_FULL_MAP = {
+    "TF": "TFGigabitEthernet",
+    "Ag": "AggregatePort",
+    "Hu": "HundredGigE",
+    ...
+}
+```
+
+### 11.3 LAG парсинг для QTech
+
+QTech использует `show aggregatePort summary` (вместо `show etherchannel summary`):
+
+```
+AggregatePort MaxPorts SwitchPort Mode   Load balance   Ports
+------------- -------- ---------- ------ -------------- -----------
+Ag1           16       Enabled    TRUNK  src-dst-mac    Hu0/55  ,Hu0/56
+Ag10          16       Enabled    ACCESS src-dst-mac    TF0/1
+```
+
+Парсится через TextFSM шаблон `qtech_show_aggregatePort_summary.textfsm` →
+`_parse_lag_membership_qtech()` создаёт маппинг member → LAG:
+
+```python
+{
+    "Hu0/55": "Ag1",
+    "HundredGigabitEthernet 0/55": "Ag1",   # Полное имя с пробелом
+    "HundredGigE0/55": "Ag1",               # Полное имя без пробела
+    "Hu0/56": "Ag1",
+    "TF0/1": "Ag10",
+    "TFGigabitEthernet 0/1": "Ag10",
+}
+```
+
+### 11.4 Switchport парсинг для QTech
+
+QTech выводит switchport в табличном формате (отличается от Cisco):
+
+```
+# QTech (табличный)
+Interface                        Switchport Mode   Access Native Protected VLAN lists
+TFGigabitEthernet 0/3            enabled    ACCESS 1      1      Disabled  ALL
+
+# Cisco (блочный, через NTC Templates)
+Name: Gi0/1
+Switchport: Enabled
+Administrative Mode: trunk
+Operational Mode: trunk
+Administrative Trunking Encapsulation: dot1q
+Access Mode VLAN: 1
+Trunking Native Mode VLAN: 1
+Trunking VLANs Enabled: 10,20,30
+```
+
+Универсальная функция `_normalize_switchport_data()` обрабатывает оба формата
+автоматически, определяя формат по наличию характерных полей.
+
+---
+
+## 12. Добавление нового вендора: полное руководство
+
+Пошаговая инструкция на примере условного **Eltex MES** — что доработать, где, и какой код
+написать. Все примеры из реального проекта (QTech, Cisco).
+
+### 12.1 Оценка сложности: 3 уровня
+
+Перед началом определите, насколько устройство похоже на Cisco:
+
+| Уровень | Описание | Примеры | Объём работ |
+|---------|----------|---------|-------------|
+| **Cisco-like** | CLI и формат вывода почти как Cisco IOS | Eltex MES (IOS-like) | Только маппинги, шаблоны NTC работают |
+| **Частично уникальный** | Команды те же, но формат вывода отличается | QTech QSW-6900 | + кастомные TextFSM шаблоны + парсинг LAG/switchport |
+| **Полностью уникальный** | Другой CLI, другие команды | Juniper JunOS, Huawei VRP | + свои команды + свои парсеры + своя нормализация |
+
+### 12.2 Шаг 1: Маппинги платформ
+
+**Файл:** `core/constants/platforms.py`
+
+Добавить новую платформу во **все 4 маппинга**:
+
+```python
+# 1. SSH драйвер (Scrapli)
+# Какой SSH драйвер использовать для подключения?
+SCRAPLI_PLATFORM_MAP = {
+    ...
+    "eltex": "cisco_iosxe",       # Eltex CLI как Cisco IOS
+    "eltex_mes": "cisco_iosxe",   # Вариант с подтипом
+}
+
+# 2. NTC Templates (парсер по умолчанию)
+# Если нет кастомного шаблона — какой NTC парсер использовать?
+NTC_PLATFORM_MAP = {
+    ...
+    "eltex": "cisco_ios",         # Fallback: NTC Templates для cisco_ios
+    "eltex_mes": "cisco_ios",
+}
+
+# 3. Netmiko (для отправки конфигурации)
+NETMIKO_PLATFORM_MAP = {
+    ...
+    "eltex": "cisco_ios",
+    "eltex_mes": "cisco_ios",
+}
+
+# 4. Определение производителя (для inventory, логов)
+VENDOR_MAP = {
+    ...
+    "eltex": ["eltex", "eltex_mes"],  # Уже существует!
+}
+```
+
+**Также:** `NETBOX_TO_SCRAPLI_PLATFORM` — для импорта устройств из NetBox:
+
+```python
+NETBOX_TO_SCRAPLI_PLATFORM = {
+    ...
+    "eltex": "cisco_ios",
+    "eltex-mes": "cisco_ios",       # NetBox slug с дефисом
+    "eltex_mes": "cisco_ios",       # С underscore
+}
+```
+
+> **Вопрос:** Как выбрать SSH драйвер?
+> - Если CLI как Cisco IOS (prompt `Switch#`, `enable`, `show`) → `cisco_iosxe`
+> - Если CLI как Juniper (`>`, `cli`, `show`) → `juniper_junos`
+> - Если CLI как Arista (`Switch#`, `enable`, `show`) → `arista_eos`
+
+### 12.3 Шаг 2: Команды сбора данных
+
+**Файл:** `core/constants/commands.py`
+
+Добавить команды для каждого коллектора:
+
+```python
+COLLECTOR_COMMANDS = {
+    # Какая команда для MAC-адресов?
+    "mac": {
+        ...
+        "eltex": "show mac address-table",       # Как Cisco
+        "eltex_mes": "show mac address-table",
+    },
+    # Какая команда для интерфейсов?
+    "interfaces": {
+        ...
+        "eltex": "show interfaces",              # show interfaces (с 's')? или show interface?
+        "eltex_mes": "show interfaces",
+    },
+    # LLDP
+    "lldp": {
+        ...
+        "eltex": "show lldp neighbors detail",
+        "eltex_mes": "show lldp neighbors detail",
+    },
+    # CDP
+    "cdp": {
+        ...
+        "eltex": "show cdp neighbors detail",
+        "eltex_mes": "show cdp neighbors detail",
+    },
+    # Devices (show version)
+    "devices": {
+        ...
+        "eltex": "show version",
+        "eltex_mes": "show version",
+    },
+    # Inventory
+    "inventory": {
+        ...
+        "eltex": "show inventory",
+        "eltex_mes": "show inventory",
+    },
+}
+```
+
+> **Как узнать команду?** Подключиться к устройству по SSH и попробовать стандартные Cisco-команды.
+> Если формат вывода совпадает — NTC шаблон подхватит автоматически.
+
+### 12.4 Шаг 3: Проверить — нужны ли кастомные TextFSM шаблоны
+
+Запустить сбор данных с `--format parsed` и проверить результат:
+
+```bash
+# 1. Сохранить сырой вывод
+python -m network_collector run "show version" --format raw > raw_version.txt
+
+# 2. Попробовать парсинг (fallback на NTC cisco_ios)
+python -m network_collector devices --format parsed
+
+# 3. Если результат пустой или неправильный — нужен кастомный шаблон
+```
+
+**Когда кастомный шаблон НЕ нужен:**
+- Вывод команды идентичен Cisco IOS → NTC Templates парсит корректно
+
+**Когда кастомный шаблон НУЖЕН:**
+- Вывод отличается (другой формат таблицы, другие поля, другие заголовки)
+- NTC Templates не имеет шаблона для этой команды
+- Пример: QTech `show interface` — формат почти как Cisco, но `Interface address is:` вместо `Internet address is`
+
+Если нужен — см. [раздел 10](#10-рецепт-добавление-нового-textfsm-шаблона-пошагово).
+
+### 12.5 Шаг 4: Дополнительные команды интерфейсного коллектора
+
+**Файл:** `core/constants/commands.py` → `SECONDARY_COMMANDS`
+
+Интерфейсный коллектор помимо основной команды (`show interfaces`) выполняет
+**дополнительные** команды из `SECONDARY_COMMANDS`. Каждую нужно добавить, если платформа поддерживает:
+
+#### 4a. Interface Status (обязательно)
+
+Дополнительные команды интерфейсного коллектора централизованы в `core/constants/commands.py` → `SECONDARY_COMMANDS`.
+
+> **Примечание:** В проекте НЕТ отдельных переменных `interface_status_commands`, `lag_commands`, `switchport_commands`.
+> Все дополнительные команды хранятся в `SECONDARY_COMMANDS` с группами:
+> `"interface_errors"`, `"media_type"`, `"lag"`, `"switchport"`, `"transceiver"`, `"lldp_summary"`.
+
+Interface status (speed, duplex, link status) пока не вынесен в SECONDARY_COMMANDS для всех платформ.
+Если нужно добавить — создать группу или использовать существующую.
+
+Если не добавить — интерфейсы будут без speed и link status.
+
+#### 4b. LAG Membership (если есть LAG)
+
+```python
+# core/constants/commands.py → SECONDARY_COMMANDS["lag"]
+# Связь physical port → LAG group
+SECONDARY_COMMANDS["lag"] = {
+    "cisco_ios": "show etherchannel summary",   # Cisco: Port-channel
+    "cisco_nxos": "show port-channel summary",
+    "arista_eos": "show port-channel summary",
+    "qtech": "show aggregatePort summary",      # QTech: AggregatePort
+    "eltex": "show etherchannel summary",        # ← Eltex: как Cisco?
+    "eltex_mes": "show etherchannel summary",
+}
+```
+
+> **Если формат вывода как у Cisco** — парсинг через NTC Templates работает автоматически.
+> **Если формат уникальный** (как QTech) — нужен кастомный шаблон + парсер `_parse_lag_membership_<vendor>()`.
+
+Пример из QTech — кастомный парсер:
+
+```python
+# collectors/interfaces.py
+def _parse_lag_membership_qtech(self, output: str) -> Dict[str, str]:
+    """Парсинг LAG membership из show aggregatePort summary (QTech)."""
+    parsed = self._parser.parse(
+        output=output,
+        platform="qtech",
+        command="show aggregateport summary",
+    )
+    membership = {}
+    for entry in parsed:
+        lag_name = entry.get("AGGREGATE_PORT", "")
+        members = entry.get("MEMBER_PORTS", [])
+        if isinstance(members, str):
+            members = [m.strip() for m in members.split(",") if m.strip()]
+        for member in members:
+            # Добавить все алиасы имени (короткий, полный, с пробелом)
+            self._add_lag_member_aliases(membership, member, lag_name)
+    return membership
+```
+
+#### 4c. Switchport Modes (для VLAN)
+
+```python
+# core/constants/commands.py → SECONDARY_COMMANDS["switchport"]
+SECONDARY_COMMANDS["switchport"] = {
+    "cisco_ios": "show interfaces switchport",  # Cisco: с 's'
+    "cisco_nxos": "show interface switchport",  # NX-OS: без 's'
+    "arista_eos": "show interfaces switchport",
+    "qtech": "show interface switchport",       # QTech: без 's'
+    "eltex": "show interfaces switchport",      # ← Eltex
+    "eltex_mes": "show interfaces switchport",
+}
+```
+
+Нормализация switchport данных — **универсальная** (`_normalize_switchport_data()`),
+поддерживает два формата:
+
+```python
+# Cisco NTC формат (блочный):
+{"admin_mode": "trunk", "trunking_vlans": "10,20,30"}
+
+# QTech формат (табличный):
+{"MODE": "TRUNK", "VLAN_LISTS": "ALL"}
+```
+
+Если ваш вендор возвращает один из этих форматов — работает автоматически.
+Если другой формат — добавить условие в `_normalize_switchport_data()`.
+
+#### 4d. Media Type / Transceiver (опционально)
+
+```python
+# core/constants/commands.py → SECONDARY_COMMANDS["media_type"]
+# Для точного определения типа SFP модуля
+SECONDARY_COMMANDS["media_type"] = {
+    "cisco_nxos": "show interface status",  # NX-OS: media_type в interface status
+    # Для других платформ: show interface transceiver / show inventory
+}
+```
+
+Если не добавить — тип порта определяется по имени интерфейса (fallback):
+- `GigabitEthernet` → `1000base-t`
+- `TenGigabitEthernet` → `10gbase-x-sfpp`
+
+### 12.6 Шаг 5: Имена интерфейсов
+
+**Файл:** `core/constants/interfaces.py`
+
+Если вендор использует **нестандартные имена** интерфейсов — добавить в маппинги:
+
+```python
+# 1. Полное → короткое (для нормализации)
+# Порядок важен! Длинные имена ПЕРВЫМИ
+INTERFACE_SHORT_MAP = [
+    ...
+    ("tfgigabitethernet", "TF"),  # QTech 10G: TFGigabitEthernet 0/1 → TF0/1
+    ("aggregateport", "Ag"),      # QTech LAG: AggregatePort 1 → Ag1
+    # Eltex пример (если есть уникальные имена):
+    # ("extremeethernet", "Xe"),  # Eltex Extreme: ExtremeEthernet 0/1 → Xe0/1
+]
+
+# 2. Короткое → полное (для обратной нормализации)
+INTERFACE_FULL_MAP = {
+    ...
+    "TF": "TFGigabitEthernet",
+    "Ag": "AggregatePort",
+    # "Xe": "ExtremeEthernet",  # Eltex пример
+}
+```
+
+**Если Eltex использует стандартные Cisco имена** (GigabitEthernet, TenGigabitEthernet,
+Port-channel) — ничего добавлять не нужно, маппинги уже есть.
+
+### 12.7 Шаг 6: Определение типа порта для NetBox
+
+Если вендор имеет **уникальные имена интерфейсов**, нужно добавить логику в 2 функции:
+
+#### 6a. `detect_port_type()` — Domain Layer
+
+**Файл:** `core/domain/interface.py`
+
+```python
+def detect_port_type(self, row, iface_lower):
+    # LAG
+    if iface_lower.startswith(("port-channel", "po", "aggregateport")):
+        return "lag"
+    # QTech: Ag1 (короткое имя)
+    if len(iface_lower) >= 3 and iface_lower[:2] == "ag" and iface_lower[2].isdigit():
+        return "lag"
+
+    # Eltex пример: если LAG называется "Trunk-group 1"
+    # if iface_lower.startswith("trunk-group"):
+    #     return "lag"
+
+    # По имени интерфейса (fallback)
+    # TFGigabitEthernet → 10g-sfp+ (QTech)
+    if iface_lower.startswith("tfgigabitethernet"):
+        return "10g-sfp+"
+    if len(iface_lower) >= 3 and iface_lower[:2] == "tf" and iface_lower[2].isdigit():
+        return "10g-sfp+"
+```
+
+#### 6b. `get_netbox_interface_type()` — NetBox Layer
+
+**Файл:** `core/constants/netbox.py`
+
+```python
+def get_netbox_interface_type(name, speed=None, media_type=None, ...):
+    name_lower = name.lower()
+
+    # LAG
+    if name_lower.startswith(("port-channel", "po", "aggregateport")) or port_type == "lag":
+        return "lag"
+
+    # QTech TFGigabitEthernet = 10G SFP+
+    if name_lower.startswith("tfgigabitethernet") or (
+        len(name_lower) >= 3 and name_lower[:2] == "tf" and name_lower[2].isdigit()
+    ):
+        return "10gbase-x-sfpp"
+
+    # Eltex пример: если есть свой тип интерфейса
+    # if name_lower.startswith("extremeethernet"):
+    #     return "10gbase-x-sfpp"
+```
+
+**Если Eltex использует стандартные имена** — ничего добавлять не нужно.
+
+### 12.8 Шаг 7: Алиасы интерфейсов для LAG matching
+
+**Файл:** `core/constants/interfaces.py` → `get_interface_aliases()`
+
+Когда LAG парсер возвращает `"TF0/1"`, а основной список интерфейсов содержит
+`"TFGigabitEthernet 0/1"` — нужно сопоставить. Функция `get_interface_aliases()` генерирует
+все варианты имени:
+
+```python
+get_interface_aliases("TF0/1")
+# → ["TF0/1", "TFGigabitEthernet0/1"]
+
+get_interface_aliases("Hu0/55")
+# → ["Hu0/55", "HundredGigE0/55", "HundredGigabitEthernet0/55"]
+```
+
+Если ваш вендор использует уникальные сокращения, добавьте в `SHORT_TO_EXTRA`:
+
+```python
+# core/constants/interfaces.py
+SHORT_TO_EXTRA = {
+    "gi": ["Gig"],              # Gi → Gig (CDP формат)
+    "te": ["Ten"],              # Te → Ten
+    "hu": ["HundredGigabitEthernet"],  # Hu → HundredGigabitEthernet (QTech LLDP)
+    "eth": ["Et"],
+    "et": ["Eth"],
+    # "xe": ["ExtremeEthernet"],  # Eltex пример
+}
+```
+
+### 12.9 Шаг 8: Фикстуры и тесты
+
+#### 8a. Создать фикстуры из реального вывода
+
+```bash
+# Сохранить вывод с устройства
+tests/fixtures/eltex/
+├── show_version.txt                    # python -m network_collector run "show version" --format raw
+├── show_interfaces.txt                 # python -m network_collector run "show interfaces" --format raw
+├── show_interfaces_status.txt
+├── show_interfaces_switchport.txt
+├── show_mac_address_table.txt
+├── show_lldp_neighbors_detail.txt
+├── show_etherchannel_summary.txt       # LAG (если есть)
+└── show_inventory.txt
+```
+
+#### 8b. Тесты TextFSM шаблонов
+
+```python
+# tests/test_eltex_templates.py
+import textfsm
+from pathlib import Path
+
+TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "eltex"
+
+def parse_with_template(template_name, fixture_name):
+    """Парсит фикстуру через TextFSM шаблон."""
+    with open(TEMPLATE_DIR / template_name) as t, open(FIXTURE_DIR / fixture_name) as f:
+        tpl = textfsm.TextFSM(t)
+        result = tpl.ParseText(f.read())
+        return [dict(zip(tpl.header, row)) for row in result]
+
+class TestEltexShowVersion:
+    def test_parse_version(self):
+        result = parse_with_template("eltex_show_version.textfsm", "show_version.txt")
+        assert len(result) > 0
+        assert "HOSTNAME" in result[0] or "VERSION" in result[0]
+```
+
+#### 8c. Тесты типов интерфейсов
+
+```python
+# tests/test_eltex_support.py
+from network_collector.core.domain.interface import InterfaceNormalizer
+from network_collector.core.constants.netbox import get_netbox_interface_type
+from network_collector.core.constants.interfaces import (
+    normalize_interface_short, normalize_interface_full,
+)
+
+class TestEltexInterfaceTypes:
+    def test_detect_lag(self):
+        normalizer = InterfaceNormalizer()
+        # Если у Eltex LAG называется Port-channel (как Cisco)
+        assert normalizer.detect_port_type({}, "port-channel1") == "lag"
+
+    def test_netbox_type(self):
+        assert get_netbox_interface_type("GigabitEthernet0/1") == "1000base-t"
+```
+
+### 12.10 Шаг 9: Inventory и IP адреса
+
+#### Inventory
+
+Команда `show inventory` обычно стандартная:
+```
+NAME: "1", DESCR: "MES2428 AC 28-port", PID: MES2428, VID: V01, SN: NQ12345678
+```
+
+Если формат как у Cisco — **работает через NTC fallback**, ничего не нужно.
+Если формат другой — кастомный TextFSM шаблон + регистрация.
+
+Manufacturer detection (`core/domain/inventory.py`):
+
+```python
+# Если PID устройства содержит "MES" или "Eltex" — автоматически определится?
+# Нет! Нужно добавить паттерн:
+MANUFACTURER_PATTERNS = {
+    "Cisco": [...],
+    "Eltex": ["MES", "ESR"],  # ← Добавить
+}
+```
+
+#### IP адреса
+
+IP адреса извлекаются из `show interfaces` → поле `ip_address`.
+Regex Cisco формат: `Internet address is 10.0.0.1/24`.
+
+Если ваш формат отличается — нужно обновить regex или TextFSM шаблон.
+
+> **Примечание:** QTech physical порты не имеют IP (`Interface address is: no ip address`).
+> IP только на VLAN SVI в `show running-config`. Для полной поддержки IP нужна
+> отдельная команда (`show ip interface`) + парсер.
+
+### 12.11 Шаг 10: Проверка на реальном устройстве
+
+```bash
+# 1. Добавить устройство в devices_ips.py
+devices_list = [
+    {"host": "10.0.0.1", "platform": "eltex", "device_type": "MES2428"},
+]
+
+# 2. Проверить подключение
+python -m network_collector run "show version" --format raw
+
+# 3. Проверить каждый коллектор поочерёдно
+python -m network_collector devices --format parsed     # → hostname, model, serial
+python -m network_collector interfaces --format parsed  # → интерфейсы
+python -m network_collector mac --format parsed         # → MAC таблица
+python -m network_collector lldp --format parsed        # → LLDP соседи
+python -m network_collector inventory --format parsed   # → компоненты
+
+# 4. Проверить обогащённые данные
+python -m network_collector interfaces --format raw | jq '.[0]'
+# Должны быть: port_type, nb_type, mode, lag (если есть)
+
+# 5. Проверить sync в dry-run
+python -m network_collector sync-netbox --interfaces --dry-run
+python -m network_collector sync-netbox --sync-all --dry-run
+```
+
+### 12.12 Сводная таблица: что менять по коллекторам
+
+| Коллектор | Файл команд | Доп. команды (SECONDARY_COMMANDS) | Нормализация | TextFSM |
+|-----------|-------------|-----------------------------------|-------------|---------|
+| **devices** | `COLLECTOR_COMMANDS["devices"]` | — | Автоматическая | Если формат ≠ Cisco |
+| **interfaces** | `COLLECTOR_COMMANDS["interfaces"]` | — | `detect_port_type()`, `get_netbox_interface_type()` | Если формат ≠ Cisco |
+| **mac** | `COLLECTOR_COMMANDS["mac"]` | — | Автоматическая (MAC format) | Если формат ≠ Cisco |
+| **lldp** | `COLLECTOR_COMMANDS["lldp"]` | — | Автоматическая | Если формат ≠ Cisco |
+| **inventory** | `COLLECTOR_COMMANDS["inventory"]` + `SECONDARY_COMMANDS["transceiver"]` | — | Manufacturer detection | Если формат ≠ Cisco |
+| **LAG** | — | `SECONDARY_COMMANDS["lag"]` | `_parse_lag_membership()` | Если формат ≠ Cisco |
+| **switchport** | — | `SECONDARY_COMMANDS["switchport"]` | `_normalize_switchport_data()` | Если формат ≠ Cisco |
+| **media_type** | — | `SECONDARY_COMMANDS["media_type"]` | Автоматическая | Если формат ≠ NX-OS |
+| **IP** | Из `show interfaces` | — | Regex | Если формат ≠ Cisco |
+
+### 12.13 Минимальный набор для Cisco-like вендора
+
+Если устройство полностью Cisco-like (как Eltex MES на базе IOS), достаточно:
+
+```python
+# core/constants/platforms.py (4 маппинга)
+SCRAPLI_PLATFORM_MAP["eltex"] = "cisco_iosxe"
+NTC_PLATFORM_MAP["eltex"] = "cisco_ios"
+NETMIKO_PLATFORM_MAP["eltex"] = "cisco_ios"
+VENDOR_MAP["eltex"] = ["eltex", "eltex_mes"]
+
+# core/constants/commands.py (6 команд)
+COLLECTOR_COMMANDS["mac"]["eltex"] = "show mac address-table"
+COLLECTOR_COMMANDS["interfaces"]["eltex"] = "show interfaces"
+COLLECTOR_COMMANDS["lldp"]["eltex"] = "show lldp neighbors detail"
+COLLECTOR_COMMANDS["cdp"]["eltex"] = "show cdp neighbors detail"
+COLLECTOR_COMMANDS["devices"]["eltex"] = "show version"
+COLLECTOR_COMMANDS["inventory"]["eltex"] = "show inventory"
+
+# core/constants/commands.py → SECONDARY_COMMANDS (3 доп. команды)
+SECONDARY_COMMANDS["lag"]["eltex"] = "show etherchannel summary"
+SECONDARY_COMMANDS["switchport"]["eltex"] = "show interfaces switchport"
+```
+
+**Итого:** ~12 строк конфигурации. Без единого кастомного шаблона или парсера.
+Всё остальное работает через NTC Templates fallback на `cisco_ios`.
+
+### 12.14 Максимальный набор для уникального вендора (на примере QTech)
+
+Что потребовалось для QTech QSW-6900:
+
+```
+Файлы:
+  core/constants/platforms.py     — 4 маппинга (SCRAPLI, NTC, NETMIKO, VENDOR)
+  core/constants/commands.py      — 6 команд + 8 пар регистрации шаблонов
+  core/constants/interfaces.py    — 2 записи SHORT_MAP + 2 записи FULL_MAP + SHORT_TO_EXTRA
+  core/constants/netbox.py        — AggregatePort→lag, TFGigabitEthernet→10G
+  core/domain/interface.py        — detect_port_type() для Ag/TF
+  core/constants/commands.py      — SECONDARY_COMMANDS["lag"] + SECONDARY_COMMANDS["switchport"]
+  collectors/interfaces.py        — _parse_lag_membership_qtech()
+
+TextFSM шаблоны (8 файлов):
+  qtech_show_version.textfsm
+  qtech_show_interface.textfsm
+  qtech_show_interface_status.textfsm
+  qtech_show_interface_switchport.textfsm
+  qtech_show_interface_transceiver.textfsm
+  qtech_show_lldp_neighbors_detail.textfsm
+  qtech_show_mac_address_table.textfsm
+  qtech_show_aggregatePort_summary.textfsm
+
+Тесты:
+  tests/test_qtech_templates.py   — тесты всех шаблонов на фикстурах
+  tests/test_qtech_support.py     — тесты типов, маппингов, LAG парсинга
+
+Фикстуры (9 файлов в tests/fixtures/qtech/)
+```
+
+### 12.15 Inventory: show inventory vs show interface transceiver
+
+Не все вендоры поддерживают `show inventory`. Есть два источника данных:
+
+| Источник | Платформы | Что даёт |
+|----------|-----------|----------|
+| `show inventory` | Cisco IOS/NX-OS, Arista | Chassis, PSU, линейные карты + SFP |
+| `show interface transceiver` | Cisco NX-OS, QTech | Только SFP модули (тип, серийник) |
+
+**QTech:** Команда `show inventory` **не существует**. Inventory SFP модулей собирается
+только через `show interface transceiver`:
+
+```python
+# core/constants/commands.py → SECONDARY_COMMANDS["transceiver"]
+SECONDARY_COMMANDS["transceiver"] = {
+    "cisco_nxos": "show interface transceiver",
+    "qtech": "show interface transceiver",
+    "qtech_qsw": "show interface transceiver",
+}
+```
+
+Если у нового вендора нет `show inventory` — добавьте его в `SECONDARY_COMMANDS["transceiver"]`.
+Inventory collector автоматически пропустит шаг `show inventory` и соберёт только трансиверы.
+
+### 12.16 QTech SVI: добавление VLAN интерфейсов
+
+QTech поддерживает VLAN SVI (Switch Virtual Interface) — виртуальные L3 интерфейсы:
+
+```
+# Пример из show interface (QTech)
+Vlan 1 is up, line protocol is up
+  Interface address is: 10.0.0.3/24
+```
+
+Если `show interface` на QTech в проде показывает VLAN SVI с IP — они должны
+парситься автоматически (шаблон `qtech_show_interface.textfsm` уже поддерживает).
+
+**Как проверить:**
+
+```bash
+# 1. Снять вывод с устройства
+python -m network_collector run "show interface" --format raw > raw_intf.txt
+
+# 2. Проверить есть ли Vlan интерфейсы в выводе
+grep -i "^Vlan" raw_intf.txt
+
+# 3. Проверить парсинг
+python -m network_collector interfaces --format parsed | jq '.[] | select(.interface | startswith("Vlan"))'
+
+# 4. Если Vlan парсится — проверить sync в dry-run
+python -m network_collector sync-netbox --interfaces --dry-run
+
+# 5. Если Vlan НЕ парсится — сохранить вывод как фикстуру и обновить шаблон
+cp raw_intf.txt tests/fixtures/qtech/show_interface_with_svi.txt
+```
+
+**Что проверить в NetBox:**
+
+```bash
+# Dry-run покажет какие интерфейсы будут созданы
+python -m network_collector sync-netbox --interfaces --dry-run 2>&1 | grep -i vlan
+
+# Vlan интерфейсы должны получить тип "virtual" в NetBox:
+# - detect_port_type("vlan1") → "virtual"
+# - get_netbox_interface_type("Vlan1") → "virtual"
+```
+
+**Если SVI есть в выводе, но шаблон не парсит:**
+
+1. Сохранить вывод как фикстуру
+2. Проверить шаблон `qtech_show_interface.textfsm` — возможно формат VLAN отличается
+3. Обновить шаблон и тесты
+4. IP адреса из SVI будут синхронизированы автоматически (если `ip_address` в результате)
+
+---
+
 ## Чеклист добавления новой платформы
 
-- [ ] Добавить в `SCRAPLI_PLATFORM_MAP` (SSH драйвер)
-- [ ] Добавить в `NTC_PLATFORM_MAP` (парсер fallback)
-- [ ] Добавить в `NETMIKO_PLATFORM_MAP` (если нужен конфигуратор)
-- [ ] Добавить в `VENDOR_MAP` (производитель)
-- [ ] Добавить команды в `COLLECTOR_COMMANDS` (mac, interfaces, lldp, devices, inventory)
-- [ ] Создать кастомные шаблоны в `templates/` (если NTC не парсит)
-- [ ] Зарегистрировать шаблоны в `CUSTOM_TEXTFSM_TEMPLATES`
-- [ ] Добавить фикстуры в `tests/fixtures/`
-- [ ] Написать тесты
-- [ ] Проверить на реальном устройстве
+Подробности каждого шага — в [разделе 12](#12-добавление-нового-вендора-полное-руководство).
+
+### Обязательно (для всех вендоров)
+
+- [ ] `core/constants/platforms.py` — добавить в `SCRAPLI_PLATFORM_MAP` (SSH драйвер) [§12.2]
+- [ ] `core/constants/platforms.py` — добавить в `NTC_PLATFORM_MAP` (парсер fallback) [§12.2]
+- [ ] `core/constants/platforms.py` — добавить в `NETMIKO_PLATFORM_MAP` [§12.2]
+- [ ] `core/constants/platforms.py` — добавить в `VENDOR_MAP` (производитель) [§12.2]
+- [ ] `core/constants/platforms.py` — добавить в `NETBOX_TO_SCRAPLI_PLATFORM` [§12.2]
+- [ ] `core/constants/commands.py` — добавить команды в `COLLECTOR_COMMANDS` (mac, interfaces, lldp, cdp, devices, inventory) [§12.3]
+- [ ] `core/constants/commands.py` — добавить в `SECONDARY_COMMANDS` (lag, switchport и др.) [§12.5]
+- [ ] `tests/fixtures/<platform>/` — фикстуры с реального устройства [§12.9]
+- [ ] Проверить на реальном устройстве [§12.11]
+
+### Если формат вывода отличается от Cisco
+
+- [ ] Создать кастомные TextFSM шаблоны в `templates/` [§10]
+- [ ] Зарегистрировать шаблоны в `CUSTOM_TEXTFSM_TEMPLATES` [§12.4]
+- [ ] Написать тесты шаблонов [§12.9]
+
+### Если интерфейсы имеют нестандартные имена
+
+- [ ] `core/constants/interfaces.py` — добавить в `INTERFACE_SHORT_MAP` / `INTERFACE_FULL_MAP` [§12.6]
+- [ ] `core/constants/interfaces.py` — добавить в `SHORT_TO_EXTRA` (алиасы для LAG matching) [§12.8]
+- [ ] `core/domain/interface.py` — добавить в `detect_port_type()` [§12.7]
+- [ ] `core/constants/netbox.py` — добавить в `get_netbox_interface_type()` [§12.7]
+
+### Если LAG/switchport формат уникальный
+
+- [ ] `collectors/interfaces.py` — написать `_parse_lag_membership_<vendor>()` (парсер вывода) [§12.5]
+- [ ] `collectors/interfaces.py` — обновить `_normalize_switchport_data()` (нормализация) [§12.5]
+
+### Опционально
+
+- [ ] `core/constants/commands.py` — добавить в `SECONDARY_COMMANDS["media_type"]` (для определения SFP) [§12.5]
+- [ ] `core/domain/inventory.py` — добавить manufacturer patterns [§12.10]
 
 ---
 

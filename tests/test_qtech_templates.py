@@ -189,6 +189,148 @@ class TestQtechShowInterfaceTransceiver:
         assert "TYPE" in sfp
         assert "SERIAL" in sfp
 
+    def test_all_present_transceivers_parsed(self):
+        """Все установленные трансиверы распарсены (включая после absent)."""
+        result = parse_with_template(
+            "qtech_show_interface_transceiver.textfsm",
+            "show_interface_transceiver.txt"
+        )
+
+        # Записи с реальным типом (не absent)
+        present = [r for r in result if r["TYPE"]]
+        assert len(present) == 4, f"Должно быть 4 SFP, получено {len(present)}"
+
+        # Проверяем конкретные интерфейсы (TF0/39 после серии absent)
+        interfaces = [r["INTERFACE"] for r in present]
+        assert "TFGigabitEthernet 0/1" in interfaces
+        assert "TFGigabitEthernet 0/2" in interfaces
+        assert "TFGigabitEthernet 0/39" in interfaces
+        assert "TFGigabitEthernet 0/40" in interfaces
+
+    def test_transceiver_serial_numbers(self):
+        """Серийные номера трансиверов корректны."""
+        result = parse_with_template(
+            "qtech_show_interface_transceiver.textfsm",
+            "show_interface_transceiver.txt"
+        )
+
+        present = {r["INTERFACE"]: r for r in result if r["TYPE"]}
+        assert present["TFGigabitEthernet 0/1"]["SERIAL"] == "RQ114410301879"
+        assert present["TFGigabitEthernet 0/39"]["SERIAL"] == "RQ114410303396"
+
+
+class TestQtechShowAggregatePortSummary:
+    """Тесты show aggregatePort summary."""
+
+    def test_parse_aggregate_port(self):
+        """Парсинг show aggregatePort summary."""
+        result = parse_with_template(
+            "qtech_show_aggregatePort_summary.textfsm",
+            "show_aggregatePort_summary .txt"
+        )
+
+        assert len(result) == 7, "Должно быть 7 AggregatePort"
+
+        # Проверяем Ag1 (2 member порта)
+        ag1 = result[0]
+        assert ag1["AGGREGATE_PORT"] == "Ag1"
+        assert ag1["MODE"] == "TRUNK"
+        assert "Hu0/55" in ag1["PORTS"]
+        assert "Hu0/56" in ag1["PORTS"]
+
+    def test_parse_access_aggregate(self):
+        """AggregatePort в режиме ACCESS."""
+        result = parse_with_template(
+            "qtech_show_aggregatePort_summary.textfsm",
+            "show_aggregatePort_summary .txt"
+        )
+
+        ag10 = result[1]
+        assert ag10["AGGREGATE_PORT"] == "Ag10"
+        assert ag10["MODE"] == "ACCESS"
+        assert ag10["PORTS"].strip() == "TF0/1"
+
+
+class TestQtechInterfaceStatusRouted:
+    """Тест что routed VLAN парсится (баг с \\d+ регулярным выражением)."""
+
+    def test_routed_vlan_parsed(self):
+        """TFGigabitEthernet 0/48 с VLAN=routed не теряется."""
+        result = parse_with_template(
+            "qtech_show_interface_status.textfsm",
+            "show_interface_status.txt"
+        )
+
+        # Ищем routed порт
+        routed = [r for r in result if r["VLAN"] == "routed"]
+        assert len(routed) == 1, "Должен быть один routed порт"
+        assert routed[0]["INTERFACE"] == "TFGigabitEthernet 0/48"
+        assert routed[0]["STATUS"] == "up"
+        assert routed[0]["SPEED"] == "10G"
+
+    def test_aggregate_port_parsed(self):
+        """AggregatePort интерфейсы парсятся из show interface status."""
+        result = parse_with_template(
+            "qtech_show_interface_status.textfsm",
+            "show_interface_status.txt"
+        )
+
+        ag_ports = [r for r in result if r["INTERFACE"].startswith("AggregatePort")]
+        assert len(ag_ports) == 5, "Должно быть 5 AggregatePort"
+
+        # AggregatePort 1 — 200G
+        ag1 = [r for r in ag_ports if r["INTERFACE"] == "AggregatePort 1"][0]
+        assert ag1["STATUS"] == "up"
+        assert ag1["SPEED"] == "200G"
+
+    def test_total_interfaces_count(self):
+        """Общее количество интерфейсов (56 физических + 5 AggregatePort)."""
+        result = parse_with_template(
+            "qtech_show_interface_status.textfsm",
+            "show_interface_status.txt"
+        )
+
+        assert len(result) == 61, "Должен быть 61 интерфейс"
+
+
+class TestQtechSwitchportAggregatePort:
+    """Тесты switchport для AggregatePort."""
+
+    def test_aggregate_port_trunk(self):
+        """AggregatePort 1 в режиме TRUNK."""
+        result = parse_with_template(
+            "qtech_show_interface_switchport.textfsm",
+            "show_interface_switchport.txt"
+        )
+
+        ag_trunk = [r for r in result if r["INTERFACE"] == "AggregatePort 1"]
+        assert len(ag_trunk) == 1
+        assert ag_trunk[0]["MODE"] == "TRUNK"
+        assert ag_trunk[0]["VLAN_LISTS"] == "ALL"
+
+    def test_aggregate_port_access(self):
+        """AggregatePort 10 в режиме ACCESS."""
+        result = parse_with_template(
+            "qtech_show_interface_switchport.textfsm",
+            "show_interface_switchport.txt"
+        )
+
+        ag_access = [r for r in result if r["INTERFACE"] == "AggregatePort 10"]
+        assert len(ag_access) == 1
+        assert ag_access[0]["MODE"] == "ACCESS"
+        assert ag_access[0]["ACCESS_VLAN"] == "40"
+
+    def test_disabled_switchport_parsed(self):
+        """TFGigabitEthernet 0/48 с disabled switchport."""
+        result = parse_with_template(
+            "qtech_show_interface_switchport.textfsm",
+            "show_interface_switchport.txt"
+        )
+
+        disabled = [r for r in result if r["SWITCHPORT"] == "disabled"]
+        assert len(disabled) >= 1
+        assert disabled[0]["INTERFACE"] == "TFGigabitEthernet 0/48"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

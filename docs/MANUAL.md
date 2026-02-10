@@ -120,7 +120,7 @@ connection:
 
 # NetBox API
 netbox:
-  url: "http://localhost:8000/"
+  url: "http://localhost:8080/"
   token: ""                     # Лучше через NETBOX_TOKEN
   verify_ssl: true
 
@@ -214,7 +214,7 @@ python -m network_collector [команда] [опции]
   -v, --verbose              Подробный вывод (DEBUG)
   -d, --devices FILE         Файл устройств (default: devices_ips.py)
   -o, --output PATH          Папка/файл отчётов (default: reports)
-  --transport {ssh2,system}  SSH транспорт (default: system)
+  --transport {ssh2,paramiko,system}  SSH транспорт (default: ssh2)
 ```
 
 **Форматы вывода (`--format`):**
@@ -1111,7 +1111,7 @@ options:
 
 ### 5.5 Использование Pipeline через Web UI
 
-1. Открыть http://localhost:8000 (API) и http://localhost:5173 (Frontend)
+1. Открыть http://localhost:8080 (API) и http://localhost:5173 (Frontend)
 2. Перейти в раздел "Pipelines"
 3. Создать/редактировать pipeline через UI
 4. Нажать "Run Pipeline"
@@ -1209,13 +1209,13 @@ Duration: 5230ms
 
 ```bash
 # Список pipelines
-curl http://localhost:8000/api/pipelines
+curl http://localhost:8080/api/pipelines
 
 # Получить pipeline
-curl http://localhost:8000/api/pipelines/full_sync
+curl http://localhost:8080/api/pipelines/full_sync
 
 # Запустить pipeline
-curl -X POST http://localhost:8000/api/pipelines/full_sync/run \
+curl -X POST http://localhost:8080/api/pipelines/full_sync/run \
   -H "Content-Type: application/json" \
   -H "X-SSH-Username: admin" \
   -H "X-SSH-Password: admin" \
@@ -1230,10 +1230,10 @@ curl -X POST http://localhost:8000/api/pipelines/full_sync/run \
   }'
 
 # Валидировать pipeline
-curl -X POST http://localhost:8000/api/pipelines/full_sync/validate
+curl -X POST http://localhost:8080/api/pipelines/full_sync/validate
 
 # Создать pipeline
-curl -X POST http://localhost:8000/api/pipelines \
+curl -X POST http://localhost:8080/api/pipelines \
   -H "Content-Type: application/json" \
   -d '{
     "name": "My Pipeline",
@@ -1282,7 +1282,7 @@ Network Collector имеет Web интерфейс для удобного уп
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │  Frontend   │────▶│   Backend   │────▶│   Devices   │
 │  (Vue.js)   │     │  (FastAPI)  │     │   NetBox    │
-│  :5173      │     │   :8000     │     │             │
+│  :5173      │     │   :8080     │     │             │
 └─────────────┘     └─────────────┘     └─────────────┘
 ```
 
@@ -1292,17 +1292,17 @@ Network Collector имеет Web интерфейс для удобного уп
 
 | Компонент | Порт по умолчанию | Где менять |
 |-----------|-------------------|------------|
-| **Backend (FastAPI)** | 8000 | Параметр `--port` при запуске uvicorn |
+| **Backend (FastAPI)** | 8080 | Параметр `--port` при запуске uvicorn |
 | **Frontend (Vite)** | 5173 | `frontend/vite.config.js` → `server.port` |
-| **Proxy target** | 8000 | `frontend/vite.config.js` → `server.proxy.target` |
+| **Proxy target** | 8080 | `frontend/vite.config.js` → `server.proxy.target` |
 
 #### Файлы конфигурации портов
 
 **1. Backend порт** — при запуске uvicorn:
 
 ```bash
-# Стандартный порт 8000
-uvicorn network_collector.api.main:app --host 0.0.0.0 --port 8000
+# Стандартный порт 8080
+uvicorn network_collector.api.main:app --host 0.0.0.0 --port 8080
 
 # Другой порт (например 8080)
 uvicorn network_collector.api.main:app --host 0.0.0.0 --port 8080
@@ -1318,11 +1318,11 @@ export default defineConfig({
     port: 5173,              // ← Порт frontend (dev server)
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',  // ← ДОЛЖЕН совпадать с портом backend!
+        target: 'http://localhost:8080',  // ← ДОЛЖЕН совпадать с портом backend!
         changeOrigin: true,
       },
       '/health': {
-        target: 'http://localhost:8000',  // ← ДОЛЖЕН совпадать с портом backend!
+        target: 'http://localhost:8080',  // ← ДОЛЖЕН совпадать с портом backend!
         changeOrigin: true,
       },
     },
@@ -1372,7 +1372,7 @@ npm run dev
 
 ```bash
 # 1. Проверить backend
-curl http://localhost:8000/health
+curl http://localhost:8080/health
 # Ожидаем: {"status":"ok",...}
 
 # 2. Проверить proxy (через frontend)
@@ -1393,10 +1393,10 @@ cd /home/sa/project
 source network_collector/myenv/bin/activate
 
 # ВАЖНО: Запускать из /home/sa/project с PYTHONPATH!
-PYTHONPATH=/home/sa/project uvicorn network_collector.api.main:app --reload --host 0.0.0.0 --port 8000
+PYTHONPATH=/home/sa/project uvicorn network_collector.api.main:app --reload --host 0.0.0.0 --port 8080
 
 # Или для продакшена
-PYTHONPATH=/home/sa/project uvicorn network_collector.api.main:app --host 0.0.0.0 --port 8000 --workers 4
+PYTHONPATH=/home/sa/project uvicorn network_collector.api.main:app --host 0.0.0.0 --port 8080 --workers 4
 ```
 
 **Frontend (Vue.js):**
@@ -1571,8 +1571,8 @@ Step: sync_interfaces
 ## 7. REST API
 
 Полная документация API доступна по адресам:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+- Swagger UI: http://localhost:8080/docs
+- ReDoc: http://localhost:8080/redoc
 
 ### 7.1 Аутентификация
 
@@ -1680,7 +1680,7 @@ X-NetBox-Token: your-token
 Затем опрашиваем статус:
 
 ```bash
-curl http://localhost:8000/api/tasks/abc12345
+curl http://localhost:8080/api/tasks/abc12345
 ```
 
 ```json
@@ -1713,7 +1713,7 @@ curl http://localhost:8000/api/tasks/abc12345
 **Сбор устройств (sync):**
 
 ```bash
-curl -X POST http://localhost:8000/api/devices/collect \
+curl -X POST http://localhost:8080/api/devices/collect \
   -H "Content-Type: application/json" \
   -H "X-SSH-Username: admin" \
   -H "X-SSH-Password: admin" \
@@ -1725,7 +1725,7 @@ curl -X POST http://localhost:8000/api/devices/collect \
 **Сбор устройств (async):**
 
 ```bash
-curl -X POST http://localhost:8000/api/devices/collect \
+curl -X POST http://localhost:8080/api/devices/collect \
   -H "Content-Type: application/json" \
   -H "X-SSH-Username: admin" \
   -H "X-SSH-Password: admin" \
@@ -1738,7 +1738,7 @@ curl -X POST http://localhost:8000/api/devices/collect \
 **Синхронизация с NetBox:**
 
 ```bash
-curl -X POST http://localhost:8000/api/sync \
+curl -X POST http://localhost:8080/api/sync \
   -H "Content-Type: application/json" \
   -H "X-SSH-Username: admin" \
   -H "X-SSH-Password: admin" \
@@ -1756,10 +1756,10 @@ curl -X POST http://localhost:8000/api/sync \
 
 ```bash
 # Получить список устройств
-curl http://localhost:8000/api/devices
+curl http://localhost:8080/api/devices
 
 # Добавить устройство
-curl -X POST http://localhost:8000/api/devices \
+curl -X POST http://localhost:8080/api/devices \
   -H "Content-Type: application/json" \
   -d '{
     "host": "10.0.0.1",
@@ -1768,7 +1768,7 @@ curl -X POST http://localhost:8000/api/devices \
   }'
 
 # Импорт из NetBox
-curl -X POST http://localhost:8000/api/devices/import/netbox \
+curl -X POST http://localhost:8080/api/devices/import/netbox \
   -H "Content-Type: application/json" \
   -H "X-NetBox-URL: http://netbox:8000" \
   -H "X-NetBox-Token: your-token" \

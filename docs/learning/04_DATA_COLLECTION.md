@@ -172,6 +172,25 @@ result = parse_output(
 
 **Файл:** `parsers/textfsm_parser.py`
 
+### Кастомные TextFSM шаблоны для QTech
+
+NTC Templates не содержит шаблонов для QTech. Поэтому в проекте есть 8 кастомных
+шаблонов в папке `templates/`:
+
+| Шаблон | Команда |
+|--------|---------|
+| `qtech_show_mac_address_table.textfsm` | MAC-таблица |
+| `qtech_show_version.textfsm` | Версия и серийник |
+| `qtech_show_interface.textfsm` | Детали интерфейсов |
+| `qtech_show_lldp_neighbors_detail.textfsm` | LLDP-соседи |
+| `qtech_show_interface_status.textfsm` | Статус интерфейсов |
+| `qtech_show_interface_switchport.textfsm` | Switchport mode/VLAN |
+| `qtech_show_interface_transceiver.textfsm` | SFP-модули (трансиверы) |
+| `qtech_show_aggregatePort_summary.textfsm` | LAG (AggregatePort) |
+
+Эти шаблоны имеют приоритет над NTC Templates: если есть кастомный шаблон --
+используется он, иначе -- стандартный из NTC.
+
 ### NTCParser -- обёртка в проекте
 
 Проект использует класс `NTCParser`, который добавляет:
@@ -342,6 +361,26 @@ result = normalizer.normalize_dicts(raw_data, hostname="switch-01", device_ip="1
 - Определяет `port_type` по имени интерфейса и hardware_type
 - Добавляет `hostname` и `device_ip` к каждой записи
 
+### Определение port_type
+
+`InterfaceNormalizer` автоматически определяет тип порта по нескольким источникам:
+имя интерфейса, media_type (от SFP), hardware_type. Поддерживаемые типы:
+
+| port_type | Описание |
+|-----------|----------|
+| `100g-qsfp28` | 100GE QSFP28 |
+| `40g-qsfp` | 40GE QSFP+ |
+| `25g-sfp28` | 25GE SFP28 |
+| `10g-sfp+` | 10GE SFP+ |
+| `1g-sfp` | 1GE SFP |
+| `1g-rj45` | 1GE RJ45 (copper) |
+| `100m-rj45` | 100M RJ45 (FastEthernet) |
+| `lag` | Port-channel / AggregatePort (LAG) |
+| `virtual` | Vlan, Loopback, Null, Tunnel |
+
+Приоритет определения: LAG/virtual по имени -> media_type -> hardware_type -> имя интерфейса.
+Каждый тип маппится на NetBox-тип в `PORT_TYPE_MAP` (`core/constants/netbox.py`).
+
 ### Зачем Domain Layer отдельно от коллекторов?
 
 **Тестируемость.** Нормализаторы -- чистые функции: принимают данные, возвращают данные.
@@ -383,7 +422,7 @@ class Interface:
     tagged_vlans: str = ""  # "10,20,30" (для trunk портов)
     access_vlan: str = ""   # 100 (для access портов)
     port_type: str = ""     # 1g-rj45, 10g-sfp+, lag, virtual
-    lag: str = ""           # Port-channel1 (если member LAG)
+    lag: str = ""           # Port-channel1 или Ag1 (если member LAG)
     hostname: str = ""      # switch-01
     device_ip: str = ""     # 10.0.0.1
 ```
@@ -543,17 +582,25 @@ class InterfaceCollector(BaseCollector):
     model_class = Interface
 
     # Дополнительные команды для обогащения данных
-    lag_commands = {"cisco_ios": "show etherchannel summary", ...}
-    switchport_commands = {"cisco_ios": "show interfaces switchport", ...}
+    lag_commands = {
+        "cisco_ios": "show etherchannel summary",
+        "qtech": "show aggregatePort summary",  # QTech LAG
+        ...
+    }
+    switchport_commands = {
+        "cisco_ios": "show interfaces switchport",
+        "qtech": "show interface switchport",  # QTech (без 's')
+        ...
+    }
     media_type_commands = {"cisco_nxos": "show interface status", ...}
 ```
 
 InterfaceCollector собирает данные в несколько этапов:
 
-1. `show interfaces` -- основные данные (парсинг через NTC)
+1. `show interfaces` (или `show interface` для QTech) -- основные данные
 2. `InterfaceNormalizer.normalize_dicts()` -- нормализация статусов и типов
-3. `show etherchannel summary` -- определение LAG membership
-4. `show interfaces switchport` -- режим порта (access/trunk)
+3. `show etherchannel summary` / `show aggregatePort summary` -- LAG membership
+4. `show interfaces switchport` / `show interface switchport` -- режим порта
 5. `InterfaceNormalizer.enrich_with_lag/switchport()` -- обогащение данных
 
 Такая архитектура (парсинг отдельно, нормализация отдельно, обогащение отдельно)

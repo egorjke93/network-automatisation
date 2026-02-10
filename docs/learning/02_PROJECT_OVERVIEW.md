@@ -444,14 +444,19 @@ network_collector/
 ├── fields.yaml              # Какие поля собирать и как называть в экспорте
 ├── devices_ips.py           # Список устройств (host, platform, device_type, role, site)
 │
-└── tests/                   # Тесты (1697+ штук!)
+└── tests/                   # Тесты (1749+ штук!)
     ├── conftest.py          #   Общие fixtures для pytest
     ├── test_cli/            #   Тесты CLI
     ├── test_collectors/     #   Тесты коллекторов
+    ├── test_configurator/   #   Тесты конфигуратора (push descriptions)
+    ├── test_contracts/      #   Контрактные тесты (API-совместимость)
     ├── test_core/           #   Тесты ядра
-    ├── test_netbox/         #   Тесты NetBox sync
+    ├── test_e2e/            #   End-to-end тесты (полные сценарии)
     ├── test_exporters/      #   Тесты экспортёров
-    └── test_parsers/        #   Тесты парсеров
+    ├── test_fixes/          #   Тесты для конкретных багфиксов
+    ├── test_netbox/         #   Тесты NetBox sync
+    ├── test_parsers/        #   Тесты парсеров
+    └── test_api/            #   Тесты Web API (FastAPI)
 ```
 
 ### На что обратить внимание

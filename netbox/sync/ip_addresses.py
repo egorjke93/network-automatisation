@@ -9,7 +9,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from .base import (
-    SyncBase, SyncComparator, IPAddressEntry, get_sync_config,
+    SyncBase, SyncStats, SyncComparator, IPAddressEntry, get_sync_config,
     NetBoxError, NetBoxValidationError, format_error_for_log, logger,
 )
 
@@ -43,8 +43,8 @@ class IPAddressesSyncMixin:
         Returns:
             Dict: Статистика {created, updated, deleted, skipped, failed}
         """
-        stats = {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "failed": 0}
-        details = {"create": [], "update": [], "delete": [], "skip": []}
+        ss = SyncStats("created", "updated", "deleted", "skipped", "failed")
+        stats, details = ss.stats, ss.details
 
         device = self.client.get_device_by_name(device_name)
         if not device:

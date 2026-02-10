@@ -72,8 +72,8 @@
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              CORE LAYER                                      │
 │                                                                              │
-│  core/connection.py    core/device.py    core/credentials.py   constants.py │
-│  SSH подключения       Модель устройства  Учётные данные      Маппинги      │
+│  core/connection.py    core/device.py    core/credentials.py  constants/   │
+│  SSH подключения       Модель устройства  Учётные данные      Маппинги     │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
                 ┌───────────────────┼───────────────────┐
@@ -82,11 +82,16 @@
 ┌───────────────────────┐ ┌─────────────────┐ ┌─────────────────────────────┐
 │    PARSING LAYER      │ │ EXTERNAL: SSH   │ │   EXTERNAL: NetBox API      │
 │                       │ │                 │ │                             │
-│  parsers/textfsm.py   │ │ Scrapli         │ │  netbox/client.py           │
-│  NTC Templates        │ │ (ssh2 transport)│ │  (pynetbox wrapper)         │
+│  parsers/textfsm.py   │ │ Scrapli         │ │  netbox/client/             │
+│  NTC Templates        │ │ (ssh2 transport)│ │  (pynetbox wrapper, mixins) │
 │  + кастомные шаблоны  │ │                 │ │                             │
 └───────────────────────┘ └─────────────────┘ └─────────────────────────────┘
 ```
+
+> **Примечание:** `netbox/client.py` — обёртка для обратной совместимости.
+> Реальная реализация находится в `netbox/client/` (пакет с mixin-модулями):
+> `base.py`, `main.py`, `devices.py`, `interfaces.py`, `vlans.py`,
+> `inventory.py`, `ip_addresses.py`, `dcim.py`.
 
 ### 1.2 Принципы
 
@@ -193,6 +198,16 @@ netbox/sync/
   - `_get_vlan_by_vid()` — поиск VLAN по VID с кэшированием
   - `_load_site_vlans()` — загрузка всех VLAN сайта одним запросом
 - `DiffCalculator` — предпросмотр изменений (`netbox/diff.py`)
+
+**SyncStats** — вспомогательный класс для инициализации stats/details в sync-операциях:
+- Автоматический маппинг: created->create, updated->update, deleted->delete, skipped->skip
+- `.result()` возвращает dict со stats и details
+- Используется во всех sync-методах для единообразной инициализации
+
+**_safe_netbox_call()** — обёртка для обработки ошибок NetBox API:
+- Централизованная обработка NetBoxError, NetBoxAPIError
+- Настраиваемый уровень логирования
+- Возвращает default при ошибке
 
 **Mixins:**
 - `InterfacesSyncMixin` — sync_interfaces() + batch create/update/delete + VLAN sync
@@ -382,7 +397,7 @@ pynetbox использует lazy-loading: обращение к атрибут
 │    │    → diff: to_create[], to_update[], to_delete[], to_skip[]        │   │
 │    │                                                                     │   │
 │    │ d) Batch create (двухфазный для LAG):                                │   │
-│    │    Фаза 1: LAG (Port-channel) → bulk_create_interfaces             │   │
+│    │    Фаза 1: LAG (Port-channel/AggregatePort) → bulk_create_interfaces│   │
 │    │    Фаза 2: Member интерфейсы (с lag ID) → bulk_create_interfaces   │   │
 │    │    VLAN: назначаются при CREATE если sync_vlans включён             │   │
 │    │                                                                     │   │
@@ -549,7 +564,21 @@ network_collector/
 4. Дефолты в коде         (config.py)
 ```
 
-### 6.3 Маппинги (core/constants.py)
+### 6.3 Маппинги (core/constants/)
+
+> **Примечание:** `core/constants/` — это пакет (не один файл). Структура:
+>
+> ```
+> core/constants/
+> ├── __init__.py       # Обратная совместимость (re-export всех констант)
+> ├── commands.py       # COLLECTOR_COMMANDS, SECONDARY_COMMANDS
+> ├── interfaces.py     # INTERFACE_SHORT_MAP, INTERFACE_FULL_MAP
+> ├── netbox.py         # NETBOX_INTERFACE_TYPE_MAP, PORT_TYPE_MAP
+> ├── platforms.py      # SCRAPLI_PLATFORM_MAP, NTC_PLATFORM_MAP
+> ├── mac.py            # MAC нормализация
+> ├── devices.py        # Устройства
+> └── utils.py          # Утилиты (get_collector_command, normalize_interface_*)
+> ```
 
 ```python
 # SSH драйвер — какой Scrapli driver использовать
@@ -566,17 +595,25 @@ NTC_PLATFORM_MAP = {
 
 # Кастомные TextFSM шаблоны (приоритет над NTC)
 CUSTOM_TEXTFSM_TEMPLATES = {
-    ("qtech", "show mac address-table"): "qtech_show_mac.textfsm",
+    ("qtech", "show mac address-table"): "qtech_show_mac_address_table.textfsm",
+    ("qtech", "show interface"): "qtech_show_interface.textfsm",
+    ("qtech", "show interface status"): "qtech_show_interface_status.textfsm",
+    ("qtech", "show interface switchport"): "qtech_show_interface_switchport.textfsm",
+    ("qtech", "show aggregateport summary"): "qtech_show_aggregatePort_summary.textfsm",
+    # ... + аналогичные для qtech_qsw
 }
 
 # Централизованные команды коллекторов
 COLLECTOR_COMMANDS = {
     "mac": {"cisco_ios": "show mac address-table", ...},
-    "interfaces": {"cisco_ios": "show interfaces", ...},
+    "interfaces": {"cisco_ios": "show interfaces", "qtech": "show interface", ...},
     "lldp": {"cisco_ios": "show lldp neighbors detail", ...},
     "cdp": {"cisco_ios": "show cdp neighbors detail", ...},
     "inventory": {"cisco_ios": "show inventory", ...},
 }
+# Дополнительные команды в InterfaceCollector:
+# lag_commands: {"qtech": "show aggregatePort summary", ...}
+# switchport_commands: {"qtech": "show interface switchport", ...}
 
 # Маппинг типов интерфейсов в NetBox
 NETBOX_INTERFACE_TYPE_MAP = {
@@ -585,7 +622,7 @@ NETBOX_INTERFACE_TYPE_MAP = {
 }
 ```
 
-### 6.4 Функции-помощники (core/constants.py)
+### 6.4 Функции-помощники (core/constants/)
 
 ```python
 # Получить команду для коллектора и платформы
@@ -593,10 +630,15 @@ get_collector_command("mac", "cisco_ios")  # → "show mac address-table"
 
 # Получить все варианты написания интерфейса
 get_interface_aliases("GigabitEthernet0/1")  # → ["GigabitEthernet0/1", "Gi0/1", "Gig0/1"]
+get_interface_aliases("Hu0/55")  # → ["Hu0/55", "HundredGigE0/55", "HundredGigabitEthernet0/55"]
 
-# Нормализация интерфейсов
-normalize_interface_short("GigabitEthernet0/1")  # → "Gi0/1"
-normalize_interface_full("Gi0/1")                 # → "GigabitEthernet0/1"
+# Нормализация интерфейсов (Cisco и QTech)
+normalize_interface_short("GigabitEthernet0/1")      # → "Gi0/1"
+normalize_interface_short("TFGigabitEthernet 0/1")   # → "TF0/1"    (QTech 10G)
+normalize_interface_short("AggregatePort 1")          # → "Ag1"      (QTech LAG)
+normalize_interface_full("Gi0/1")                     # → "GigabitEthernet0/1"
+normalize_interface_full("TF0/1")                     # → "TFGigabitEthernet0/1"
+normalize_interface_full("Ag1")                       # → "AggregatePort1"
 ```
 
 ---
@@ -695,6 +737,15 @@ Web API **не имеет базы данных**. Все данные:
 | `/api/sync/interfaces` | POST | Sync интерфейсов |
 | `/api/sync/cables` | POST | Sync кабелей |
 | `/api/pipelines/run` | POST | Запуск pipeline |
+| `/api/fields` | GET | Получение конфигурации полей |
+| `/api/fields` | POST | Обновление конфигурации полей |
+| `/api/device-management` | GET | Список устройств (CRUD) |
+| `/api/device-management` | POST | Создание устройства |
+| `/api/tasks` | GET | Список задач (task tracking) |
+| `/api/tasks/{task_id}` | GET | Статус задачи |
+| `/api/match/collect` | POST | MAC matching (сопоставление MAC - hostname) |
+| `/api/push/collect` | POST | Push описаний на устройства |
+| `/api/history` | GET | Журнал операций |
 
 ### 7.4 Services Layer
 
@@ -1266,7 +1317,7 @@ network_collector/
 │   ├── credentials.py       # Учётные данные
 │   ├── device.py            # Модель Device
 │   ├── models.py            # Data Models
-│   ├── constants.py         # Маппинги
+│   ├── constants/           # Маппинги (пакет, см. раздел 6.3)
 │   ├── context.py           # RunContext
 │   ├── exceptions.py        # Исключения
 │   ├── logging.py           # Логирование
@@ -1307,7 +1358,17 @@ network_collector/
 │   └── json_exporter.py
 │
 ├── netbox/                  # NetBox интеграция
-│   ├── client.py            # NetBoxClient (pynetbox wrapper)
+│   ├── client.py            # Обратная совместимость (re-export)
+│   ├── client/              # NetBoxClient — mixin-архитектура
+│   │   ├── __init__.py      # Re-export NetBoxClient
+│   │   ├── base.py          # NetBoxClientBase — инициализация
+│   │   ├── main.py          # NetBoxClient — объединяет mixins
+│   │   ├── devices.py       # DevicesMixin
+│   │   ├── interfaces.py    # InterfacesMixin (+ bulk)
+│   │   ├── vlans.py         # VLANsMixin
+│   │   ├── inventory.py     # InventoryMixin (+ bulk)
+│   │   ├── ip_addresses.py  # IPAddressesMixin (+ bulk)
+│   │   └── dcim.py          # DCIMMixin
 │   ├── diff.py              # DiffCalculator
 │   └── sync/                # Модули синхронизации
 │       ├── __init__.py      # Re-export NetBoxSync

@@ -30,8 +30,8 @@ COLLECTOR_COMMANDS: Dict[str, Dict[str, str]] = {
         "arista_eos": "show interfaces",
         "juniper_junos": "show interfaces extensive",
         "juniper": "show interfaces extensive",
-        "qtech": "show interfaces",
-        "qtech_qsw": "show interfaces",
+        "qtech": "show interface",
+        "qtech_qsw": "show interface",
     },
     # Inventory
     "inventory": {
@@ -41,8 +41,6 @@ COLLECTOR_COMMANDS: Dict[str, Dict[str, str]] = {
         "arista_eos": "show inventory",
         "juniper_junos": "show chassis hardware",
         "juniper": "show chassis hardware",
-        "qtech": "show inventory",
-        "qtech_qsw": "show inventory",
     },
     # LLDP
     "lldp": {
@@ -76,6 +74,74 @@ COLLECTOR_COMMANDS: Dict[str, Dict[str, str]] = {
         "qtech_qsw": "show version",
     },
 }
+
+
+# =============================================================================
+# ВТОРИЧНЫЕ КОМАНДЫ КОЛЛЕКТОРОВ
+# =============================================================================
+# Дополнительные команды, которые коллекторы вызывают помимо основной.
+# Централизованы здесь, чтобы не дублировать в каждом коллекторе.
+# =============================================================================
+
+SECONDARY_COMMANDS: Dict[str, Dict[str, str]] = {
+    # Ошибки интерфейсов
+    "interface_errors": {
+        "cisco_ios": "show interfaces | include errors|CRC|input|output",
+        "cisco_iosxe": "show interfaces | include errors|CRC|input|output",
+        "cisco_nxos": "show interface counters errors",
+        "arista_eos": "show interfaces counters errors",
+    },
+    # LAG (etherchannel/port-channel/aggregatePort)
+    "lag": {
+        "cisco_ios": "show etherchannel summary",
+        "cisco_iosxe": "show etherchannel summary",
+        "cisco_nxos": "show port-channel summary",
+        "arista_eos": "show port-channel summary",
+        "qtech": "show aggregatePort summary",
+        "qtech_qsw": "show aggregatePort summary",
+    },
+    # Switchport mode
+    "switchport": {
+        "cisco_ios": "show interfaces switchport",
+        "cisco_iosxe": "show interfaces switchport",
+        "cisco_nxos": "show interface switchport",
+        "arista_eos": "show interfaces switchport",
+        "qtech": "show interface switchport",
+        "qtech_qsw": "show interface switchport",
+    },
+    # Media type (тип трансивера из show interface status)
+    "media_type": {
+        "cisco_nxos": "show interface status",
+    },
+    # Трансиверы для inventory
+    "transceiver": {
+        "cisco_nxos": "show interface transceiver",
+        "qtech": "show interface transceiver",
+        "qtech_qsw": "show interface transceiver",
+    },
+    # LLDP summary (для local interface)
+    "lldp_summary": {
+        "cisco_ios": "show lldp neighbors",
+        "cisco_iosxe": "show lldp neighbors",
+        "cisco_nxos": "show lldp neighbors",
+        "arista_eos": "show lldp neighbors",
+    },
+}
+
+
+def get_secondary_command(group: str, platform: str) -> str:
+    """
+    Возвращает вторичную команду для группы и платформы.
+
+    Args:
+        group: Группа команд (lag, switchport, transceiver, etc.)
+        platform: Платформа устройства
+
+    Returns:
+        str: Команда для выполнения или пустая строка
+    """
+    commands = SECONDARY_COMMANDS.get(group, {})
+    return commands.get(platform, "")
 
 
 def get_collector_command(collector: str, platform: str) -> str:
@@ -115,8 +181,8 @@ CUSTOM_TEXTFSM_TEMPLATES: Dict[tuple, str] = {
     ("qtech_qsw", "show mac address-table"): "qtech_show_mac_address_table.textfsm",
     ("qtech", "show version"): "qtech_show_version.textfsm",
     ("qtech_qsw", "show version"): "qtech_show_version.textfsm",
-    ("qtech", "show interfaces"): "qtech_show_interface.textfsm",
-    ("qtech_qsw", "show interfaces"): "qtech_show_interface.textfsm",
+    ("qtech", "show interface"): "qtech_show_interface.textfsm",
+    ("qtech_qsw", "show interface"): "qtech_show_interface.textfsm",
     ("qtech", "show lldp neighbors detail"): "qtech_show_lldp_neighbors_detail.textfsm",
     ("qtech_qsw", "show lldp neighbors detail"): "qtech_show_lldp_neighbors_detail.textfsm",
     ("qtech", "show interface status"): "qtech_show_interface_status.textfsm",
@@ -125,4 +191,7 @@ CUSTOM_TEXTFSM_TEMPLATES: Dict[tuple, str] = {
     ("qtech_qsw", "show interface switchport"): "qtech_show_interface_switchport.textfsm",
     ("qtech", "show interface transceiver"): "qtech_show_interface_transceiver.textfsm",
     ("qtech_qsw", "show interface transceiver"): "qtech_show_interface_transceiver.textfsm",
+    # QTech LAG (AggregatePort)
+    ("qtech", "show aggregateport summary"): "qtech_show_aggregatePort_summary.textfsm",
+    ("qtech_qsw", "show aggregateport summary"): "qtech_show_aggregatePort_summary.textfsm",
 }

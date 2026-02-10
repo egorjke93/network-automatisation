@@ -8,7 +8,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from .base import (
-    SyncBase, DeviceInfo, get_sync_config, normalize_device_model,
+    SyncBase, SyncStats, DeviceInfo, get_sync_config, normalize_device_model,
     NetBoxError, NetBoxConnectionError, NetBoxValidationError, format_error_for_log, logger,
 )
 
@@ -158,8 +158,8 @@ class DevicesSyncMixin:
         Returns:
             Dict: Статистика {created, updated, skipped, deleted, failed, details}
         """
-        stats = {"created": 0, "updated": 0, "skipped": 0, "deleted": 0, "failed": 0}
-        details = {"create": [], "update": [], "skip": [], "delete": []}
+        ss = SyncStats("created", "updated", "skipped", "deleted", "failed")
+        stats, details = ss.stats, ss.details
 
         devices = DeviceInfo.ensure_list(inventory_data)
         inventory_names = set()

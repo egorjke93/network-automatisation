@@ -9,7 +9,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from .base import (
-    SyncBase, InventoryItem, get_sync_config,
+    SyncBase, SyncStats, InventoryItem, get_sync_config,
     NetBoxError, NetBoxValidationError, format_error_for_log, logger,
 )
 
@@ -39,8 +39,8 @@ class InventorySyncMixin:
         Returns:
             Dict: Статистика {created, updated, deleted, skipped, failed}
         """
-        stats = {"created": 0, "updated": 0, "deleted": 0, "skipped": 0, "failed": 0}
-        details = {"create": [], "update": [], "delete": []}
+        ss = SyncStats("created", "updated", "deleted", "skipped", "failed")
+        stats, details = ss.stats, ss.details
 
         device = self._find_device(device_name)
         if not device:
