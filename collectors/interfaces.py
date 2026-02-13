@@ -206,8 +206,6 @@ class InterfaceCollector(BaseCollector):
         Returns:
             List[Dict]: Нормализованные данные с устройства
         """
-        from ..core.connection import get_ntc_platform
-
         command = self._get_command(device)
         if not command:
             logger.warning(f"Нет команды для {device.platform}")
@@ -247,7 +245,7 @@ class InterfaceCollector(BaseCollector):
                             else:
                                 lag_membership = self._parse_lag_membership(
                                     lag_response.result,
-                                    get_ntc_platform(device.platform),
+                                    device.platform,
                                     lag_cmd,
                                 )
                         except Exception as e:
@@ -283,7 +281,7 @@ class InterfaceCollector(BaseCollector):
                             mt_response = conn.send_command(mt_cmd)
                             media_types = self._parse_media_types(
                                 mt_response.result,
-                                get_ntc_platform(device.platform),
+                                device.platform,
                                 mt_cmd,
                             )
                         except Exception as e:
@@ -310,7 +308,7 @@ class InterfaceCollector(BaseCollector):
     def _parse_lag_membership(
         self,
         output: str,
-        ntc_platform: str,
+        platform: str,
         command: str = "show etherchannel summary",
     ) -> Dict[str, str]:
         """
@@ -318,8 +316,8 @@ class InterfaceCollector(BaseCollector):
 
         Args:
             output: Вывод команды
-            ntc_platform: Платформа для NTC
-            command: Команда для NTC парсера (show etherchannel summary / show port-channel summary)
+            platform: Платформа устройства (NTCParser сам ищет кастомный шаблон и NTC fallback)
+            command: Команда для парсера (show etherchannel summary / show port-channel summary)
 
         Returns:
             Dict: {member_interface: lag_interface} например {"Gi0/1": "Po1", "Eth1/1": "Po1"}
@@ -329,7 +327,7 @@ class InterfaceCollector(BaseCollector):
         try:
             parsed = self._parser.parse(
                 output=output,
-                platform=ntc_platform,
+                platform=platform,
                 command=command,
                 normalize=False,
             ) if self._parser else []
@@ -516,24 +514,22 @@ class InterfaceCollector(BaseCollector):
         """
         Парсит show interfaces/interface switchport для определения режимов портов.
 
-        Универсальный метод для всех платформ:
+        NTCParser.parse() сам обрабатывает приоритеты:
         1. Кастомный TextFSM шаблон (QTech и другие нестандартные)
-        2. NTC Templates (Cisco, Arista)
-        3. Regex fallback
+        2. NTC Templates с маппингом платформы (Cisco, Arista)
+        3. Regex fallback (если парсер не справился)
 
         Args:
             output: Вывод команды
-            platform: Платформа устройства (cisco_ios, qtech, etc.)
+            platform: Платформа устройства (qtech, cisco_nxos, cisco_ios, etc.)
             command: Команда (show interfaces switchport / show interface switchport)
 
         Returns:
             Dict: {interface: {mode, native_vlan, access_vlan, tagged_vlans}}
         """
-        from ..core.connection import get_ntc_platform
-
         modes = {}
 
-        # 1. Пробуем кастомный шаблон через NTCParser (для QTech и др.)
+        # NTCParser.parse() сам ищет кастомный шаблон, потом NTC fallback
         if self._parser:
             try:
                 parsed = self._parser.parse(
@@ -543,147 +539,16 @@ class InterfaceCollector(BaseCollector):
                     normalize=False,
                 )
                 if parsed:
-                    modes = self._normalize_switchport_data(parsed, platform)
+                    # Domain layer нормализует switchport данные
+                    modes = self._normalizer.normalize_switchport_data(parsed, platform)
                     if modes:
                         return modes
             except Exception as e:
-                logger.debug(f"Кастомный шаблон switchport не сработал: {e}")
+                logger.debug(f"Парсинг switchport не сработал: {e}")
 
-        # 2. NTC Templates (Cisco, Arista) через NTCParser
-        if self._parser:
-            ntc_platform = get_ntc_platform(platform)
-            try:
-                parsed = self._parser.parse(
-                    output=output,
-                    platform=ntc_platform,
-                    command=command,
-                    normalize=False,
-                )
-                if parsed:
-                    modes = self._normalize_switchport_data(parsed, platform)
-                    if modes:
-                        return modes
-            except Exception as e:
-                logger.debug(f"NTC switchport не сработал: {e}")
-
-        # 3. Fallback на regex
+        # Fallback на regex
         modes = self._parse_switchport_modes_regex(output)
         return modes
-
-    def _normalize_switchport_data(
-        self,
-        parsed: List[Dict[str, Any]],
-        platform: str,
-    ) -> Dict[str, Dict[str, str]]:
-        """
-        Нормализует данные switchport из разных форматов в единый.
-
-        Обрабатывает форматы:
-        - NTC (Cisco): admin_mode, native_vlan, access_vlan, trunking_vlans
-        - QTech custom: mode (ACCESS/TRUNK/HYBRID), access_vlan, native_vlan, vlan_lists
-
-        Args:
-            parsed: Распарсенные данные из TextFSM/NTC
-            platform: Платформа устройства
-
-        Returns:
-            Dict: {interface: {mode, native_vlan, access_vlan, tagged_vlans}}
-        """
-        modes = {}
-
-        for row in parsed:
-            iface = row.get("interface", "")
-            if not iface:
-                continue
-
-            # Определяем формат данных:
-            # - Cisco NTC: admin_mode, trunking_vlans
-            # - QTech custom: switchport (enabled/disabled), mode (ACCESS/TRUNK/HYBRID), vlan_lists
-            switchport = row.get("switchport", "").lower()
-            if switchport == "disabled":
-                continue
-
-            admin_mode = row.get("admin_mode", "").lower()
-            native_vlan = row.get("native_vlan", row.get("trunking_native_vlan", ""))
-            access_vlan = row.get("access_vlan", "")
-
-            netbox_mode = ""
-            trunking_vlans = ""
-
-            if admin_mode:
-                # Cisco/Arista NTC формат (admin_mode — определяющее поле)
-                if "access" in admin_mode:
-                    netbox_mode = "access"
-                elif "trunk" in admin_mode or "dynamic" in admin_mode:
-                    raw_vlans = row.get("trunking_vlans", "")
-                    if isinstance(raw_vlans, list):
-                        trunking_vlans = ",".join(str(v) for v in raw_vlans).lower().strip()
-                    else:
-                        trunking_vlans = str(raw_vlans).lower().strip()
-                    if (not trunking_vlans or
-                        trunking_vlans == "all" or
-                        trunking_vlans in ("1-4094", "1-4093", "1-4095")):
-                        netbox_mode = "tagged-all"
-                        trunking_vlans = ""
-                    else:
-                        netbox_mode = "tagged"
-            elif switchport == "enabled":
-                # QTech формат (switchport=enabled, mode=ACCESS/TRUNK/HYBRID)
-                qtech_mode = row.get("mode", "").upper()
-                vlan_lists = row.get("vlan_lists", "")
-                if qtech_mode == "ACCESS":
-                    netbox_mode = "access"
-                elif qtech_mode == "TRUNK":
-                    vl = str(vlan_lists).strip().upper()
-                    if not vl or vl == "ALL":
-                        netbox_mode = "tagged-all"
-                    else:
-                        netbox_mode = "tagged"
-                        trunking_vlans = str(vlan_lists).strip()
-                elif qtech_mode == "HYBRID":
-                    netbox_mode = "tagged"
-                    vl = str(vlan_lists).strip().upper()
-                    if vl and vl != "ALL":
-                        trunking_vlans = str(vlan_lists).strip()
-
-            modes[iface] = {
-                "mode": netbox_mode,
-                "native_vlan": str(native_vlan) if native_vlan else "",
-                "access_vlan": str(access_vlan) if access_vlan else "",
-                "tagged_vlans": trunking_vlans if netbox_mode == "tagged" else "",
-            }
-
-            # Добавляем альтернативные имена интерфейсов
-            self._add_switchport_aliases(modes, iface)
-
-        return modes
-
-    def _add_switchport_aliases(
-        self,
-        modes: Dict[str, Dict[str, str]],
-        iface: str,
-    ) -> None:
-        """Добавляет альтернативные имена интерфейсов в switchport_modes."""
-        data = modes[iface]
-        # Cisco
-        if iface.startswith("Gi"):
-            modes[f"GigabitEthernet{iface[2:]}"] = data
-        elif iface.startswith("Fa"):
-            modes[f"FastEthernet{iface[2:]}"] = data
-        elif iface.startswith("Te"):
-            modes[f"TenGigabitEthernet{iface[2:]}"] = data
-        elif iface.startswith("Eth"):
-            modes[f"Ethernet{iface[3:]}"] = data
-        # QTech (имена с пробелом: "TFGigabitEthernet 0/1")
-        iface_nospace = iface.replace(" ", "")
-        if iface_nospace != iface:
-            modes[iface_nospace] = data
-        if iface.startswith("TFGigabitEthernet"):
-            modes[f"TF{iface[len('TFGigabitEthernet'):]}" .replace(" ", "")] = data
-        elif iface.startswith("HundredGigabitEthernet"):
-            modes[f"Hu{iface[len('HundredGigabitEthernet'):]}" .replace(" ", "")] = data
-        elif iface.startswith("AggregatePort"):
-            modes[f"Ag{iface[len('AggregatePort'):]}" .replace(" ", "")] = data
 
     def _parse_switchport_modes_regex(self, output: str) -> Dict[str, Dict[str, str]]:
         """
@@ -754,7 +619,7 @@ class InterfaceCollector(BaseCollector):
     def _parse_media_types(
         self,
         output: str,
-        ntc_platform: str,
+        platform: str,
         command: str = "show interface status",
     ) -> Dict[str, str]:
         """
@@ -765,8 +630,8 @@ class InterfaceCollector(BaseCollector):
 
         Args:
             output: Вывод команды show interface status
-            ntc_platform: Платформа для NTC
-            command: Команда для NTC парсера
+            platform: Платформа устройства (NTCParser сам ищет кастомный шаблон и NTC fallback)
+            command: Команда для парсера
 
         Returns:
             Dict: {interface: media_type} например {"Ethernet1/1": "10Gbase-LR"}
@@ -776,7 +641,7 @@ class InterfaceCollector(BaseCollector):
         try:
             parsed = self._parser.parse(
                 output=output,
-                platform=ntc_platform,
+                platform=platform,
                 command=command,
                 normalize=False,
             ) if self._parser else []
@@ -793,19 +658,9 @@ class InterfaceCollector(BaseCollector):
                 if not media_type or media_type == "--":
                     continue
 
-                # Нормализуем имя порта
-                # NX-OS show interface status: Eth1/1 -> Ethernet1/1
-                if port.startswith("Eth") and not port.startswith("Ethernet"):
-                    full_name = f"Ethernet{port[3:]}"
-                else:
-                    full_name = port
-
-                media_types[full_name] = media_type
-
-                # Добавляем также короткое имя для сопоставления
-                if full_name.startswith("Ethernet"):
-                    short_name = f"Eth{full_name[8:]}"
-                    media_types[short_name] = media_type
+                # Добавляем все варианты имени через единый источник из constants
+                for alias in get_interface_aliases(port):
+                    media_types[alias] = media_type
 
         except Exception as e:
             logger.debug(f"Ошибка парсинга media_type через NTC: {e}")

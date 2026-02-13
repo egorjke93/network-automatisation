@@ -425,7 +425,14 @@ class BaseCollector(ABC):
         command: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Парсит вывод с помощью NTC Templates.
+        Парсит вывод через NTCParser (кастомный шаблон → NTC fallback).
+
+        NTCParser.parse() сам обрабатывает приоритеты:
+        1. Кастомный шаблон из CUSTOM_TEXTFSM_TEMPLATES по (platform, command)
+        2. NTC Templates с маппингом платформы через NTC_PLATFORM_MAP
+
+        Передаём оригинальную платформу (qtech, cisco_nxos), чтобы
+        кастомные шаблоны находились по правильному ключу.
 
         Args:
             output: Сырой вывод
@@ -439,19 +446,16 @@ class BaseCollector(ABC):
             return []
 
         cmd = command or self._get_command(device)
-        ntc_platform = get_ntc_platform(device.platform)
 
         try:
             return self._parser.parse(
                 output=output,
-                platform=ntc_platform,
+                platform=device.platform,
                 command=cmd,
                 fields=self.ntc_fields,
             )
         except Exception as e:
-            # Логируем как warning — fallback парсинг может сработать
             logger.warning(f"NTC парсинг не удался для {device.platform}/{cmd}: {e}")
-            # Не бросаем ParseError — даём возможность fallback парсингу
             return []
 
     # Алиас для обратной совместимости

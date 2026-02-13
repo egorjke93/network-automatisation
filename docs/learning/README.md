@@ -53,10 +53,11 @@
 | 10 | [Collectors Deep Dive](10_COLLECTORS_DEEP_DIVE.md) | Полная цепочка сбора: CLI → BaseCollector → SSH → TextFSM → Normalizer → Exporter. Каждый коллектор, каждый нормализатор, каждый экспортер | ~60 мин |
 | 11 | [Sync Deep Dive](11_SYNC_DEEP_DIVE.md) | Полная цепочка синхронизации: SyncComparator → SyncDiff → все 6 миксинов → batch API → NetBox. Все 11 _check_*() хелперов | ~60 мин |
 | 12 | [Internals и Testing](12_INTERNALS_AND_TESTING.md) | Инфраструктура: Config система, constants пакет, иерархия исключений, RunContext, паттерны тестирования с MagicMock и pytest | ~45 мин |
+| 13 | [Switchport Flow](13_SWITCHPORT_FLOW.md) | Полная цепочка определения switchport mode: SSH → TextFSM → нормализация → enrichment → NetBox sync. Три платформы (IOS, NX-OS, QTech), различия форматов, история бага | ~40 мин |
 
-**Итого deep dive:** примерно 2.5-3 часа.
+**Итого deep dive:** примерно 3-3.5 часа.
 
-**Рекомендуемый порядок:** 10 → 11 → 12 (doc 10 вводит паттерны, которые используются в doc 11; doc 12 независимый, но ссылается на оба).
+**Рекомендуемый порядок:** 10 → 11 → 12 → 13 (doc 10 вводит паттерны, которые используются в doc 11; doc 12 независимый, но ссылается на оба; doc 13 — глубокий разбор конкретного flow с историей бага).
 
 ## Как связана обучающая документация с официальной
 
@@ -76,5 +77,6 @@
 | 10 Collectors Deep Dive | [PLATFORM_GUIDE.md](../PLATFORM_GUIDE.md), [ARCHITECTURE.md](../ARCHITECTURE.md) |
 | 11 Sync Deep Dive | [ARCHITECTURE.md](../ARCHITECTURE.md), [DEVELOPMENT.md](../DEVELOPMENT.md) |
 | 12 Internals и Testing | [TESTING.md](../TESTING.md), [DEVELOPMENT.md](../DEVELOPMENT.md) |
+| 13 Switchport Flow | [PLATFORM_GUIDE.md](../PLATFORM_GUIDE.md), [ARCHITECTURE.md](../ARCHITECTURE.md) |
 
 **Рекомендация:** сначала прочитай обучающий документ, чтобы понять концепцию. Потом загляни в связанный документ из основной документации для полной картины.

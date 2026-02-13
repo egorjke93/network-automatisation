@@ -316,21 +316,23 @@ class TestInterfaceNormalizerEnrich:
         assert result[1]["mode"] == "tagged"
         assert result[1]["native_vlan"] == "1"
 
-    def test_get_interface_name_variants(self):
-        """Генерация вариантов имён интерфейсов."""
+    def test_interface_aliases_used_in_enrichment(self):
+        """get_interface_aliases() используется для сопоставления имён."""
+        from network_collector.core.constants.interfaces import get_interface_aliases
+
         # Полное -> сокращённое
-        variants = self.normalizer._get_interface_name_variants("GigabitEthernet0/1")
-        assert "Gi0/1" in variants
-        assert "GigabitEthernet0/1" in variants
+        aliases = get_interface_aliases("GigabitEthernet0/1")
+        assert "Gi0/1" in aliases
+        assert "GigabitEthernet0/1" in aliases
 
         # Сокращённое -> полное
-        variants = self.normalizer._get_interface_name_variants("Te1/0/1")
-        assert "TenGigabitEthernet1/0/1" in variants
-        assert "Te1/0/1" in variants
+        aliases = get_interface_aliases("Te1/0/1")
+        assert "TenGigabitEthernet1/0/1" in aliases
+        assert "Te1/0/1" in aliases
 
         # Port-channel
-        variants = self.normalizer._get_interface_name_variants("Port-channel1")
-        assert "Po1" in variants
+        aliases = get_interface_aliases("Port-channel1")
+        assert "Po1" in aliases
 
     def test_enrich_with_media_type(self):
         """Обогащение media_type."""

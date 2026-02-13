@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 
 from ..models import Interface
 from ..constants import normalize_interface_short
+from ..constants.interfaces import get_interface_aliases
 
 
 # Маппинг статусов из show interfaces в стандартные значения
@@ -283,6 +284,113 @@ class InterfaceNormalizer:
                 iface["lag"] = lag_membership[iface_name]
         return interfaces
 
+    def normalize_switchport_data(
+        self,
+        parsed: List[Dict[str, Any]],
+        platform: str,
+    ) -> Dict[str, Dict[str, str]]:
+        """
+        Нормализует данные switchport из разных форматов TextFSM/NTC в единый.
+
+        Обрабатывает форматы:
+        - Cisco IOS/Arista NTC: admin_mode, native_vlan, access_vlan, trunking_vlans
+        - NX-OS NTC: mode (operational), trunking_vlans (без admin_mode)
+        - QTech custom: switchport=enabled, mode (ACCESS/TRUNK/HYBRID), vlan_lists
+
+        Args:
+            parsed: Распарсенные данные из TextFSM/NTC
+            platform: Платформа устройства
+
+        Returns:
+            Dict: {interface: {mode, native_vlan, access_vlan, tagged_vlans}}
+        """
+        modes = {}
+
+        for row in parsed:
+            iface = row.get("interface", "")
+            if not iface:
+                continue
+
+            # Определяем формат данных:
+            # - Cisco NTC: admin_mode, trunking_vlans
+            # - QTech custom: switchport (enabled/disabled), mode (ACCESS/TRUNK/HYBRID), vlan_lists
+            switchport = row.get("switchport", "").lower()
+            if switchport == "disabled":
+                continue
+
+            admin_mode = row.get("admin_mode", "").lower()
+            native_vlan = row.get("native_vlan", row.get("trunking_native_vlan", ""))
+            access_vlan = row.get("access_vlan", "")
+
+            netbox_mode = ""
+            trunking_vlans = ""
+
+            if admin_mode:
+                # Cisco IOS/Arista NTC формат (admin_mode — определяющее поле)
+                if "access" in admin_mode:
+                    netbox_mode = "access"
+                elif "trunk" in admin_mode or "dynamic" in admin_mode:
+                    raw_vlans = row.get("trunking_vlans", "")
+                    if isinstance(raw_vlans, list):
+                        trunking_vlans = ",".join(str(v) for v in raw_vlans).lower().strip()
+                    else:
+                        trunking_vlans = str(raw_vlans).lower().strip()
+                    if (not trunking_vlans or
+                        trunking_vlans == "all" or
+                        trunking_vlans in ("1-4094", "1-4093", "1-4095")):
+                        netbox_mode = "tagged-all"
+                        trunking_vlans = ""
+                    else:
+                        netbox_mode = "tagged"
+            elif row.get("trunking_vlans") is not None and row.get("mode"):
+                # NX-OS формат (mode + trunking_vlans, без admin_mode)
+                nxos_mode = row.get("mode", "").lower()
+                if "trunk" in nxos_mode:
+                    raw_vlans = row.get("trunking_vlans", "")
+                    trunking_vlans = str(raw_vlans).lower().strip()
+                    if (not trunking_vlans or
+                        trunking_vlans == "all" or
+                        trunking_vlans in ("1-4094", "1-4093", "1-4095")):
+                        netbox_mode = "tagged-all"
+                        trunking_vlans = ""
+                    else:
+                        netbox_mode = "tagged"
+                elif "access" in nxos_mode:
+                    netbox_mode = "access"
+            elif switchport == "enabled":
+                # QTech формат (switchport=enabled, mode=ACCESS/TRUNK/HYBRID)
+                qtech_mode = row.get("mode", "").upper()
+                vlan_lists = row.get("vlan_lists", "")
+                if qtech_mode == "ACCESS":
+                    netbox_mode = "access"
+                elif qtech_mode == "TRUNK":
+                    vl = str(vlan_lists).strip().upper()
+                    if not vl or vl == "ALL":
+                        netbox_mode = "tagged-all"
+                    else:
+                        netbox_mode = "tagged"
+                        trunking_vlans = str(vlan_lists).strip()
+                elif qtech_mode == "HYBRID":
+                    netbox_mode = "tagged"
+                    vl = str(vlan_lists).strip().upper()
+                    if vl and vl != "ALL":
+                        trunking_vlans = str(vlan_lists).strip()
+
+            mode_data = {
+                "mode": netbox_mode,
+                "native_vlan": str(native_vlan) if native_vlan else "",
+                "access_vlan": str(access_vlan) if access_vlan else "",
+                "tagged_vlans": trunking_vlans if netbox_mode == "tagged" else "",
+            }
+            modes[iface] = mode_data
+
+            # Добавляем альтернативные имена через единый источник из constants
+            for alias in get_interface_aliases(iface):
+                if alias != iface:
+                    modes[alias] = mode_data
+
+        return modes
+
     def enrich_with_switchport(
         self,
         interfaces: List[Dict[str, Any]],
@@ -323,9 +431,8 @@ class InterfaceNormalizer:
             if iface_name in switchport_modes:
                 sw_data = switchport_modes[iface_name]
             else:
-                # Пробуем нормализованные варианты имени
-                normalized_names = self._get_interface_name_variants(iface_name)
-                for variant in normalized_names:
+                # Пробуем все варианты написания имени из constants
+                for variant in get_interface_aliases(iface_name):
                     if variant in switchport_modes:
                         sw_data = switchport_modes[variant]
                         break
@@ -372,54 +479,6 @@ class InterfaceNormalizer:
             if iface_num == lag_num:
                 return True
         return False
-
-    def _get_interface_name_variants(self, name: str) -> List[str]:
-        """
-        Возвращает варианты имени интерфейса для сопоставления.
-
-        Например GigabitEthernet0/1 -> ['Gi0/1', 'GigabitEthernet0/1']
-
-        Args:
-            name: Имя интерфейса
-
-        Returns:
-            List[str]: Варианты имени
-        """
-        variants = [name]
-
-        # Полные имена -> сокращённые
-        abbrev_map = {
-            "GigabitEthernet": "Gi",
-            "TenGigabitEthernet": "Te",
-            "TFGigabitEthernet": "TF",  # QTech 10G
-            "TwentyFiveGigE": "Twe",
-            "TwentyFiveGigabitEthernet": "Twe",
-            "FortyGigabitEthernet": "Fo",
-            "HundredGigE": "Hu",
-            "HundredGigabitEthernet": "Hu",
-            "FastEthernet": "Fa",
-            "AggregatePort": "Ag",  # QTech LAG
-            "Ethernet": "Eth",
-            "Port-channel": "Po",
-            "Port-Channel": "Po",
-        }
-
-        # Сокращённые -> полные
-        full_map = {v: k for k, v in abbrev_map.items()}
-
-        for full, short in abbrev_map.items():
-            if name.startswith(full):
-                suffix = name[len(full):]
-                variants.append(f"{short}{suffix}")
-                break
-
-        for short, full in full_map.items():
-            if name.startswith(short) and not name.startswith(full):
-                suffix = name[len(short):]
-                variants.append(f"{full}{suffix}")
-                break
-
-        return variants
 
     def enrich_with_media_type(
         self,

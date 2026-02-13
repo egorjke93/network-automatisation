@@ -14,12 +14,19 @@
 import pytest
 from ntc_templates.parse import parse_output
 from network_collector.collectors.interfaces import InterfaceCollector
+from network_collector.core.domain import InterfaceNormalizer
 
 
 @pytest.fixture
 def collector():
     """Создаём InterfaceCollector для тестирования."""
     return InterfaceCollector()
+
+
+@pytest.fixture
+def normalizer():
+    """Создаём InterfaceNormalizer для unit-тестов нормализации."""
+    return InterfaceNormalizer()
 
 
 def make_switchport_output(interfaces: list[dict]) -> str:
@@ -299,3 +306,121 @@ Pruning VLANs Enabled: 2-1001
         gi10 = result.get("Gi0/10", result.get("GigabitEthernet0/10", {}))
         assert gi10.get("mode") == "tagged"
         assert gi10.get("native_vlan") == "100"
+
+
+@pytest.mark.unit
+class TestNXOSSwitchportMode:
+    """
+    Тесты switchport mode для NX-OS.
+
+    NX-OS NTC формат отличается от Cisco IOS:
+    - Нет поля admin_mode (только mode = operational mode)
+    - trunking_vlans — строка (не список)
+    - switchport = "Enabled" (с большой буквы)
+    """
+
+    @pytest.mark.parametrize("mode,trunking_vlans,expected_mode", [
+        # tagged-all (все VLAN)
+        ("trunk", "1-4094", "tagged-all"),
+        ("trunk", "1-4093", "tagged-all"),
+        ("trunk", "1-4095", "tagged-all"),
+        # tagged (конкретные VLAN)
+        ("trunk", "10,30,38", "tagged"),
+        ("trunk", "10,30,35,38,47", "tagged"),
+        ("trunk", "10", "tagged"),
+        ("trunk", "100-200", "tagged"),
+        ("trunk", "10,20,30,100", "tagged"),
+        # access
+        ("access", "1-4094", "access"),
+    ])
+    def test_nxos_switchport_mode(self, normalizer, mode, trunking_vlans, expected_mode):
+        """NX-OS формат: mode + trunking_vlans без admin_mode."""
+        parsed = [{
+            "interface": "Ethernet1/2",
+            "switchport": "Enabled",
+            "mode": mode,
+            "access_vlan": "1",
+            "native_vlan": "1",
+            "trunking_vlans": trunking_vlans,
+        }]
+
+        result = normalizer.normalize_switchport_data(parsed, "cisco_nxos")
+        eth = result.get("Ethernet1/2", {})
+        assert eth.get("mode") == expected_mode, (
+            f"NX-OS mode={mode}, trunking_vlans={trunking_vlans}\n"
+            f"Expected: {expected_mode}, Got: {eth.get('mode')}"
+        )
+
+    def test_nxos_tagged_vlans_preserved(self, normalizer):
+        """NX-OS: tagged_vlans сохраняются для tagged портов."""
+        parsed = [{
+            "interface": "Ethernet1/2",
+            "switchport": "Enabled",
+            "mode": "trunk",
+            "access_vlan": "1",
+            "native_vlan": "1",
+            "trunking_vlans": "10,30,38",
+        }]
+
+        result = normalizer.normalize_switchport_data(parsed, "cisco_nxos")
+        eth = result.get("Ethernet1/2", {})
+        assert eth.get("mode") == "tagged"
+        assert eth.get("tagged_vlans") == "10,30,38"
+
+    def test_nxos_tagged_all_clears_vlans(self, normalizer):
+        """NX-OS: tagged-all не сохраняет tagged_vlans."""
+        parsed = [{
+            "interface": "Ethernet1/1",
+            "switchport": "Enabled",
+            "mode": "trunk",
+            "access_vlan": "1",
+            "native_vlan": "1",
+            "trunking_vlans": "1-4094",
+        }]
+
+        result = normalizer.normalize_switchport_data(parsed, "cisco_nxos")
+        eth = result.get("Ethernet1/1", {})
+        assert eth.get("mode") == "tagged-all"
+        assert eth.get("tagged_vlans") == ""
+
+    def test_nxos_native_vlan_parsed(self, normalizer):
+        """NX-OS: native_vlan парсится корректно."""
+        parsed = [{
+            "interface": "Ethernet1/5",
+            "switchport": "Enabled",
+            "mode": "trunk",
+            "access_vlan": "1",
+            "native_vlan": "100",
+            "trunking_vlans": "10,30,38",
+        }]
+
+        result = normalizer.normalize_switchport_data(parsed, "cisco_nxos")
+        eth = result.get("Ethernet1/5", {})
+        assert eth.get("native_vlan") == "100"
+
+    def test_nxos_real_fixture_integration(self, collector):
+        """Полная интеграция: реальная NX-OS фикстура → правильные mode."""
+        import os
+        fixture_path = os.path.join(
+            os.path.dirname(__file__), "..", "fixtures", "cisco_nxos",
+            "show_interface_switchport.txt"
+        )
+        with open(fixture_path) as f:
+            output = f.read()
+
+        result = collector._parse_switchport_modes(
+            output, "cisco_nxos", "show interface switchport"
+        )
+
+        # Ethernet1/1: trunk ALL → tagged-all
+        eth1 = result.get("Ethernet1/1", {})
+        assert eth1.get("mode") == "tagged-all", f"Ethernet1/1 должен быть tagged-all: {eth1}"
+
+        # Ethernet1/2: trunk 10,30,38 → tagged
+        eth2 = result.get("Ethernet1/2", {})
+        assert eth2.get("mode") == "tagged", f"Ethernet1/2 должен быть tagged: {eth2}"
+        assert eth2.get("tagged_vlans") == "10,30,38"
+
+        # Ethernet1/3: trunk 10,30,35,38,47 → tagged
+        eth3 = result.get("Ethernet1/3", {})
+        assert eth3.get("mode") == "tagged", f"Ethernet1/3 должен быть tagged: {eth3}"

@@ -699,7 +699,7 @@ def _find_interface(self, device_id, name):
 - Маппинги интерфейсов: TF ↔ TFGigabitEthernet, Ag ↔ AggregatePort
 - TextFSM шаблон qtech_show_aggregatePort_summary.textfsm для LAG парсинга
 - LAG парсинг: _parse_lag_membership_qtech() с алиасами всех имён
-- Switchport: универсальная _normalize_switchport_data() для Cisco и QTech форматов
+- Switchport: универсальная `InterfaceNormalizer.normalize_switchport_data()` для Cisco и QTech форматов
 - TextFSM fix: VLAN regex (\d+) → (\S+) для поддержки "routed"
 - Команда `show interface` (без 's') для QTech
 - normalize_interface_full() — исправлен баг с ложным срабатыванием на полных именах
@@ -941,13 +941,131 @@ if target == "lldp":
 
 ---
 
+## Рефакторинг: единый поток парсинга (Февраль 2026) ✅
+
+### NX-OS Switchport Mode Bug ✅
+
+**Проблема:** Все NX-OS trunk-порты с конкретным списком VLAN (10,30,38) стали `tagged-all` вместо `tagged`. VLAN-списки терялись при sync.
+
+**Причина — неучтённый формат NX-OS в `normalize_switchport_data()` (ранее в collectors, теперь в `InterfaceNormalizer`):**
+
+NTC парсер возвращает разные поля для разных платформ:
+
+| Платформа | admin_mode | mode | trunking_vlans | switchport |
+|-----------|-----------|------|----------------|------------|
+| Cisco IOS | `static access` / `trunk` | `down` / `trunk` (oper) | `["ALL"]` (список) | — |
+| NX-OS | **отсутствует** | `trunk` / `access` | `"10,30,38"` (строка) | `Enabled` |
+| QTech | — | `ACCESS` / `TRUNK` | — (есть `vlan_lists`) | `enabled` |
+
+Код проверял только `admin_mode` (IOS) и `switchport=="enabled"` (QTech). NX-OS не имеет `admin_mode` → попадал в QTech ветку → искал `vlan_lists` → пустая строка → `tagged-all`.
+
+**Поток данных ДО исправления:**
+```
+NX-OS → NTC: {mode: "trunk", trunking_vlans: "10,30,38"}
+→ normalize_switchport_data()
+→ if admin_mode: FALSE (нет у NX-OS)
+→ elif switchport == "enabled": TRUE → QTech ветка!
+→ vlan_lists = "" (нет такого поля) → tagged-all ❌
+```
+
+**Поток данных ПОСЛЕ исправления:**
+```
+NX-OS → NTC: {mode: "trunk", trunking_vlans: "10,30,38"}
+→ normalize_switchport_data()
+→ if admin_mode: FALSE
+→ elif trunking_vlans + mode: TRUE → NX-OS ветка ✅
+→ trunking_vlans = "10,30,38" → tagged ✅
+```
+
+**Решение:** Добавлена NX-OS ветка (определяется по наличию `trunking_vlans` + `mode` при отсутствии `admin_mode`).
+
+**Файл:** `core/domain/interface.py` — `InterfaceNormalizer.normalize_switchport_data()`
+
+**Тесты:** +13 тестов NX-OS в `tests/test_collectors/test_switchport_mode.py`
+
+### Дублирование логики парсинга ✅
+
+**Проблема:** `NTCParser.parse()` уже содержит универсальную логику:
+1. Ищет кастомный шаблон по `(platform, command)`
+2. Fallback на NTC с маппингом `NTC_PLATFORM_MAP`
+
+Но коллекторы дублировали эту логику:
+- `_parse_with_ntc()` конвертировал платформу через `get_ntc_platform()` перед вызовом парсера → кастомные шаблоны не находились
+- `_parse_switchport_modes()` вызывал парсер дважды (кастомный + NTC) вместо одного вызова
+- `_parse_lag_membership()` и `_parse_media_types()` передавали конвертированную платформу
+
+**Поток ДО исправления:**
+```
+InterfaceCollector._parse_with_ntc(device)
+→ ntc_platform = get_ntc_platform("qtech") → "cisco_ios"
+→ NTCParser.parse(platform="cisco_ios", command="show interface")
+→ Custom lookup: ("cisco_ios", "show interface") → НЕ НАЙДЕН ❌
+→ NTC fallback: cisco_ios / show interface → Cisco IOS шаблон (неправильный!)
+```
+
+**Поток ПОСЛЕ исправления:**
+```
+InterfaceCollector._parse_with_ntc(device)
+→ NTCParser.parse(platform="qtech", command="show interface")
+→ Custom lookup: ("qtech", "show interface") → НАЙДЕН ✅ → qtech_show_interface.textfsm
+```
+
+**Решение:**
+- `_parse_with_ntc()` — передаёт `device.platform` (не ntc_platform), парсер сам конвертирует
+- `_parse_switchport_modes()` — один вызов парсера вместо двух (убрано дублирование)
+- `_parse_lag_membership()` — переименован параметр `ntc_platform` → `platform`
+- `_parse_media_types()` — переименован параметр `ntc_platform` → `platform`
+- Удалён неиспользуемый `get_ntc_platform` из interfaces.py
+
+**Файлы:** `collectors/base.py`, `collectors/interfaces.py`
+
+### Switchport нормализация перенесена в domain layer ✅
+
+**Проблема:** Нормализация switchport данных (`_normalize_switchport_data()`) находилась в `collectors/interfaces.py`,
+хотя по архитектуре вся нормализация должна быть в domain layer. Генерация алиасов интерфейсов дублировалась
+в трёх местах: `_add_switchport_aliases()` в коллекторе, `_get_interface_name_variants()` в domain,
+и частично в `get_interface_aliases()` в constants.
+
+**Решение:**
+- `_normalize_switchport_data()` перенесён из `collectors/interfaces.py` в `core/domain/interface.py`
+  как `InterfaceNormalizer.normalize_switchport_data()` — статический метод нормализатора
+- `_add_switchport_aliases()` **удалён** из коллектора — заменён на `get_interface_aliases()` из `core/constants/interfaces.py`
+- `_get_interface_name_variants()` **удалён** из domain — заменён на `get_interface_aliases()`
+- Коллектор теперь только парсит (SSH → TextFSM), вся нормализация в domain layer
+
+**Поток данных:**
+```
+collectors/interfaces.py          → только парсинг (SSH + TextFSM)
+core/domain/interface.py          → InterfaceNormalizer.normalize_switchport_data() (нормализация)
+core/constants/interfaces.py      → get_interface_aliases() (единый источник алиасов)
+```
+
+**Результат:**
+- Устранено тройное дублирование генерации алиасов → единый источник `get_interface_aliases()`
+- Архитектурная консистентность: collector парсит, domain нормализует
+- Упрощено тестирование: нормализация тестируется отдельно от SSH/парсинга
+
+**Файлы:**
+- `core/domain/interface.py` — `InterfaceNormalizer.normalize_switchport_data()` (перенесён)
+- `core/constants/interfaces.py` — `get_interface_aliases()` (единый источник алиасов)
+- `collectors/interfaces.py` — удалены `_normalize_switchport_data()`, `_add_switchport_aliases()`
+
+### Мелкие фиксы ✅
+
+| Баг | Файл | Описание |
+|-----|------|----------|
+| Alias `Etherneternet` | `core/constants/interfaces.py` | `get_interface_aliases()` (ранее `_add_switchport_aliases()`): Ethernet1/1 → Etherneternet1/1 (двойное ernet). Исправлено в единой функции алиасов |
+| Config test hardcode | `tests/test_qtech_support.py` | Тест `max_retries == 2` зависел от config.yaml. Заменён на проверку типа `isinstance(int)` |
+
+---
+
 ## Статистика проекта
 
 | Метрика | Значение |
 |---------|----------|
 | Python файлов | ~90 |
 | Строк кода | ~17,000 |
-| Тестов | 1788 |
+| Тестов | 1800 |
 | Тестовых категорий | 12 (включая test_configurator, корневые) |
 | CLI команд | 11 |
 | API endpoints | 13 |

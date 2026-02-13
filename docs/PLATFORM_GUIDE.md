@@ -856,14 +856,14 @@ AggregatePort 10                 enabled    HYBRID 40     40     Disabled  10,20
 1. Шаблон уже парсит VLAN_LISTS как `(\S+)` — значение `10,20,30` будет захвачено.
    Если VLAN на нескольких строках (перенос), нужен `Value List`.
 
-2. Нормализация в `collectors/interfaces.py` → `_normalize_switchport_data()`:
+2. Нормализация в `core/domain/interface.py` → `InterfaceNormalizer.normalize_switchport_data()`:
    - `MODE=TRUNK` + `VLAN_LISTS=ALL` → `mode="tagged-all"`, `vlans=[]`
    - `MODE=TRUNK` + `VLAN_LISTS=10,20,30` → `mode="tagged"`, `vlans=[10,20,30]`
    - `MODE=HYBRID` + `VLAN_LISTS=10,20,30,40` → `mode="tagged"`, `vlans=[10,20,30,40]`
    - `MODE=ACCESS` → `mode="access"`, `vlans=[access_vlan]`
 
 3. Если формат VLAN отличается (например, через дефис `10-30`):
-   Обновить `_normalize_switchport_data()` — добавить распарсивание диапазонов.
+   Обновить `InterfaceNormalizer.normalize_switchport_data()` в `core/domain/interface.py` — добавить распарсивание диапазонов.
 
 4. Если VLAN на нескольких строках, обновить TextFSM шаблон:
    ```textfsm
@@ -881,9 +881,9 @@ TextFSM шаблон парсит сырой текст
      ↓
 NTCParser.parse() → список dict с полями шаблона
      ↓
-_normalize_switchport_data() → единый формат {interface, mode, vlans}
+InterfaceNormalizer.normalize_switchport_data() → единый формат {interface, mode, vlans}
      ↓
-_add_switchport_aliases() → добавляет алиасы имён интерфейсов
+get_interface_aliases() (core/constants/interfaces.py) → алиасы имён интерфейсов
      ↓
 enrich_with_switchport() (Domain Layer) → обогащает интерфейс
      ↓
@@ -891,7 +891,7 @@ NetBox sync → mode, tagged_vlans, untagged_vlan
 ```
 
 Ключевой принцип: **TextFSM шаблон только парсит текст в структурированные данные**.
-Вся логика нормализации, конвертации и обогащения — в Domain Layer и коллекторе.
+Вся логика нормализации, конвертации и обогащения — в Domain Layer (`core/domain/`).
 
 ---
 
@@ -973,8 +973,8 @@ Trunking Native Mode VLAN: 1
 Trunking VLANs Enabled: 10,20,30
 ```
 
-Универсальная функция `_normalize_switchport_data()` обрабатывает оба формата
-автоматически, определяя формат по наличию характерных полей.
+Универсальная функция `InterfaceNormalizer.normalize_switchport_data()` (в `core/domain/interface.py`)
+обрабатывает оба формата автоматически, определяя формат по наличию характерных полей.
 
 ---
 
@@ -1195,7 +1195,7 @@ SECONDARY_COMMANDS["switchport"] = {
 }
 ```
 
-Нормализация switchport данных — **универсальная** (`_normalize_switchport_data()`),
+Нормализация switchport данных — **универсальная** (`InterfaceNormalizer.normalize_switchport_data()` в `core/domain/interface.py`),
 поддерживает два формата:
 
 ```python
@@ -1207,7 +1207,7 @@ SECONDARY_COMMANDS["switchport"] = {
 ```
 
 Если ваш вендор возвращает один из этих форматов — работает автоматически.
-Если другой формат — добавить условие в `_normalize_switchport_data()`.
+Если другой формат — добавить условие в `InterfaceNormalizer.normalize_switchport_data()` (`core/domain/interface.py`).
 
 #### 4d. Media Type / Transceiver (опционально)
 
@@ -1469,7 +1469,7 @@ python -m network_collector sync-netbox --sync-all --dry-run
 | **lldp** | `COLLECTOR_COMMANDS["lldp"]` | — | Автоматическая | Если формат ≠ Cisco |
 | **inventory** | `COLLECTOR_COMMANDS["inventory"]` + `SECONDARY_COMMANDS["transceiver"]` | — | Manufacturer detection | Если формат ≠ Cisco |
 | **LAG** | — | `SECONDARY_COMMANDS["lag"]` | `_parse_lag_membership()` | Если формат ≠ Cisco |
-| **switchport** | — | `SECONDARY_COMMANDS["switchport"]` | `_normalize_switchport_data()` | Если формат ≠ Cisco |
+| **switchport** | — | `SECONDARY_COMMANDS["switchport"]` | `InterfaceNormalizer.normalize_switchport_data()` | Если формат ≠ Cisco |
 | **media_type** | — | `SECONDARY_COMMANDS["media_type"]` | Автоматическая | Если формат ≠ NX-OS |
 | **IP** | Из `show interfaces` | — | Regex | Если формат ≠ Cisco |
 
@@ -1639,7 +1639,7 @@ python -m network_collector sync-netbox --interfaces --dry-run 2>&1 | grep -i vl
 ### Если LAG/switchport формат уникальный
 
 - [ ] `collectors/interfaces.py` — написать `_parse_lag_membership_<vendor>()` (парсер вывода) [§12.5]
-- [ ] `collectors/interfaces.py` — обновить `_normalize_switchport_data()` (нормализация) [§12.5]
+- [ ] `core/domain/interface.py` — обновить `InterfaceNormalizer.normalize_switchport_data()` (нормализация) [§12.5]
 
 ### Опционально
 

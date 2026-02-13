@@ -33,7 +33,7 @@ class TestInterfaceCollectorMediaTypes:
         collector = InterfaceCollector()
         result = collector._parse_media_types(
             nxos_interface_status,
-            ntc_platform="cisco_nxos",
+            platform="cisco_nxos",
             command="show interface status",
         )
 
@@ -47,7 +47,7 @@ class TestInterfaceCollectorMediaTypes:
         collector = InterfaceCollector()
         result = collector._parse_media_types(
             nxos_interface_status,
-            ntc_platform="cisco_nxos",
+            platform="cisco_nxos",
             command="show interface status",
         )
 
@@ -62,7 +62,7 @@ class TestInterfaceCollectorMediaTypes:
         collector = InterfaceCollector()
         result = collector._parse_media_types(
             nxos_interface_status,
-            ntc_platform="cisco_nxos",
+            platform="cisco_nxos",
             command="show interface status",
         )
 
@@ -78,7 +78,7 @@ class TestInterfaceCollectorMediaTypes:
         collector = InterfaceCollector()
         result = collector._parse_media_types(
             nxos_interface_status,
-            ntc_platform="cisco_nxos",
+            platform="cisco_nxos",
             command="show interface status",
         )
 
