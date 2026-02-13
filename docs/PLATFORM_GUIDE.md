@@ -1120,38 +1120,228 @@ python -m network_collector devices --format parsed
 
 Если нужен — см. [раздел 10](#10-рецепт-добавление-нового-textfsm-шаблона-пошагово).
 
-### 12.5 Шаг 4: Дополнительные команды интерфейсного коллектора
+### 12.5 Шаг 4: Команды и шаблоны для сбора интерфейсов
 
-**Файл:** `core/constants/commands.py` → `SECONDARY_COMMANDS`
+#### Сводная таблица: что нужно для sync интерфейсов
 
-Интерфейсный коллектор помимо основной команды (`show interfaces`) выполняет
-**дополнительные** команды из `SECONDARY_COMMANDS`. Каждую нужно добавить, если платформа поддерживает:
+Интерфейсный коллектор выполняет **до 4 SSH-команд** на каждое устройство.
+Только первая (основная) обязательна. Остальные — дополнительные: если для платформы
+нет команды, коллектор **просто пропускает** этот этап и идёт дальше.
 
-#### 4a. Interface Status (обязательно)
+| # | Данные | Команда (Cisco) | Команда (QTech) | Обязат.? | Что даёт для NetBox |
+|---|--------|-----------------|-----------------|----------|---------------------|
+| 1 | **Основные** (имя, статус, скорость, описание, MAC, MTU, IP) | `show interfaces` | `show interface` | **Да** | Создание/обновление интерфейсов |
+| 2 | **LAG membership** (какой порт в каком LAG) | `show etherchannel summary` | `show aggregatePort summary` | Нет | Поле `lag` (parent interface) |
+| 3 | **Switchport mode** (access/trunk, VLAN) | `show interfaces switchport` | `show interface switchport` | Нет | Поля `mode`, `untagged_vlan`, `tagged_vlans` |
+| 4 | **Media type** (тип SFP модуля) | `show interface status` (NX-OS) | _(пока не реализовано)_ | Нет | Точный `type` порта (1000base-t vs 1000base-x-sfp) |
 
-Дополнительные команды интерфейсного коллектора централизованы в `core/constants/commands.py` → `SECONDARY_COMMANDS`.
+**Что будет если шаблон не добавить:**
+- Нет шаблона для команды 1 (основной) → **интерфейсы не соберутся вообще**
+- Нет шаблона для команды 2 (LAG) → интерфейсы соберутся, но без привязки к LAG
+- Нет шаблона для команды 3 (switchport) → интерфейсы соберутся, но без VLAN и mode
+- Нет шаблона для команды 4 (media_type) → тип порта определяется по имени (fallback: `GigabitEthernet` → `1000base-t`)
 
-> **Примечание:** В проекте НЕТ отдельных переменных `interface_status_commands`, `lag_commands`, `switchport_commands`.
-> Все дополнительные команды хранятся в `SECONDARY_COMMANDS` с группами:
-> `"interface_errors"`, `"media_type"`, `"lag"`, `"switchport"`, `"transceiver"`, `"lldp_summary"`.
+#### Как это работает: полная цепочка вызовов
 
-Interface status (speed, duplex, link status) пока не вынесен в SECONDARY_COMMANDS для всех платформ.
-Если нужно добавить — создать группу или использовать существующую.
+Рассмотрим пошагово, что происходит когда вы запускаете:
 
-Если не добавить — интерфейсы будут без speed и link status.
+```bash
+python -m network_collector sync-netbox --interfaces
+```
 
-#### 4b. LAG Membership (если есть LAG)
+**Шаг 1. Инициализация коллектора** (`collectors/interfaces.py`, `__init__`)
+
+```python
+class InterfacesCollector(BaseCollector):
+    # Атрибуты класса — берут команды из SECONDARY_COMMANDS
+    lag_commands = SECONDARY_COMMANDS.get("lag", {})
+    switchport_commands = SECONDARY_COMMANDS.get("switchport", {})
+    media_type_commands = SECONDARY_COMMANDS.get("media_type", {})
+
+    def __init__(
+        self,
+        collect_lag_info: bool = True,       # Собирать LAG? По умолчанию — да
+        collect_switchport: bool = True,     # Собирать switchport? По умолчанию — да
+        collect_media_type: bool = True,     # Собирать media_type? По умолчанию — да
+        **kwargs,
+    ):
+```
+
+Обратите внимание: все три флага **по умолчанию включены** (`True`).
+Они НЕ берутся из `fields.yaml` — это параметры конструктора.
+
+`SECONDARY_COMMANDS` — это словарь в `core/constants/commands.py`, где для каждой
+группы данных (lag, switchport, media_type) указаны команды для каждой платформы:
+
+```python
+# core/constants/commands.py
+SECONDARY_COMMANDS = {
+    "lag": {
+        "cisco_ios": "show etherchannel summary",
+        "cisco_nxos": "show port-channel summary",
+        "qtech": "show aggregatePort summary",
+        "qtech_qsw": "show aggregatePort summary",
+        ...
+    },
+    "switchport": {
+        "cisco_ios": "show interfaces switchport",
+        "cisco_nxos": "show interface switchport",   # NX-OS: без 's'
+        "qtech": "show interface switchport",
+        "qtech_qsw": "show interface switchport",
+        ...
+    },
+    "media_type": {
+        "cisco_nxos": "show interface status",
+        # Для QTech пока не добавлено
+    },
+}
+```
+
+Если платформы нет в словаре — `.get(device.platform)` вернёт `None`, и команда
+просто не выполнится. Это **нормально** — коллектор продолжит работу без этих данных.
+
+**Шаг 2. Сбор данных с устройства** (`collectors/interfaces.py`, `_collect_from_device`)
+
+Вот полная логика сбора. Каждый блок — независимый, ошибки одного не ломают остальные:
+
+```
+SSH-подключение к устройству
+│
+├─ 1. Основная команда (ОБЯЗАТЕЛЬНАЯ)
+│     conn.send_command("show interfaces")
+│     → _parse_output() → TextFSM/regex → сырые данные
+│     → normalizer.normalize_dicts() → нормализованные данные
+│
+├─ 2. LAG membership (ОПЦИОНАЛЬНАЯ)
+│     if collect_lag_info:                              # флаг включён?
+│         lag_cmd = lag_commands.get(device.platform)    # есть команда для платформы?
+│         if lag_cmd:                                    # если есть — выполняем
+│             conn.send_command(lag_cmd)
+│             → _parse_lag_membership() → {порт: LAG}
+│         # Если нет команды — lag_membership = {} (пустой)
+│
+├─ 3. Switchport modes (ОПЦИОНАЛЬНАЯ)
+│     if collect_switchport:                             # флаг включён?
+│         sw_cmd = switchport_commands.get(platform)     # есть команда?
+│         if sw_cmd:                                     # если есть — выполняем
+│             conn.send_command(sw_cmd)
+│             → _parse_switchport_modes() → {порт: {mode, vlans}}
+│         # Если нет команды — switchport_modes = {} (пустой)
+│
+├─ 4. Media type (ОПЦИОНАЛЬНАЯ)
+│     if collect_media_type:                             # флаг включён?
+│         mt_cmd = media_type_commands.get(platform)     # есть команда?
+│         if mt_cmd:                                     # если есть — выполняем
+│             conn.send_command(mt_cmd)
+│             → _parse_media_types() → {порт: тип}
+│         # Если нет команды — media_types = {} (пустой)
+│
+└─ 5. Обогащение (Domain Layer)
+      if lag_membership:     → normalizer.enrich_with_lag()
+      if switchport_modes:   → normalizer.enrich_with_switchport()
+      if media_types:        → normalizer.enrich_with_media_type()
+```
+
+**Ключевой момент:** каждый блок защищён **тройной проверкой**:
+
+1. **Флаг включён?** (`collect_lag_info`, `collect_switchport`, `collect_media_type`) —
+   если `False`, блок полностью пропускается
+2. **Есть команда для платформы?** (`lag_commands.get(device.platform)`) —
+   если платформы нет в `SECONDARY_COMMANDS`, команда не выполняется
+3. **try/except** — если SSH-команда или парсинг упали с ошибкой, результат
+   просто `{}` (пустой), и коллектор продолжает работу
+
+Поэтому **для новой платформы достаточно добавить только основной шаблон** —
+интерфейсы соберутся. Дополнительные шаблоны добавляются по мере необходимости.
+
+**Шаг 3. Парсинг команд — как выбирается шаблон**
+
+Каждая SSH-команда парсится через `TextFSMParser.parse()` (`parsers/textfsm_parser.py`).
+Парсер выбирает шаблон по приоритету:
+
+```
+1. Кастомный шаблон (CUSTOM_TEXTFSM_TEMPLATES)
+   Ключ: (platform, command) → файл шаблона
+   Пример: ("qtech", "show interface switchport") → "qtech_show_interface_switchport.textfsm"
+   Если найден → парсит и возвращает результат
+   │
+   ↓ (если не найден или результат пустой)
+
+2. NTC Templates (стандартная библиотека)
+   Платформа маппится через NTC_PLATFORM_MAP: "qtech" → "cisco_ios"
+   Парсит как будто это Cisco
+   │
+   ↓ (если тоже пусто)
+
+3. Regex fallback (только для основной команды show interfaces)
+   Ручной парсинг регулярками
+```
+
+**Пример для QTech `show interface switchport`:**
+
+```python
+# core/constants/commands.py → CUSTOM_TEXTFSM_TEMPLATES
+CUSTOM_TEXTFSM_TEMPLATES = {
+    ("qtech", "show interface switchport"): "qtech_show_interface_switchport.textfsm",
+    ...
+}
+```
+
+Парсер видит ключ `("qtech", "show interface switchport")` в `CUSTOM_TEXTFSM_TEMPLATES`,
+находит файл `templates/qtech_show_interface_switchport.textfsm`, парсит через него.
+NTC Templates **не используется** — кастомный шаблон имеет приоритет.
+
+**Пример для Cisco IOS `show interfaces switchport`:**
+
+Ключа `("cisco_ios", "show interfaces switchport")` в `CUSTOM_TEXTFSM_TEMPLATES` нет.
+Парсер переходит к NTC Templates, который имеет стандартный шаблон для этой команды.
+
+**Шаг 4. Нормализация — где какая логика**
+
+После парсинга сырые данные нужно нормализовать. Вся нормализация в **Domain Layer**:
+
+| Данные | Функция | Файл | Что делает |
+|--------|---------|------|------------|
+| Основные | `normalize_dicts()` | `core/domain/interface.py` | Статус, скорость, описание, MAC, тип порта |
+| LAG | `enrich_with_lag()` | `core/domain/interface.py` | Добавляет поле `lag` к member-портам |
+| Switchport | `normalize_switchport_data()` → `enrich_with_switchport()` | `core/domain/interface.py` | Нормализует mode из разных форматов, добавляет VLANs |
+| Media type | `enrich_with_media_type()` | `core/domain/interface.py` | Уточняет тип порта (SFP, copper) |
+
+Коллектор **только парсит** (SSH → TextFSM/regex → словари). Вся логика
+нормализации и обогащения — в `InterfaceNormalizer`.
+
+#### Подробно: каждая дополнительная команда
+
+#### 4a. LAG Membership
+
+**Зачем:** Чтобы в NetBox у физического порта (например `GigabitEthernet0/1`) было
+заполнено поле `LAG` (например `Port-channel1`).
+
+**Цепочка вызовов:**
+
+```
+SSH: "show etherchannel summary" (Cisco) / "show aggregatePort summary" (QTech)
+  ↓
+TextFSMParser.parse(output, platform, command)
+  ↓ (кастомный шаблон или NTC)
+_parse_lag_membership() или _parse_lag_membership_qtech()
+  ↓
+Dict[str, str]  →  {"GigabitEthernet0/1": "Port-channel1", "Gi0/1": "Port-channel1"}
+  ↓
+normalizer.enrich_with_lag(data, lag_membership)
+  ↓
+Каждому интерфейсу добавляется поле "lag": "Port-channel1"
+```
 
 ```python
 # core/constants/commands.py → SECONDARY_COMMANDS["lag"]
-# Связь physical port → LAG group
 SECONDARY_COMMANDS["lag"] = {
-    "cisco_ios": "show etherchannel summary",   # Cisco: Port-channel
+    "cisco_ios": "show etherchannel summary",
+    "cisco_iosxe": "show etherchannel summary",
     "cisco_nxos": "show port-channel summary",
     "arista_eos": "show port-channel summary",
-    "qtech": "show aggregatePort summary",      # QTech: AggregatePort
-    "eltex": "show etherchannel summary",        # ← Eltex: как Cisco?
-    "eltex_mes": "show etherchannel summary",
+    "qtech": "show aggregatePort summary",
+    "qtech_qsw": "show aggregatePort summary",
 }
 ```
 
@@ -1176,53 +1366,120 @@ def _parse_lag_membership_qtech(self, output: str) -> Dict[str, str]:
         if isinstance(members, str):
             members = [m.strip() for m in members.split(",") if m.strip()]
         for member in members:
-            # Добавить все алиасы имени (короткий, полный, с пробелом)
             self._add_lag_member_aliases(membership, member, lag_name)
     return membership
 ```
 
-#### 4c. Switchport Modes (для VLAN)
+#### 4b. Switchport Modes (для VLAN)
+
+**Зачем:** Чтобы в NetBox у интерфейса были заполнены поля `mode` (access/tagged/tagged-all),
+`untagged_vlan` и `tagged_vlans`.
+
+**Цепочка вызовов:**
+
+```
+SSH: "show interfaces switchport" (Cisco) / "show interface switchport" (QTech)
+  ↓
+TextFSMParser.parse(output, platform, command)
+  ↓ (кастомный шаблон или NTC)
+_parse_switchport_modes(output, platform, command)
+  ↓
+Попытка 1: TextFSM парсинг → normalizer.normalize_switchport_data()
+Попытка 2: Regex fallback → _parse_switchport_modes_regex()
+  ↓
+Dict[str, Dict[str, str]]  →  {
+    "GigabitEthernet0/1": {"mode": "access", "access_vlan": "10", ...},
+    "Gi0/1":              {"mode": "access", "access_vlan": "10", ...},  # алиас
+}
+  ↓
+normalizer.enrich_with_switchport(data, switchport_modes, lag_membership)
+  ↓
+Каждому интерфейсу добавляются поля "mode", "untagged_vlan", "tagged_vlans"
+```
 
 ```python
 # core/constants/commands.py → SECONDARY_COMMANDS["switchport"]
 SECONDARY_COMMANDS["switchport"] = {
-    "cisco_ios": "show interfaces switchport",  # Cisco: с 's'
-    "cisco_nxos": "show interface switchport",  # NX-OS: без 's'
+    "cisco_ios": "show interfaces switchport",   # Cisco: с 's'
+    "cisco_nxos": "show interface switchport",   # NX-OS: без 's'
     "arista_eos": "show interfaces switchport",
-    "qtech": "show interface switchport",       # QTech: без 's'
-    "eltex": "show interfaces switchport",      # ← Eltex
-    "eltex_mes": "show interfaces switchport",
+    "qtech": "show interface switchport",        # QTech: без 's'
+    "qtech_qsw": "show interface switchport",
 }
 ```
 
-Нормализация switchport данных — **универсальная** (`InterfaceNormalizer.normalize_switchport_data()` в `core/domain/interface.py`),
-поддерживает два формата:
+Нормализация switchport данных — **универсальная** (`InterfaceNormalizer.normalize_switchport_data()`
+в `core/domain/interface.py`), поддерживает три формата платформ:
 
 ```python
-# Cisco NTC формат (блочный):
-{"admin_mode": "trunk", "trunking_vlans": "10,20,30"}
+# 1. Cisco IOS / Arista — NTC формат (поле admin_mode):
+{"admin_mode": "trunk", "native_vlan": "1", "trunking_vlans": "10,20,30"}
 
-# QTech формат (табличный):
-{"MODE": "TRUNK", "VLAN_LISTS": "ALL"}
+# 2. Cisco NX-OS — NTC формат (поля mode + trunking_vlans):
+{"mode": "trunk", "trunking_native_vlan": "1", "trunking_vlans": "1-4094"}
+
+# 3. QTech — кастомный шаблон (поле switchport):
+{"switchport": "Enabled", "MODE": "TRUNK", "NATIVE_VLAN": "1", "VLAN_LISTS": "ALL"}
 ```
 
 Если ваш вендор возвращает один из этих форматов — работает автоматически.
-Если другой формат — добавить условие в `InterfaceNormalizer.normalize_switchport_data()` (`core/domain/interface.py`).
+Если другой формат — добавить условие в `InterfaceNormalizer.normalize_switchport_data()`.
 
-#### 4d. Media Type / Transceiver (опционально)
+#### 4c. Media Type / Transceiver (опционально)
+
+**Зачем:** Чтобы в NetBox тип порта был точным (`1000base-x-sfp` для SFP, а не
+`1000base-t` по умолчанию). Без media_type тип определяется по имени интерфейса (fallback).
+
+**Цепочка вызовов:**
+
+```
+SSH: "show interface status" (NX-OS)
+  ↓
+TextFSMParser.parse(output, platform, command)
+  ↓
+_parse_media_types(output, platform, command)
+  ↓
+Dict[str, str]  →  {"Ethernet1/1": "10Gbase-SR", "Eth1/1": "10Gbase-SR"}
+  ↓
+normalizer.enrich_with_media_type(data, media_types)
+  ↓
+Каждому интерфейсу добавляется/уточняется поле "media_type"
+```
 
 ```python
 # core/constants/commands.py → SECONDARY_COMMANDS["media_type"]
-# Для точного определения типа SFP модуля
 SECONDARY_COMMANDS["media_type"] = {
-    "cisco_nxos": "show interface status",  # NX-OS: media_type в interface status
-    # Для других платформ: show interface transceiver / show inventory
+    "cisco_nxos": "show interface status",
+    # Для QTech пока не реализовано
 }
 ```
 
-Если не добавить — тип порта определяется по имени интерфейса (fallback):
+Если платформы нет в `SECONDARY_COMMANDS["media_type"]` — тип порта определяется
+по имени интерфейса (fallback в `get_netbox_interface_type()`):
 - `GigabitEthernet` → `1000base-t`
 - `TenGigabitEthernet` → `10gbase-x-sfpp`
+- `TFGigabitEthernet` (QTech 10G) → `10gbase-x-sfpp`
+
+#### Итого: что добавлять для новой платформы
+
+**Минимум (только основные данные):**
+1. Команда в `DEVICE_COMMANDS["interfaces"]` → `core/constants/commands.py`
+2. Кастомный шаблон `templates/<platform>_show_interface.textfsm` (если формат не как у Cisco)
+3. Регистрация в `CUSTOM_TEXTFSM_TEMPLATES` → `core/constants/commands.py`
+
+**Полный набор (все данные для NetBox):**
+
+| Шаг | Файл | Что добавить |
+|-----|------|-------------|
+| Основная команда | `core/constants/commands.py` | `DEVICE_COMMANDS["interfaces"]["<platform>"]` |
+| Основной шаблон | `templates/` | `<platform>_show_interface.textfsm` |
+| LAG команда | `core/constants/commands.py` | `SECONDARY_COMMANDS["lag"]["<platform>"]` |
+| LAG шаблон | `templates/` | `<platform>_show_<lag_command>.textfsm` (если формат не как у Cisco) |
+| Switchport команда | `core/constants/commands.py` | `SECONDARY_COMMANDS["switchport"]["<platform>"]` |
+| Switchport шаблон | `templates/` | `<platform>_show_interface_switchport.textfsm` (если формат не как у Cisco) |
+| Media type команда | `core/constants/commands.py` | `SECONDARY_COMMANDS["media_type"]["<platform>"]` |
+| Media type шаблон | `templates/` | Шаблон для соответствующей команды |
+| Регистрация всех | `core/constants/commands.py` | Каждый кастомный шаблон в `CUSTOM_TEXTFSM_TEMPLATES` |
 
 ### 12.6 Шаг 5: Имена интерфейсов
 
