@@ -156,7 +156,12 @@ class TestConnectionManagerRetry:
 
         # sleep вызван 2 раза (перед 2-й и 3-й попыткой)
         assert mock_sleep.call_count == 2
-        mock_sleep.assert_called_with(5)
+        # Задержка с jitter: base_delay * 2^(attempt-1) + jitter(0..50%)
+        # attempt=1: base=5, max=5, jitter=0..2.5 → total 5..7.5
+        # attempt=2: base=10, max=10, jitter=0..5 → total 10..15
+        for call_args in mock_sleep.call_args_list:
+            delay = call_args[0][0]
+            assert delay >= 5, f"Задержка {delay} меньше базовой (5с)"
 
     @patch("network_collector.core.connection.Scrapli")
     def test_zero_retries_no_retry(self, mock_scrapli, device, credentials):

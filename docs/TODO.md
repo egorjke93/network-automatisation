@@ -514,8 +514,8 @@ sync:
 
 | Тип | Текущее | Нужно |
 |-----|---------|-------|
-| Unit tests | 1300+ | ✅ OK |
-| Integration tests | 250+ (API, pipeline, bulk) | ✅ OK |
+| Unit tests | 1350+ | ✅ OK |
+| Integration tests | 290+ (API, pipeline, bulk, cables, IP) | ✅ OK |
 | E2E tests | 186 | ✅ OK |
 | Coverage | ~85% | ✅ OK |
 
@@ -523,8 +523,10 @@ sync:
 - [x] API integration tests (FastAPI TestClient) — ✅ 148 тестов
 - [x] E2E tests для collectors — ✅ 189 тестов (IP, sync, multi-device, NX-OS enrichment)
 - [x] Mock-based tests для NetBox sync — ✅ 286 тестов (bulk, VLAN, LAG batch, diff)
+- [x] Unit-тесты cables sync — ✅ 21 тест (dedup, LAG skip, neighbor lookup, cleanup)
+- [x] Unit-тесты ip_addresses sync — ✅ 17 тестов (batch create/fallback, mask recreate, primary IP)
 
-**Статус:** ✅ Выполнено. Всего 1788 тестов
+**Статус:** ✅ Выполнено. Всего 1838 тестов
 
 ---
 
@@ -558,14 +560,16 @@ sync:
 
 ## Что уже хорошо ✅
 
-- ✅ 1788 тестов (хорошее покрытие)
+- ✅ 1838 тестов (хорошее покрытие)
 - ✅ Структурированное JSON логирование
 - ✅ Domain Layer с нормализаторами
 - ✅ Pipeline система с транзакциями
 - ✅ Pydantic модели для валидации
 - ✅ Подробная документация (официальная + обучающая)
 - ✅ Batch API для sync (3-5x ускорение)
+- ✅ Batch MAC assignment (48→1 API запрос на устройство)
 - ✅ N+1 оптимизация кэширования (95→3 API запроса на устройство)
+- ✅ Exponential backoff + jitter в retry (anti-thundering herd)
 - ✅ Type hints в 370+ функциях
 
 ---
@@ -686,6 +690,27 @@ def _find_interface(self, device_id, name):
 - Pipeline 22 устройства: 32 мин → 13 мин
 
 **Файлы:** `netbox/sync/base.py` (кэш), `netbox/sync/interfaces.py`, `netbox/sync/ip_addresses.py`
+
+### Batch MAC Assignment ✅ ВЫПОЛНЕНО
+
+**Проблема:** `assign_mac_to_interface()` вызывался в цикле — 1 API запрос на каждый MAC.
+При 22 устройствах × 48 портов = ~1056 запросов.
+
+**Решение:** Новый метод `bulk_assign_macs()` в `netbox/client/dcim.py` — один bulk-вызов
+с fallback на поштучные при ошибке.
+
+**Файлы:** `netbox/client/dcim.py`, `netbox/sync/interfaces.py`
+
+**Ускорение:** ~48 запросов → 1 на устройство. Pipeline MAC-фаза: ~105с → ~2с.
+
+### Exponential Backoff + Jitter в Retry ✅ ВЫПОЛНЕНО
+
+**Проблема:** Фиксированная задержка retry при параллельном сборе → thundering herd.
+
+**Решение:** `_get_retry_delay()` в `ConnectionManager` — экспоненциальный backoff
+(`delay * 2^attempt`, cap 60с) + random jitter (+0..50%).
+
+**Файлы:** `core/connection.py`
 
 ---
 
@@ -1174,7 +1199,7 @@ Dispatcher выбирает парсер по конфигу. **Зависимо
 |---------|----------|
 | Python файлов | ~90 |
 | Строк кода | ~17,000 |
-| Тестов | 1800 |
+| Тестов | 1838 |
 | Тестовых категорий | 12 (включая test_configurator, корневые) |
 | CLI команд | 11 |
 | API endpoints | 13 |

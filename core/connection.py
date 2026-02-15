@@ -23,6 +23,7 @@ ConnectionManager обеспечивает:
 """
 
 import logging
+import random
 import re
 import time
 from typing import Optional, Generator, Any, Dict
@@ -137,6 +138,26 @@ class ConnectionManager:
         self.transport = transport
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+
+    def _get_retry_delay(self, attempt: int) -> float:
+        """
+        Вычисляет задержку перед повтором с экспоненциальным backoff и jitter.
+
+        Предотвращает thundering herd при массовом сборе данных —
+        все устройства не будут повторять подключение одновременно.
+
+        Args:
+            attempt: Номер текущей попытки (1, 2, ...)
+
+        Returns:
+            float: Задержка в секундах
+        """
+        # Экспоненциальный backoff: delay * 2^(attempt-1), макс 60с
+        base_delay = self.retry_delay * (2 ** (attempt - 1))
+        capped_delay = min(base_delay, 60)
+        # Jitter: +0..50% от base delay
+        jitter = random.uniform(0, capped_delay * 0.5)
+        return capped_delay + jitter
 
     def _build_connection_params(
         self,
@@ -257,11 +278,12 @@ class ConnectionManager:
                 device.last_error = f"Таймаут подключения: {e}"
 
                 if attempt < total_attempts:
+                    delay = self._get_retry_delay(attempt)
                     logger.warning(
                         f"Таймаут при подключении к {device.host}, "
-                        f"повтор через {self.retry_delay}с ({attempt}/{total_attempts})"
+                        f"повтор через {delay:.1f}с ({attempt}/{total_attempts})"
                     )
-                    time.sleep(self.retry_delay)
+                    time.sleep(delay)
                 else:
                     logger.error(
                         f"Таймаут при подключении к {device.host} "
@@ -278,11 +300,12 @@ class ConnectionManager:
                 device.last_error = f"Ошибка подключения: {e}"
 
                 if attempt < total_attempts:
+                    delay = self._get_retry_delay(attempt)
                     logger.warning(
                         f"Ошибка подключения к {device.host}, "
-                        f"повтор через {self.retry_delay}с ({attempt}/{total_attempts})"
+                        f"повтор через {delay:.1f}с ({attempt}/{total_attempts})"
                     )
-                    time.sleep(self.retry_delay)
+                    time.sleep(delay)
                 else:
                     logger.error(
                         f"Ошибка подключения к {device.host} "
@@ -299,11 +322,12 @@ class ConnectionManager:
 
                 # Проверяем можно ли повторить
                 if is_retryable(e) and attempt < total_attempts:
+                    delay = self._get_retry_delay(attempt)
                     logger.warning(
                         f"Ошибка при подключении к {device.host}: {e}, "
-                        f"повтор через {self.retry_delay}с ({attempt}/{total_attempts})"
+                        f"повтор через {delay:.1f}с ({attempt}/{total_attempts})"
                     )
-                    time.sleep(self.retry_delay)
+                    time.sleep(delay)
                 else:
                     logger.error(f"Ошибка при подключении к {device.host}: {e}")
                     break  # Не retryable или исчерпаны попытки

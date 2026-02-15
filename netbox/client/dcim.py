@@ -54,6 +54,53 @@ class DCIMMixin:
             logger.warning(f"Не удалось создать MAC {mac_address}: {e}")
             return None
 
+    def bulk_assign_macs(
+        self,
+        mac_assignments: list,
+    ) -> int:
+        """
+        Назначает MAC-адреса нескольким интерфейсам одним batch-вызовом.
+
+        При ошибке batch — fallback на поштучное назначение.
+
+        Args:
+            mac_assignments: Список (interface_id, mac_address)
+
+        Returns:
+            Количество успешно назначенных MAC
+        """
+        if not mac_assignments:
+            return 0
+
+        # Фильтруем пустые и собираем batch
+        batch = []
+        for interface_id, mac_address in mac_assignments:
+            if mac_address:
+                batch.append({
+                    "mac_address": mac_address,
+                    "assigned_object_type": "dcim.interface",
+                    "assigned_object_id": interface_id,
+                })
+
+        if not batch:
+            return 0
+
+        try:
+            result = self.api.dcim.mac_addresses.create(batch)
+            created = result if isinstance(result, list) else [result]
+            logger.debug(f"Bulk MAC: назначено {len(created)} MAC-адресов")
+            return len(created)
+        except Exception as e:
+            logger.warning(f"Bulk MAC не удался ({e}), fallback на поштучное назначение")
+            assigned = 0
+            for interface_id, mac_address in mac_assignments:
+                try:
+                    self.assign_mac_to_interface(interface_id, mac_address)
+                    assigned += 1
+                except Exception as exc:
+                    logger.warning(f"Ошибка назначения MAC {mac_address}: {exc}")
+            return assigned
+
     def get_interface_mac(self, interface_id: int) -> Optional[str]:
         """
         Получает MAC-адрес интерфейса.

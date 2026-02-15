@@ -255,13 +255,14 @@ class InterfacesSyncMixin:
                 stats["created"] += 1
                 details["create"].append({"name": name})
 
-            # Post-create: назначаем MAC (отдельный endpoint, пока по одному)
-            for idx, mac in create_mac_queue:
-                if idx < len(created):
-                    try:
-                        self.client.assign_mac_to_interface(created[idx].id, mac)
-                    except Exception as e:
-                        logger.warning(f"Ошибка назначения MAC {mac}: {e}")
+            # Post-create: назначаем MAC (batch через bulk_assign_macs)
+            if create_mac_queue:
+                mac_assignments = [
+                    (created[idx].id, mac)
+                    for idx, mac in create_mac_queue
+                    if idx < len(created)
+                ]
+                self.client.bulk_assign_macs(mac_assignments)
 
         except Exception as e:
             logger.warning(f"Batch create не удался ({e}), fallback на поштучное создание")
@@ -349,13 +350,12 @@ class InterfacesSyncMixin:
                     except Exception as exc:
                         logger.error(f"Ошибка обновления интерфейса {name}: {exc}")
 
-        # Post-update: назначаем MAC
-        for intf_id, mac, name in update_mac_queue:
-            try:
-                self.client.assign_mac_to_interface(intf_id, mac)
-                logger.info(f"Назначен MAC: {mac} на {name}")
-            except Exception as e:
-                logger.warning(f"Ошибка назначения MAC {mac} на {name}: {e}")
+        # Post-update: назначаем MAC (batch через bulk_assign_macs)
+        if update_mac_queue:
+            mac_assignments = [(intf_id, mac) for intf_id, mac, _ in update_mac_queue]
+            assigned = self.client.bulk_assign_macs(mac_assignments)
+            if assigned:
+                logger.info(f"Назначено {assigned} MAC-адресов")
 
     def _batch_delete_interfaces(
         self: SyncBase,
@@ -442,7 +442,7 @@ class InterfacesSyncMixin:
                 data["lag"] = lag_interface.id
                 logger.debug(f"Привязка {intf.name} к LAG {intf.lag} (id={lag_interface.id})")
             else:
-                logger.warning(f"LAG интерфейс {intf.lag} не найден для {intf.name}")
+                logger.error(f"LAG интерфейс {intf.lag} не найден для {intf.name} — member не будет привязан")
 
         # VLAN назначение при создании интерфейса
         if sync_cfg.get_option("sync_vlans", False):
@@ -721,7 +721,7 @@ class InterfacesSyncMixin:
                 updates["lag"] = lag_interface.id
                 actual_changes.append(f"lag: {current_lag_name} → {intf.lag}")
         else:
-            logger.warning(f"LAG интерфейс {intf.lag} не найден в NetBox для {intf.name}")
+            logger.error(f"LAG интерфейс {intf.lag} не найден в NetBox для {intf.name} — member не будет привязан")
 
     # ==================== ОРКЕСТРАТОР ====================
 
@@ -829,7 +829,7 @@ class InterfacesSyncMixin:
                 kwargs["lag"] = lag_interface.id
                 logger.debug(f"Привязка {intf.name} к LAG {intf.lag} (id={lag_interface.id})")
             else:
-                logger.warning(f"LAG интерфейс {intf.lag} не найден для {intf.name}")
+                logger.error(f"LAG интерфейс {intf.lag} не найден для {intf.name} — member не будет привязан")
 
         interface = self.client.create_interface(
             device_id=device_id,
