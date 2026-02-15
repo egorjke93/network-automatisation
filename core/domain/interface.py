@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 
 from ..models import Interface
 from ..constants import normalize_interface_short
-from ..constants.interfaces import get_interface_aliases
+from ..constants.interfaces import get_interface_aliases, is_lag_name
 
 
 # Маппинг статусов из show interfaces в стандартные значения
@@ -171,11 +171,7 @@ class InterfaceNormalizer:
         media_type = row.get("media_type", "").lower()
 
         # LAG интерфейсы (Cisco Port-channel, QTech AggregatePort)
-        if iface_lower.startswith(("port-channel", "po", "aggregateport")):
-            return "lag"
-        # QTech: Ag1, Ag10 (короткое имя AggregatePort)
-        if (len(iface_lower) >= 3 and iface_lower[:2] == "ag"
-                and iface_lower[2].isdigit()):
+        if is_lag_name(iface_lower):
             return "lag"
 
         # Виртуальные интерфейсы
@@ -442,9 +438,7 @@ class InterfaceNormalizer:
                 iface["native_vlan"] = sw_data.get("native_vlan", "")
                 iface["access_vlan"] = sw_data.get("access_vlan", "")
                 iface["tagged_vlans"] = sw_data.get("tagged_vlans", "")
-            elif iface_lower.startswith(("po", "port-channel", "aggregateport")) or (
-                len(iface_lower) >= 3 and iface_lower[:2] == "ag" and iface_lower[2].isdigit()
-            ):
+            elif is_lag_name(iface_lower):
                 # Для LAG берём mode из members (Cisco Port-channel, QTech AggregatePort)
                 for lag_name, lag_mode in lag_modes.items():
                     if self._is_same_lag(iface_lower, lag_name.lower()):

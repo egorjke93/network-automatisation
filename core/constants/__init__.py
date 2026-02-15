@@ -21,13 +21,16 @@
 from .interfaces import (
     INTERFACE_SHORT_MAP,
     INTERFACE_FULL_MAP,
+    LAG_PREFIXES,
     normalize_interface_short,
     normalize_interface_full,
     get_interface_aliases,
+    is_lag_name,
 )
 
 # Платформы
 from .platforms import (
+    DEFAULT_PLATFORM,
     SCRAPLI_PLATFORM_MAP,
     NTC_PLATFORM_MAP,
     NETMIKO_PLATFORM_MAP,
@@ -87,10 +90,13 @@ __all__ = [
     # Интерфейсы
     "INTERFACE_SHORT_MAP",
     "INTERFACE_FULL_MAP",
+    "LAG_PREFIXES",
     "normalize_interface_short",
     "normalize_interface_full",
     "get_interface_aliases",
+    "is_lag_name",
     # Платформы
+    "DEFAULT_PLATFORM",
     "SCRAPLI_PLATFORM_MAP",
     "NTC_PLATFORM_MAP",
     "NETMIKO_PLATFORM_MAP",

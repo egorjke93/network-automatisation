@@ -200,6 +200,19 @@ VENDOR_MAP: Dict[str, List[str]] = {
 }
 ```
 
+#### DEFAULT_PLATFORM — платформа по умолчанию
+
+Используется как fallback когда платформа не указана:
+
+```python
+DEFAULT_PLATFORM = "cisco_ios"
+```
+
+Используется в: `core/connection.py`, `cli/utils.py`, `api/routes/device_management.py`.
+
+> **Важно:** `core/connection.py` импортирует `SCRAPLI_PLATFORM_MAP` и `NTC_PLATFORM_MAP`
+> из `core/constants/platforms.py` — не дублирует, а использует единый источник.
+
 ### 3.2 Как добавить новую платформу
 
 ```python
@@ -214,6 +227,13 @@ VENDOR_MAP: Dict[str, List[str]] = {
 
 # 4. VENDOR_MAP — производитель
 "eltex": ["eltex", "eltex_mes"],
+
+# 5. Если у платформы свой формат LAG (не Port-channel/Po):
+#    core/constants/interfaces.py → is_lag_name() — добавить новый префикс
+#    core/constants/interfaces.py → INTERFACE_SHORT_MAP, INTERFACE_FULL_MAP
+
+# 6. Если LLDP System Description содержит имя вендора:
+#    core/domain/lldp.py → _PLATFORM_PATTERNS — добавить запись
 ```
 
 ---

@@ -1057,6 +1057,112 @@ core/constants/interfaces.py      → get_interface_aliases() (единый ис
 | Alias `Etherneternet` | `core/constants/interfaces.py` | `get_interface_aliases()` (ранее `_add_switchport_aliases()`): Ethernet1/1 → Etherneternet1/1 (двойное ernet). Исправлено в единой функции алиасов |
 | Config test hardcode | `tests/test_qtech_support.py` | Тест `max_retries == 2` зависел от config.yaml. Заменён на проверку типа `isinstance(int)` |
 
+## Рефакторинг: унификация платформо-зависимого кода (Февраль 2026) ✅
+
+### Что было
+
+~90% системы уже data-driven (маппинги в constants, шаблоны TextFSM), но в нескольких местах
+оставалось дублирование, которое усложняло добавление новых платформ:
+
+| Проблема | Где дублировалось | Сколько мест |
+|----------|-------------------|--------------|
+| LAG проверка по имени | `detect_port_type()`, `enrich_with_switchport()`, `get_netbox_interface_type()` | 3 |
+| Inline разворачивание алиасов LAG members | `_parse_lag_membership()`, `_parse_lag_membership_regex()` | 2 × 20 строк |
+| LLDP platform detection | `_extract_platform_from_description()` — if/elif цепочка | 1 (не расширяемо) |
+| Platform maps | `core/connection.py` дублировал `core/constants/platforms.py` | 2 копии |
+| Default platform `"cisco_ios"` | `cli/utils.py`, `api/routes/device_management.py`, `connection.py` | 4 |
+
+### Что сделано
+
+#### 1. `is_lag_name()` — единый источник LAG определения ✅
+
+**Файл:** `core/constants/interfaces.py`
+
+Добавлены `LAG_PREFIXES` и `is_lag_name()` — одна функция для проверки, является ли интерфейс LAG.
+Поддерживает все форматы: Port-channel1, Po1, AggregatePort 1, Ag1.
+
+3 места дублирования заменены на `is_lag_name()`:
+- `core/domain/interface.py:detect_port_type()` — определение port_type="lag"
+- `core/domain/interface.py:enrich_with_switchport()` — LAG mode из members
+- `core/constants/netbox.py:get_netbox_interface_type()` — NetBox type "lag"
+
+**Что стало лучше:** Добавление нового LAG формата — одно изменение в `is_lag_name()` вместо трёх.
+
+#### 2. LAG alias expansion через `_add_lag_member_aliases()` ✅
+
+**Файл:** `collectors/interfaces.py`
+
+`_parse_lag_membership()` и `_parse_lag_membership_regex()` содержали по 20 строк
+inline if/elif для разворачивания алиасов (Hu→HundredGigE, Te→TenGigabitEthernet...).
+При этом уже существовал метод `_add_lag_member_aliases()`, использующий `get_interface_aliases()`.
+
+Два дублирующих блока заменены на вызов `self._add_lag_member_aliases()`.
+
+**Что стало лучше:** 40 строк дублирующего кода удалено. Новый тип интерфейса автоматически
+поддерживается через `get_interface_aliases()` без изменения LAG парсеров.
+
+#### 3. LLDP platform detection — data-driven ✅
+
+**Файл:** `core/domain/lldp.py`
+
+if/elif цепочка для извлечения платформы из LLDP System Description заменена на
+data-driven `_PLATFORM_PATTERNS` — список кортежей `(keyword, regex, prefix)`.
+
+**Что стало лучше:** Добавление нового вендора — одна строка в `_PLATFORM_PATTERNS` вместо
+нового блока if/elif с regex.
+
+#### 4. Platform maps — единый источник в constants ✅
+
+**Файл:** `core/connection.py`
+
+`SCRAPLI_PLATFORM_MAP` и `NTC_PLATFORM_MAP` дублировались: определены в `core/constants/platforms.py`
+и скопированы в `core/connection.py`. Теперь connection.py импортирует из constants.
+
+**Что стало лучше:** Одна копия маппинга вместо двух. Изменение в одном месте.
+
+#### 5. `DEFAULT_PLATFORM` константа ✅
+
+**Файл:** `core/constants/platforms.py`
+
+Строка `"cisco_ios"` как дефолтная платформа была в 4 местах. Заменена на константу
+`DEFAULT_PLATFORM` из `core/constants/platforms.py`.
+
+Используется в: `core/connection.py`, `cli/utils.py`, `api/routes/device_management.py`.
+
+**Что стало лучше:** Изменение default platform — одно место вместо четырёх.
+
+### Что ещё можно улучшить (TODO)
+
+#### LAG parser dispatch (Средний приоритет)
+
+`collectors/interfaces.py:241` — `if platform in ("qtech", "qtech_qsw")` для выбора LAG парсера.
+Для новой платформы нужно добавлять ветку в if/elif.
+
+**Подход:** Создать `LAG_COMMAND_MAP` в constants:
+```python
+LAG_COMMAND_MAP = {
+    "cisco_ios": {"command": "show etherchannel summary", "parser": "ntc"},
+    "cisco_nxos": {"command": "show port-channel summary", "parser": "ntc"},
+    "qtech": {"command": "show aggregatePort summary", "parser": "textfsm"},
+}
+```
+Dispatcher выбирает парсер по конфигу. **Зависимость:** стандартизация output TextFSM шаблонов для LAG.
+
+#### Switchport normalization (Средний приоритет)
+
+`normalize_switchport_data()` содержит три ветки для IOS/NX-OS/QTech с определением платформы по полям.
+Для новой платформы нужно добавлять ветку.
+
+**Подход:** Унифицировать output TextFSM шаблонов switchport: все возвращают одинаковые поля
+(INTERFACE, MODE, ACCESS_VLAN, NATIVE_VLAN, TAGGED_VLANS). Тогда нормализация тривиальна.
+**Зависимость:** изменение существующих TextFSM шаблонов.
+
+#### Domain layer — `_detect_from_hardware_type()` / `_detect_from_interface_name()` (Низкий приоритет)
+
+Методы в `core/domain/interface.py` дублируют маппинги из `core/constants/netbox.py`, но возвращают
+разные типы (port_type vs NetBox type). Для унификации нужен обратный маппинг и тщательное
+тестирование совпадения поведения.
+
 ---
 
 ## Статистика проекта
@@ -1072,4 +1178,4 @@ core/constants/interfaces.py      → get_interface_aliases() (единый ис
 | Vue компонентов | 14 |
 | Поддерживаемых платформ | 7 |
 | Функций с type hints | 370+ |
-| Документов | 16 (7 официальных + 9 обучающих) |
+| Документов | 20 (7 официальных + 13 обучающих) |

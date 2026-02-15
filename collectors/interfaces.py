@@ -353,28 +353,7 @@ class InterfaceCollector(BaseCollector):
                         # Убираем статус из имени (Gi0/1(P) -> Gi0/1, Eth1/1(P) -> Eth1/1)
                         member_clean = re.sub(r'\([^)]*\)', '', member).strip()
                         if member_clean:
-                            membership[member_clean] = lag_name
-                            # Добавляем полное имя тоже (для сопоставления с show interface)
-                            if member_clean.startswith("Hu"):
-                                # C9500: Hu1/0/51 -> HundredGigE1/0/51
-                                membership[f"HundredGigE{member_clean[2:]}"] = lag_name
-                                membership[f"HundredGigabitEthernet{member_clean[2:]}"] = lag_name
-                            elif member_clean.startswith("Fo"):
-                                # Fo1/0/1 -> FortyGigabitEthernet1/0/1
-                                membership[f"FortyGigabitEthernet{member_clean[2:]}"] = lag_name
-                            elif member_clean.startswith("Twe"):
-                                # C9500: Twe1/0/27 -> TwentyFiveGigE1/0/27
-                                membership[f"TwentyFiveGigE{member_clean[3:]}"] = lag_name
-                                membership[f"TwentyFiveGigabitEthernet{member_clean[3:]}"] = lag_name
-                            elif member_clean.startswith("Te"):
-                                membership[f"TenGigabitEthernet{member_clean[2:]}"] = lag_name
-                            elif member_clean.startswith("Gi"):
-                                membership[f"GigabitEthernet{member_clean[2:]}"] = lag_name
-                            elif member_clean.startswith("Eth"):
-                                # NX-OS: Eth1/1 -> Ethernet1/1
-                                membership[f"Ethernet{member_clean[3:]}"] = lag_name
-                            elif member_clean.startswith("Fa"):
-                                membership[f"FastEthernet{member_clean[2:]}"] = lag_name
+                            self._add_lag_member_aliases(membership, member_clean, lag_name)
 
         except Exception as e:
             logger.debug(f"Ошибка парсинга LAG через NTC: {e}")
@@ -483,25 +462,7 @@ class InterfaceCollector(BaseCollector):
             member_pattern = re.compile(r"([A-Za-z]+[\d/]+)\([^)]*\)")
             for member_match in member_pattern.finditer(members_str):
                 member = member_match.group(1)
-                membership[member] = lag_name
-                # Добавляем полное имя (для сопоставления с show interface)
-                if member.startswith("Hu"):
-                    membership[f"HundredGigE{member[2:]}"] = lag_name
-                    membership[f"HundredGigabitEthernet{member[2:]}"] = lag_name
-                elif member.startswith("Fo"):
-                    membership[f"FortyGigabitEthernet{member[2:]}"] = lag_name
-                elif member.startswith("Twe"):
-                    membership[f"TwentyFiveGigE{member[3:]}"] = lag_name
-                    membership[f"TwentyFiveGigabitEthernet{member[3:]}"] = lag_name
-                elif member.startswith("Te"):
-                    membership[f"TenGigabitEthernet{member[2:]}"] = lag_name
-                elif member.startswith("Gi"):
-                    membership[f"GigabitEthernet{member[2:]}"] = lag_name
-                elif member.startswith("Eth"):
-                    # NX-OS: Eth1/1 -> Ethernet1/1
-                    membership[f"Ethernet{member[3:]}"] = lag_name
-                elif member.startswith("Fa"):
-                    membership[f"FastEthernet{member[2:]}"] = lag_name
+                self._add_lag_member_aliases(membership, member, lag_name)
 
         return membership
 

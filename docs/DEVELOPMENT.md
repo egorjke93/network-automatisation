@@ -452,9 +452,9 @@ python -m network_collector sync-netbox --interfaces --dry-run
 
 | Что | Файл | Переменная |
 |-----|------|------------|
-| SSH драйвер | `core/constants.py` | `SCRAPLI_PLATFORM_MAP` |
-| NTC парсер | `core/constants.py` | `NTC_PLATFORM_MAP` |
-| Производитель | `core/constants.py` | `VENDOR_MAP` |
+| SSH драйвер | `core/constants/platforms.py` | `SCRAPLI_PLATFORM_MAP` |
+| NTC парсер | `core/constants/platforms.py` | `NTC_PLATFORM_MAP` |
+| Производитель | `core/constants/platforms.py` | `VENDOR_MAP` |
 | Команда MAC | `core/constants/commands.py` | `COLLECTOR_COMMANDS["mac"]` |
 | Команда interfaces | `core/constants/commands.py` | `COLLECTOR_COMMANDS["interfaces"]` |
 | Команда LAG | `core/constants/commands.py` | `SECONDARY_COMMANDS["lag"]` |
@@ -465,6 +465,9 @@ python -m network_collector sync-netbox --interfaces --dry-run
 | Команда transceiver | `core/constants/commands.py` | `SECONDARY_COMMANDS["transceiver"]` |
 | Команда backup | `collectors/config_backup.py` | `BACKUP_COMMANDS` |
 | Кастомный шаблон | `core/constants/commands.py` | `CUSTOM_TEXTFSM_TEMPLATES` |
+| LAG формат (если новый) | `core/constants/interfaces.py` | `is_lag_name()` — добавить префикс |
+| Интерфейс маппинг | `core/constants/interfaces.py` | `INTERFACE_SHORT_MAP`, `INTERFACE_FULL_MAP` |
+| LLDP определение | `core/domain/lldp.py` | `_PLATFORM_PATTERNS` — добавить запись |
 
 ---
 

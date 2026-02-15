@@ -490,6 +490,19 @@ class LLDPNormalizer:
             if row.get("local_interface", "").lower() in interfaces_lower
         ]
 
+    # Паттерны извлечения платформы из LLDP System Description
+    # (keyword для быстрой фильтрации, regex, prefix для результата)
+    _PLATFORM_PATTERNS = [
+        # Cisco — несколько вариантов описания
+        ("cisco", r"cisco\s+ios.*?,\s*(\S+)\s+software", "cisco "),
+        ("cisco", r"cisco\s+(\S+)", "cisco "),
+        ("catalyst", r"catalyst\s+(\S+)", "cisco "),
+        # Arista
+        ("arista", r"arista\s+networks?\s+(\S+)", "Arista "),
+        # Juniper
+        ("juniper", r"juniper.*?(\S+-\S+)", "Juniper "),
+    ]
+
     def _extract_platform_from_description(self, description: str) -> str:
         """
         Извлекает платформу из LLDP System Description.
@@ -498,6 +511,8 @@ class LLDPNormalizer:
         - "Cisco IOS Software, C9200L Software..."
         - "Arista Networks EOS version 4.25.0F"
         - "Juniper Networks, Inc. ex4300-48p"
+
+        Для добавления новой платформы — добавить запись в _PLATFORM_PATTERNS.
 
         Args:
             description: LLDP System Description
@@ -510,32 +525,13 @@ class LLDPNormalizer:
 
         desc_lower = description.lower()
 
-        # Cisco паттерны
-        cisco_patterns = [
-            (r"cisco\s+ios.*?,\s*(\S+)\s+software", 1),  # "Cisco IOS Software, C9200L Software"
-            (r"cisco\s+(\S+)", 1),  # "Cisco WS-C2960X-48FPS-L"
-            (r"catalyst\s+(\S+)", 1),  # "Catalyst 9200L"
-        ]
-
-        for pattern, group in cisco_patterns:
+        for keyword, pattern, prefix in self._PLATFORM_PATTERNS:
+            if keyword not in desc_lower:
+                continue
             match = re.search(pattern, description, re.IGNORECASE)
             if match:
-                platform = match.group(group).strip()
-                # Убираем лишние символы
-                platform = re.sub(r"[,;]$", "", platform)
+                platform = re.sub(r"[,;]$", "", match.group(1).strip())
                 if platform and len(platform) > 2:
-                    return f"cisco {platform}"
-
-        # Arista
-        if "arista" in desc_lower:
-            match = re.search(r"arista\s+networks?\s+(\S+)", description, re.IGNORECASE)
-            if match:
-                return f"Arista {match.group(1)}"
-
-        # Juniper
-        if "juniper" in desc_lower:
-            match = re.search(r"juniper.*?(\S+-\S+)", description, re.IGNORECASE)
-            if match:
-                return f"Juniper {match.group(1)}"
+                    return f"{prefix}{platform}"
 
         return ""

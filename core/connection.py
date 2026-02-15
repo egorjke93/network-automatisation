@@ -37,6 +37,11 @@ from scrapli.exceptions import (
 
 from .device import Device, DeviceStatus
 from .credentials import Credentials
+from .constants.platforms import (
+    DEFAULT_PLATFORM,
+    SCRAPLI_PLATFORM_MAP,
+    NTC_PLATFORM_MAP,
+)
 from .exceptions import (
     ConnectionError as CollectorConnectionError,
     AuthenticationError,
@@ -46,36 +51,6 @@ from .exceptions import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# Маппинг типов устройств для Scrapli
-SCRAPLI_PLATFORM_MAP = {
-    # Cisco
-    "cisco_ios": "cisco_iosxe",
-    "cisco_iosxe": "cisco_iosxe",
-    "cisco_nxos": "cisco_nxos",
-    "cisco_iosxr": "cisco_iosxr",
-    # Arista
-    "arista_eos": "arista_eos",
-    # Juniper
-    "juniper_junos": "juniper_junos",
-    "juniper": "juniper_junos",
-    # QTech (используем generic для совместимости)
-    "qtech": "cisco_iosxe",
-    "qtech_qsw": "cisco_iosxe",
-}
-
-# Маппинг для NTC Templates
-NTC_PLATFORM_MAP = {
-    "cisco_iosxe": "cisco_ios",
-    "cisco_ios": "cisco_ios",
-    "cisco_nxos": "cisco_nxos",
-    "cisco_iosxr": "cisco_xr",
-    "arista_eos": "arista_eos",
-    "juniper_junos": "juniper_junos",
-    "qtech": "cisco_ios",
-    "qtech_qsw": "cisco_ios",
-}
 
 
 def get_scrapli_platform(platform: str) -> str:
@@ -104,7 +79,7 @@ def get_ntc_platform(platform: str) -> str:
         str: Платформа для NTC Templates
     """
     if not platform:
-        return "cisco_ios"
+        return DEFAULT_PLATFORM
 
     # Сначала пробуем прямое соответствие
     if platform.lower() in NTC_PLATFORM_MAP:
@@ -112,7 +87,7 @@ def get_ntc_platform(platform: str) -> str:
 
     # Пробуем через Scrapli платформу
     scrapli_platform = get_scrapli_platform(platform)
-    return NTC_PLATFORM_MAP.get(scrapli_platform, "cisco_ios")
+    return NTC_PLATFORM_MAP.get(scrapli_platform, DEFAULT_PLATFORM)
 
 
 class ConnectionManager:

@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from typing import List, Tuple
 
+from ..core.constants.platforms import DEFAULT_PLATFORM
+
 logger = logging.getLogger(__name__)
 
 
@@ -87,8 +89,8 @@ def load_devices(devices_file: str) -> List:
         # Backward compatibility: если platform не указан, используем device_type
         # (в Device.__post_init__ есть логика конвертации device_type → platform)
         if not platform and not device_type:
-            logger.warning(f"Устройство {host}: ни 'platform' ни 'device_type' не указаны, используется 'cisco_ios'")
-            platform = "cisco_ios"
+            logger.warning(f"Устройство {host}: ни 'platform' ни 'device_type' не указаны, используется '{DEFAULT_PLATFORM}'")
+            platform = DEFAULT_PLATFORM
 
         devices.append(
             Device(

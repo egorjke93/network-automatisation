@@ -511,6 +511,36 @@ def normalize_interface_short(interface: str, lowercase: bool = False) -> str:
 `normalize_interface_full` делает обратное: `Gi0/1` -> `GigabitEthernet0/1`.
 Обе функции нужны, потому что разные API и команды ожидают разные форматы.
 
+Помимо нормализации имён, в `interfaces.py` есть функция определения LAG:
+
+```python
+LAG_PREFIXES = ("port-channel", "po", "aggregateport", "ag")
+
+def is_lag_name(interface: str) -> bool:
+    """Проверяет, является ли интерфейс LAG по имени."""
+    iface_lower = interface.lower().replace(" ", "")
+    if iface_lower.startswith(("port-channel", "aggregateport")):
+        return True
+    # Короткие (po, ag) — после них должна быть цифра
+    for prefix in ("po", "ag"):
+        if iface_lower.startswith(prefix) and iface_lower[len(prefix)].isdigit():
+            return True
+    return False
+```
+
+`is_lag_name()` — **единый источник** проверки LAG. Используется в трёх местах:
+`detect_port_type()` (domain), `enrich_with_switchport()` (domain),
+`get_netbox_interface_type()` (constants/netbox). Добавление нового формата LAG —
+одно изменение в этой функции.
+
+А в `platforms.py` есть `DEFAULT_PLATFORM`:
+
+```python
+DEFAULT_PLATFORM = "cisco_ios"  # Fallback если платформа не указана
+```
+
+Используется в CLI, API, connection.py — везде где нужен fallback.
+
 ### 2.4 netbox.py -- определение типа интерфейса
 
 ```python
@@ -539,8 +569,8 @@ def get_netbox_interface_type(
     """
     name_lower = interface_name.lower()
 
-    # 1. LAG
-    if name_lower.startswith(("port-channel", "po", "aggregateport")):
+    # 1. LAG (единая функция is_lag_name из interfaces.py)
+    if is_lag_name(name_lower) or port_type == "lag":
         return "lag"
 
     # 2. Виртуальные

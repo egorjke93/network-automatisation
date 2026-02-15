@@ -572,9 +572,9 @@ network_collector/
 > core/constants/
 > ├── __init__.py       # Обратная совместимость (re-export всех констант)
 > ├── commands.py       # COLLECTOR_COMMANDS, SECONDARY_COMMANDS
-> ├── interfaces.py     # INTERFACE_SHORT_MAP, INTERFACE_FULL_MAP
+> ├── interfaces.py     # INTERFACE_SHORT_MAP, INTERFACE_FULL_MAP, LAG_PREFIXES, is_lag_name()
 > ├── netbox.py         # NETBOX_INTERFACE_TYPE_MAP, PORT_TYPE_MAP
-> ├── platforms.py      # SCRAPLI_PLATFORM_MAP, NTC_PLATFORM_MAP
+> ├── platforms.py      # SCRAPLI_PLATFORM_MAP, NTC_PLATFORM_MAP, DEFAULT_PLATFORM
 > ├── mac.py            # MAC нормализация
 > ├── devices.py        # Устройства
 > └── utils.py          # Утилиты (get_collector_command, normalize_interface_*)
@@ -628,6 +628,13 @@ NETBOX_INTERFACE_TYPE_MAP = {
 # Получить команду для коллектора и платформы
 get_collector_command("mac", "cisco_ios")  # → "show mac address-table"
 
+# Проверить, является ли интерфейс LAG (единый источник)
+is_lag_name("Port-channel1")      # → True
+is_lag_name("Po1")                # → True
+is_lag_name("AggregatePort 1")    # → True  (QTech)
+is_lag_name("Ag1")                # → True  (QTech короткий)
+is_lag_name("GigabitEthernet0/1") # → False
+
 # Получить все варианты написания интерфейса
 get_interface_aliases("GigabitEthernet0/1")  # → ["GigabitEthernet0/1", "Gi0/1", "Gig0/1"]
 get_interface_aliases("Hu0/55")  # → ["Hu0/55", "HundredGigE0/55", "HundredGigabitEthernet0/55"]
@@ -639,6 +646,9 @@ normalize_interface_short("AggregatePort 1")          # → "Ag1"      (QTech LA
 normalize_interface_full("Gi0/1")                     # → "GigabitEthernet0/1"
 normalize_interface_full("TF0/1")                     # → "TFGigabitEthernet0/1"
 normalize_interface_full("Ag1")                       # → "AggregatePort1"
+
+# Платформа по умолчанию (fallback)
+DEFAULT_PLATFORM = "cisco_ios"
 ```
 
 ---

@@ -7,6 +7,41 @@
 from typing import Dict, List
 
 # =============================================================================
+# LAG-ИНТЕРФЕЙСЫ
+# =============================================================================
+
+# Префиксы LAG-интерфейсов (все варианты написания, lowercase)
+LAG_PREFIXES = ("port-channel", "po", "aggregateport", "ag")
+
+
+def is_lag_name(interface: str) -> bool:
+    """
+    Проверяет, является ли интерфейс LAG по имени.
+
+    Поддерживает все форматы: Port-channel1, Po1, AggregatePort 1, Ag1.
+
+    Args:
+        interface: Имя интерфейса в любом регистре
+
+    Returns:
+        bool: True если это LAG-интерфейс
+    """
+    if not interface:
+        return False
+    iface_lower = interface.lower().replace(" ", "")
+    # Длинные префиксы — простой startswith
+    if iface_lower.startswith(("port-channel", "aggregateport")):
+        return True
+    # Короткие (po, ag) — после них должна быть цифра
+    for prefix in ("po", "ag"):
+        if (iface_lower.startswith(prefix)
+                and len(iface_lower) > len(prefix)
+                and iface_lower[len(prefix)].isdigit()):
+            return True
+    return False
+
+
+# =============================================================================
 # МАППИНГ ИНТЕРФЕЙСОВ
 # =============================================================================
 

@@ -7,6 +7,8 @@
 import re
 from typing import Any, Dict
 
+from .interfaces import is_lag_name
+
 # =============================================================================
 # МАППИНГ ТИПОВ ИНТЕРФЕЙСОВ ДЛЯ NETBOX
 # =============================================================================
@@ -347,11 +349,7 @@ def get_netbox_interface_type(
     hw_lower = hardware_type.lower() if hardware_type else ""
 
     # 1. LAG интерфейсы (Cisco Port-channel, QTech AggregatePort)
-    if name_lower.startswith(("port-channel", "po", "aggregateport")) or port_type == "lag":
-        return "lag"
-    # QTech: Ag1, Ag10 (короткое имя AggregatePort)
-    if (len(name_lower) >= 3 and name_lower[:2] == "ag"
-            and name_lower[2].isdigit()):
+    if is_lag_name(name_lower) or port_type == "lag":
         return "lag"
 
     # 2. Виртуальные интерфейсы

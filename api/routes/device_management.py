@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Header, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
+from ...core.constants.platforms import DEFAULT_PLATFORM
 from ..services.device_service import (
     get_device_service,
     get_device_types,
@@ -39,7 +40,7 @@ def get_device_defaults() -> Dict[str, str]:
 class DeviceCreate(BaseModel):
     """Схема создания устройства."""
     host: str = Field(..., description="IP адрес или hostname")
-    device_type: str = Field(default="cisco_ios", description="Платформа (cisco_ios, cisco_nxos, etc.)")
+    device_type: str = Field(default=DEFAULT_PLATFORM, description="Платформа (cisco_ios, cisco_nxos, etc.)")
     name: Optional[str] = Field(None, description="Имя устройства")
     site: Optional[str] = Field(None, description="Сайт NetBox")
     role: Optional[str] = Field(None, description="Роль устройства (switch, router, etc.)")
@@ -399,7 +400,7 @@ async def import_from_netbox(data: NetBoxImportRequest):
                 continue
 
             # Определяем платформу
-            platform = "cisco_ios"  # default
+            platform = DEFAULT_PLATFORM
             if nb_dev.platform:
                 platform_slug = str(nb_dev.platform.slug) if hasattr(nb_dev.platform, 'slug') else str(nb_dev.platform)
                 # Маппинг NetBox platform → Scrapli platform

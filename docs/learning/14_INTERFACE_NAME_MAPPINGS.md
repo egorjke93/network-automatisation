@@ -777,11 +777,42 @@ for variant in get_interface_aliases("GigabitEthernet0/1"):
 
 ---
 
-## 7. Итоговая таблица: кто что использует
+## 7. `is_lag_name()` — определение LAG по имени
+
+Помимо алиасов, в `core/constants/interfaces.py` есть функция для определения LAG:
+
+```python
+LAG_PREFIXES = ("port-channel", "po", "aggregateport", "ag")
+
+def is_lag_name(interface: str) -> bool:
+    """Проверяет, является ли интерфейс LAG по имени."""
+    iface_lower = interface.lower().replace(" ", "")
+    if iface_lower.startswith(("port-channel", "aggregateport")):
+        return True
+    for prefix in ("po", "ag"):
+        if (iface_lower.startswith(prefix)
+                and len(iface_lower) > len(prefix)
+                and iface_lower[len(prefix)].isdigit()):
+            return True
+    return False
+```
+
+**Зачем отдельная функция?** Проверка "это LAG?" нужна в 3+ местах:
+- `detect_port_type()` — чтобы вернуть `port_type="lag"`
+- `enrich_with_switchport()` — чтобы определить mode LAG по member портам
+- `get_netbox_interface_type()` — чтобы вернуть NetBox тип `"lag"`
+
+Раньше каждое место содержало свою копию проверки (`startswith(("port-channel", "po"))` + отдельный блок для `"ag"`). Теперь — единый источник `is_lag_name()`.
+
+**Для новой платформы:** если LAG называется не Port-channel и не AggregatePort — добавить один префикс в `is_lag_name()`.
+
+---
+
+## 8. Итоговая таблица: кто что использует
 
 | Слой | Файл | Функция | Что делает |
 |------|------|---------|------------|
-| **Constants** | `core/constants/interfaces.py` | определение | Маппинги + 3 функции |
+| **Constants** | `core/constants/interfaces.py` | определение | Маппинги + 4 функции (включая `is_lag_name()`) |
 | **Collector** | `collectors/interfaces.py` | `get_interface_aliases()` | Алиасы для LAG members |
 | **Collector** | `collectors/interfaces.py` | `get_interface_aliases()` | Алиасы для media types |
 | **Collector** | `collectors/mac.py` | `get_interface_aliases()` | Алиасы для статусов портов |
@@ -793,7 +824,7 @@ for variant in get_interface_aliases("GigabitEthernet0/1"):
 
 ---
 
-## 8. Упражнения
+## 9. Упражнения
 
 ### Упражнение 1: Предскажи результат
 
