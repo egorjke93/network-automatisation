@@ -97,12 +97,16 @@ class TestSecondaryCommands:
         assert get_secondary_command("nonexistent", "cisco_ios") == ""
 
     def test_media_type_platforms(self):
-        """Media type для NX-OS и QTech (show interface status / show interface transceiver)."""
+        """Media type для NX-OS и QTech (show interface status / show interface transceiver).
+        Cisco IOS/IOS-XE не нужен — media_type приходит из основной show interfaces.
+        """
         mt = SECONDARY_COMMANDS["media_type"]
         assert "cisco_nxos" in mt
         assert "qtech" in mt
         assert "qtech_qsw" in mt
+        # Cisco IOS не нужен — media_type уже в show interfaces
         assert "cisco_ios" not in mt
+        assert "cisco_iosxe" not in mt
 
     def test_lldp_summary_present(self):
         """LLDP summary для Cisco/Arista."""

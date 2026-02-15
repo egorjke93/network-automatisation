@@ -1153,7 +1153,7 @@ python -m network_collector devices --format parsed
 | 1 | **Основные** (имя, статус, скорость, описание, MAC, MTU, IP) | `show interfaces` | `show interface` | **Да** | Создание/обновление интерфейсов |
 | 2 | **LAG membership** (какой порт в каком LAG) | `show etherchannel summary` | `show aggregatePort summary` | Нет | Поле `lag` (parent interface) |
 | 3 | **Switchport mode** (access/trunk, VLAN) | `show interfaces switchport` | `show interface switchport` | Нет | Поля `mode`, `untagged_vlan`, `tagged_vlans` |
-| 4 | **Media type** (тип SFP модуля) | `show interface status` (NX-OS) | `show interface transceiver` | Нет | Точный `type` порта (10gbase-sr vs generic 10gbase-x-sfpp) |
+| 4 | **Media type** (тип SFP модуля) | IOS: из основной `show interfaces`; NX-OS: `show interface status` | `show interface transceiver` | Нет | Точный `type` порта (10gbase-sr vs generic 10gbase-x-sfpp) |
 
 **Что будет если шаблон не добавить:**
 - Нет шаблона для команды 1 (основной) → **интерфейсы не соберутся вообще**
@@ -1211,6 +1211,7 @@ SECONDARY_COMMANDS = {
         ...
     },
     "media_type": {
+        # Cisco IOS/IOS-XE: НЕ нужен — media_type из основной show interfaces
         "cisco_nxos": "show interface status",
         "qtech": "show interface transceiver",
         "qtech_qsw": "show interface transceiver",
@@ -1219,7 +1220,8 @@ SECONDARY_COMMANDS = {
 ```
 
 Если платформы нет в словаре — `.get(device.platform)` вернёт `None`, и команда
-просто не выполнится. Это **нормально** — коллектор продолжит работу без этих данных.
+просто не выполнится. Это **нормально** — для Cisco IOS/IOS-XE media_type уже
+приходит из основной команды `show interfaces` (NTC шаблон содержит поле `MEDIA_TYPE`).
 
 **Шаг 2. Сбор данных с устройства** (`collectors/interfaces.py`, `_collect_from_device`)
 
@@ -1532,21 +1534,27 @@ Media_type используется на **двух уровнях**, и это 
 |-----------|---------|------------|------|------------|
 | `cisco_nxos` | `show interface status` | `cisco_nxos_show_interface_status.textfsm` | `port`, `type` | ✅ Подключено |
 | `qtech` | `show interface transceiver` | кастомный `qtech_show_interface_transceiver.textfsm` | `INTERFACE`, `TYPE` | ✅ Подключено |
-| `cisco_ios` | `show interfaces status` | `cisco_ios_show_interfaces_status.textfsm` | `port`, `type` | ⬜ Можно подключить |
-| `cisco_iosxe` | `show interfaces status` | `cisco_ios_show_interfaces_status.textfsm` | `port`, `type` | ⬜ Можно подключить |
-| `arista_eos` | `show interfaces status` | `arista_eos_show_interfaces_status.textfsm` | `port`, `type` | ⬜ Можно подключить |
+| `cisco_ios` | — | — | — | ✅ Не нужен (media_type из основной `show interfaces`) |
+| `cisco_iosxe` | — | — | — | ✅ Не нужен (media_type из основной `show interfaces`) |
+| `arista_eos` | — | — | — | Не используется |
 
-Для подключения готовой платформы — одна строка в `core/constants/commands.py`:
+**Почему Cisco IOS/IOS-XE не нужна доп. команда:**
+
+На Cisco IOS основная команда `show interfaces` уже возвращает поле `MEDIA_TYPE`
+в NTC шаблоне (например `"SFP-10GBase-SR"`, `"10/100/1000BaseTX"`). Оно попадает
+в данные через `_normalize_row()` и используется в `detect_port_type()` и
+`get_netbox_interface_type()`. Дополнительная команда была бы лишним SSH запросом.
+
+На NX-OS `show interface` возвращает media_type как `"10G"` (только скорость) —
+бесполезно. Поэтому нужна отдельная команда `show interface status` → `"10Gbase-LR"`.
+
+Текущий конфиг:
 
 ```python
 SECONDARY_COMMANDS["media_type"] = {
     "cisco_nxos": "show interface status",
     "qtech": "show interface transceiver",
     "qtech_qsw": "show interface transceiver",
-    # Добавить одну строку:
-    "cisco_ios": "show interfaces status",       # NTC шаблон уже есть
-    "cisco_iosxe": "show interfaces status",     # тот же NTC шаблон
-    "arista_eos": "show interfaces status",      # NTC шаблон уже есть
 }
 ```
 

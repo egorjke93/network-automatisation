@@ -632,6 +632,7 @@ SECONDARY_COMMANDS: Dict[str, Dict[str, str]] = {
         "qtech": "show interface switchport",
     },
     "media_type": {
+        # Cisco IOS/IOS-XE: НЕ нужен — media_type из основной show interfaces
         "cisco_nxos": "show interface status",
         "qtech": "show interface transceiver",
         "qtech_qsw": "show interface transceiver",
@@ -714,7 +715,7 @@ def _collect_from_device(self, device: Device) -> List[Dict[str, Any]]:
 1. `show interfaces` -- основные данные (статус, MAC, IP, MTU, speed)
 2. `show etherchannel summary` -- какие порты объединены в LAG
 3. `show interfaces switchport` -- режим порта (access/trunk)
-4. `show interface status` (NX-OS) / `show interface transceiver` (QTech) -- точный тип трансивера
+4. `show interface status` (NX-OS) / `show interface transceiver` (QTech) -- точный тип трансивера (на IOS уже в основной команде)
 
 Все эти данные объединяются через `InterfaceNormalizer` из Domain Layer.
 
@@ -895,13 +896,14 @@ def detect_port_type(self, row: Dict[str, Any], iface_lower: str) -> str:
 
 Механизм универсальный — нужно знать **какая команда** возвращает тип трансивера и **какие поля** в TextFSM шаблоне.
 
-**Что уже готово (NTC шаблоны есть, можно подключить одной строкой):**
+**Текущее состояние media_type по платформам:**
 
-| Платформа | Команда | Поля шаблона | Что добавить |
-|-----------|---------|-------------|-------------|
-| `cisco_ios` | `show interfaces status` | `port`, `type` | `"cisco_ios": "show interfaces status"` |
-| `cisco_iosxe` | `show interfaces status` | `port`, `type` | `"cisco_iosxe": "show interfaces status"` |
-| `arista_eos` | `show interfaces status` | `port`, `type` | `"arista_eos": "show interfaces status"` |
+| Платформа | Откуда берётся media_type | Доп. команда? |
+|-----------|--------------------------|---------------|
+| `cisco_ios` | Основная `show interfaces` (поле `MEDIA_TYPE`) | Не нужна |
+| `cisco_iosxe` | Основная `show interfaces` (поле `MEDIA_TYPE`) | Не нужна |
+| `cisco_nxos` | `show interface status` (поле `type`) | ✅ В SECONDARY_COMMANDS |
+| `qtech` | `show interface transceiver` (поле `TYPE`) | ✅ В SECONDARY_COMMANDS |
 
 > **Важно:** Cisco IOS `show interface transceiver` **НЕ подходит** — возвращает только оптические
 > параметры (температура, напряжение, мощность), но **не тип трансивера**. Тип трансивера на
