@@ -82,7 +82,7 @@ class InterfaceCollector(BaseCollector):
             include_errors: Собирать статистику ошибок
             collect_lag_info: Собирать информацию о LAG membership
             collect_switchport: Собирать режим switchport (access/trunk)
-            collect_media_type: Собирать точный media_type (для NX-OS из show interface status)
+            collect_media_type: Собирать точный media_type (NX-OS: show interface status, QTech: show interface transceiver)
             **kwargs: Аргументы для BaseCollector
         """
         super().__init__(**kwargs)
@@ -584,18 +584,20 @@ class InterfaceCollector(BaseCollector):
         command: str = "show interface status",
     ) -> Dict[str, str]:
         """
-        Парсит show interface status для получения media_type (Type колонка).
+        Парсит вывод команды для получения media_type.
 
-        На NX-OS `show interface` возвращает media_type как "10G" (только скорость),
-        а `show interface status` возвращает Type как "10Gbase-LR" (полный тип).
+        Источники media_type по платформам:
+        - NX-OS: `show interface status` → поля NTC: port, type
+        - QTech: `show interface transceiver` → поля TextFSM: INTERFACE, TYPE
 
         Args:
-            output: Вывод команды show interface status
+            output: Вывод команды (show interface status или show interface transceiver)
             platform: Платформа устройства (NTCParser сам ищет кастомный шаблон и NTC fallback)
             command: Команда для парсера
 
         Returns:
             Dict: {interface: media_type} например {"Ethernet1/1": "10Gbase-LR"}
+                  или {"TFGigabitEthernet 0/1": "10GBASE-SR-SFP+"}
         """
         media_types = {}
 
@@ -608,9 +610,10 @@ class InterfaceCollector(BaseCollector):
             ) if self._parser else []
 
             for row in parsed:
-                # NTC возвращает: port, name, status, vlan, duplex, speed, type
-                port = row.get("port", "")
-                media_type = row.get("type", "")
+                # NTC (show interface status): port, name, status, vlan, duplex, speed, type
+                # TextFSM (show interface transceiver): INTERFACE, TYPE, SERIAL, BANDWIDTH
+                port = row.get("port") or row.get("INTERFACE", "")
+                media_type = row.get("type") or row.get("TYPE", "")
 
                 if not port:
                     continue

@@ -109,9 +109,11 @@ SECONDARY_COMMANDS: Dict[str, Dict[str, str]] = {
         "qtech": "show interface switchport",
         "qtech_qsw": "show interface switchport",
     },
-    # Media type (тип трансивера из show interface status)
+    # Media type (тип трансивера: NX-OS из show interface status, QTech из show interface transceiver)
     "media_type": {
         "cisco_nxos": "show interface status",
+        "qtech": "show interface transceiver",
+        "qtech_qsw": "show interface transceiver",
     },
     # Трансиверы для inventory
     "transceiver": {

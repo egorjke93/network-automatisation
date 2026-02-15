@@ -368,16 +368,20 @@ pynetbox использует lazy-loading: обращение к атрибут
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ 4. INTERFACE TYPE DETECTION (двухуровневая)                                  │
 │                                                                              │
-│    УРОВЕНЬ 1: Коллектор → port_type                                          │
-│    _detect_port_type() нормализует в единый формат:                          │
-│    • media_type → "10g-sfp+"                                                 │
+│    Источники media_type:                                                     │
+│    • NX-OS: show interface status → "10Gbase-SR"                             │
+│    • QTech: show interface transceiver → "10GBASE-SR-SFP+"                   │
+│                                                                              │
+│    УРОВЕНЬ 1: Коллектор → port_type (грубая категория)                       │
+│    detect_port_type() нормализует в единый формат:                           │
+│    • media_type "10GBASE-SR-SFP+" → "10g-sfp+"                              │
 │    • hardware_type → "1g-rj45"                                               │
 │    • interface_name → "lag", "virtual"                                       │
 │                                                                              │
-│    УРОВЕНЬ 2: Sync → NetBox type                                             │
-│    _get_interface_type() конвертирует в NetBox формат:                       │
-│    • "10g-sfp+" → "10gbase-x-sfpp"                                          │
-│    • "1g-rj45" → "1000base-t"                                               │
+│    УРОВЕНЬ 2: Sync → NetBox type (точный тип)                                │
+│    get_netbox_interface_type() — media_type приоритетнее port_type:          │
+│    • media_type "10GBASE-SR-SFP+" → "10gbase-sr" (ТОЧНЫЙ!)                  │
+│    • port_type "10g-sfp+" → "10gbase-x-sfpp" (generic, если нет media_type) │
 │    • "lag" → "lag"                                                           │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │

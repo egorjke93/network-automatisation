@@ -1153,7 +1153,7 @@ python -m network_collector devices --format parsed
 | 1 | **Основные** (имя, статус, скорость, описание, MAC, MTU, IP) | `show interfaces` | `show interface` | **Да** | Создание/обновление интерфейсов |
 | 2 | **LAG membership** (какой порт в каком LAG) | `show etherchannel summary` | `show aggregatePort summary` | Нет | Поле `lag` (parent interface) |
 | 3 | **Switchport mode** (access/trunk, VLAN) | `show interfaces switchport` | `show interface switchport` | Нет | Поля `mode`, `untagged_vlan`, `tagged_vlans` |
-| 4 | **Media type** (тип SFP модуля) | `show interface status` (NX-OS) | _(пока не реализовано)_ | Нет | Точный `type` порта (1000base-t vs 1000base-x-sfp) |
+| 4 | **Media type** (тип SFP модуля) | `show interface status` (NX-OS) | `show interface transceiver` | Нет | Точный `type` порта (10gbase-sr vs generic 10gbase-x-sfpp) |
 
 **Что будет если шаблон не добавить:**
 - Нет шаблона для команды 1 (основной) → **интерфейсы не соберутся вообще**
@@ -1212,7 +1212,8 @@ SECONDARY_COMMANDS = {
     },
     "media_type": {
         "cisco_nxos": "show interface status",
-        # Для QTech пока не добавлено
+        "qtech": "show interface transceiver",
+        "qtech_qsw": "show interface transceiver",
     },
 }
 ```
@@ -1447,38 +1448,201 @@ SECONDARY_COMMANDS["switchport"] = {
 
 #### 4c. Media Type / Transceiver (опционально)
 
-**Зачем:** Чтобы в NetBox тип порта был точным (`1000base-x-sfp` для SFP, а не
-`1000base-t` по умолчанию). Без media_type тип определяется по имени интерфейса (fallback).
+**Зачем:** Чтобы в NetBox тип порта был **точным** (`10gbase-sr` для SR-модуля, а не
+generic `10gbase-x-sfpp`). Без media_type тип определяется только по имени интерфейса (fallback).
+
+**Источники media_type по платформам:**
+
+| Платформа | Команда | Формат полей | Пример TYPE |
+|-----------|---------|-------------|-------------|
+| NX-OS | `show interface status` | NTC: `port`, `type` | `10Gbase-SR` |
+| QTech | `show interface transceiver` | TextFSM: `INTERFACE`, `TYPE` | `10GBASE-SR-SFP+` |
 
 **Цепочка вызовов:**
 
 ```
-SSH: "show interface status" (NX-OS)
+SSH: "show interface status" (NX-OS) или "show interface transceiver" (QTech)
   ↓
-TextFSMParser.parse(output, platform, command)
+NTCParser.parse(output, platform, command)
   ↓
 _parse_media_types(output, platform, command)
+  поля: port/INTERFACE → имя интерфейса, type/TYPE → тип трансивера
   ↓
-Dict[str, str]  →  {"Ethernet1/1": "10Gbase-SR", "Eth1/1": "10Gbase-SR"}
+Dict[str, str]  →  {"Ethernet1/1": "10Gbase-SR"} или {"TFGigabitEthernet 0/1": "10GBASE-SR-SFP+"}
   ↓
 normalizer.enrich_with_media_type(data, media_types)
   ↓
-Каждому интерфейсу добавляется/уточняется поле "media_type"
+detect_port_type() → пересчитывает port_type по media_type
 ```
 
 ```python
 # core/constants/commands.py → SECONDARY_COMMANDS["media_type"]
 SECONDARY_COMMANDS["media_type"] = {
     "cisco_nxos": "show interface status",
-    # Для QTech пока не реализовано
+    "qtech": "show interface transceiver",
+    "qtech_qsw": "show interface transceiver",
 }
 ```
 
-Если платформы нет в `SECONDARY_COMMANDS["media_type"]` — тип порта определяется
-по имени интерфейса (fallback в `get_netbox_interface_type()`):
+**Двухуровневый маппинг: port_type vs NetBox type**
+
+Media_type используется на **двух уровнях**, и это даёт разные результаты:
+
+```
+Уровень 1 — Collector (port_type, грубая категория):
+  "10GBASE-SR-SFP+" → _detect_from_media_type() → "10g-sfp+" (содержит "10gbase")
+
+Уровень 2 — NetBox Sync (точный тип для API):
+  "10GBASE-SR-SFP+" → NETBOX_INTERFACE_TYPE_MAP → "10gbase-sr" (паттерн "10gbase-sr" найден!)
+```
+
+Вот как это работает для QTech до и после добавления media_type:
+
+| | Без media_type | С media_type (transceiver) |
+|---|---|---|
+| **Источник** | Имя интерфейса | `show interface transceiver` → TYPE |
+| **Данные** | `TFGigabitEthernet 0/1` | `10GBASE-SR-SFP+` |
+| **port_type** | `10g-sfp+` (по имени) | `10g-sfp+` (по media_type — то же) |
+| **NetBox type** | `10gbase-x-sfpp` (generic SFP+) | `10gbase-sr` (**ТОЧНЫЙ** 10GBASE-SR!) |
+
+Разница: `get_netbox_interface_type()` проверяет media_type по `NETBOX_INTERFACE_TYPE_MAP`
+**до** проверки port_type. Паттерн `"10gbase-sr"` совпадает с `"10gbase-sr-sfp+"` и
+возвращает конкретный NetBox тип `"10gbase-sr"` вместо generic `"10gbase-x-sfpp"`.
+
+**Если платформы нет** в `SECONDARY_COMMANDS["media_type"]` — тип порта определяется
+по имени интерфейса (fallback):
 - `GigabitEthernet` → `1000base-t`
 - `TenGigabitEthernet` → `10gbase-x-sfpp`
 - `TFGigabitEthernet` (QTech 10G) → `10gbase-x-sfpp`
+
+**Как добавить media_type для новой платформы:**
+
+1. Определить команду, которая возвращает тип трансивера
+2. Создать TextFSM шаблон (если NTC не поддерживает) с полями `INTERFACE` и `TYPE`
+3. Зарегистрировать шаблон в `CUSTOM_TEXTFSM_TEMPLATES`
+4. Добавить платформу в `SECONDARY_COMMANDS["media_type"]`
+5. Убедиться что значение TYPE содержит паттерн из `NETBOX_INTERFACE_TYPE_MAP`
+   (например "10gbase-sr", "1000base-lx" и т.д.)
+
+#### 4d. Готовые платформы и кастомные шаблоны
+
+**Какие платформы можно подключить прямо сейчас (NTC шаблоны уже есть):**
+
+| Платформа | Команда | NTC шаблон | Поля | Готовность |
+|-----------|---------|------------|------|------------|
+| `cisco_nxos` | `show interface status` | `cisco_nxos_show_interface_status.textfsm` | `port`, `type` | ✅ Подключено |
+| `qtech` | `show interface transceiver` | кастомный `qtech_show_interface_transceiver.textfsm` | `INTERFACE`, `TYPE` | ✅ Подключено |
+| `cisco_ios` | `show interfaces status` | `cisco_ios_show_interfaces_status.textfsm` | `port`, `type` | ⬜ Можно подключить |
+| `cisco_iosxe` | `show interfaces status` | `cisco_ios_show_interfaces_status.textfsm` | `port`, `type` | ⬜ Можно подключить |
+| `arista_eos` | `show interfaces status` | `arista_eos_show_interfaces_status.textfsm` | `port`, `type` | ⬜ Можно подключить |
+
+Для подключения готовой платформы — одна строка в `core/constants/commands.py`:
+
+```python
+SECONDARY_COMMANDS["media_type"] = {
+    "cisco_nxos": "show interface status",
+    "qtech": "show interface transceiver",
+    "qtech_qsw": "show interface transceiver",
+    # Добавить одну строку:
+    "cisco_ios": "show interfaces status",       # NTC шаблон уже есть
+    "cisco_iosxe": "show interfaces status",     # тот же NTC шаблон
+    "arista_eos": "show interfaces status",      # NTC шаблон уже есть
+}
+```
+
+**ВНИМАНИЕ: Cisco IOS `show interface transceiver` НЕ подходит!**
+
+На Cisco IOS команда `show interface transceiver` возвращает **только оптические
+параметры** (температура, напряжение, мощность TX/RX). Поля TYPE нет:
+
+```
+                                           Optical   Optical
+           Temperature  Voltage  Current   Tx Power  Rx Power
+Port       (Celsius)    (Volts)  (mA)      (dBm)     (dBm)
+---------  -----------  -------  --------  --------  --------
+Gi1/0/1    29.3         3.27     5.2       -5.5      -7.2
+```
+
+Это **не то же самое** что QTech `show interface transceiver`, который возвращает
+`Transceiver Type: 10GBASE-SR-SFP+`. На Cisco IOS тип трансивера находится в
+`show interfaces status` (поле Type: "10GBase-SR SFP+", "1000BaseSX SFP" и т.д.).
+
+#### 4e. Кастомный TextFSM шаблон для media_type
+
+Если для вашей платформы **нет** готового NTC шаблона с типом трансивера, нужно
+создать кастомный TextFSM шаблон. Вот пошаговая инструкция.
+
+**Требования к шаблону:**
+
+Метод `_parse_media_types()` ожидает от шаблона **два поля** (одна из пар):
+
+| Пара полей | Формат | Кто использует |
+|------------|--------|---------------|
+| `port` + `type` | NTC (lowercase) | Cisco NX-OS, IOS, Arista |
+| `INTERFACE` + `TYPE` | TextFSM (UPPERCASE) | QTech (кастомный шаблон) |
+
+Код определяет поля автоматически:
+```python
+# collectors/interfaces.py → _parse_media_types()
+port = row.get("port") or row.get("INTERFACE", "")
+media_type = row.get("type") or row.get("TYPE", "")
+```
+
+**Пример: создание кастомного шаблона**
+
+Допустим, у вашего вендора команда `show transceiver detail` возвращает:
+
+```
+Interface     Type              Serial          Status
+---------     ----              ------          ------
+Gi1/0/1       1000BASE-LX SFP   AGM1234567      OK
+Te1/0/1       10GBASE-SR SFP+   FNS5678901      OK
+```
+
+Шаг 1: Создать файл `templates/<vendor>_show_transceiver_detail.textfsm`:
+
+```
+Value INTERFACE (\S+)
+Value TYPE (.+?)
+Value SERIAL (\S+)
+Value STATUS (\S+)
+
+Start
+  ^-+
+  ^\s*${INTERFACE}\s+${TYPE}\s+${SERIAL}\s+${STATUS}\s*$$ -> Record
+```
+
+Шаг 2: Зарегистрировать в `core/constants/commands.py`:
+
+```python
+# SECONDARY_COMMANDS
+"media_type": {
+    "<vendor>": "show transceiver detail",
+},
+
+# CUSTOM_TEXTFSM_TEMPLATES
+("<vendor>", "show transceiver detail"): "<vendor>_show_transceiver_detail.textfsm",
+```
+
+Шаг 3: Готово! `_parse_media_types()` найдёт поля `INTERFACE` и `TYPE` автоматически.
+
+**Значения TYPE — что должен возвращать шаблон:**
+
+Чтобы маппинг в NetBox тип работал правильно, значение TYPE должно содержать один
+из паттернов `NETBOX_INTERFACE_TYPE_MAP` (`core/constants/netbox.py`). Примеры:
+
+| Значение TYPE от устройства | Найденный паттерн | NetBox тип |
+|-----------------------------|-------------------|------------|
+| `10GBASE-SR-SFP+` | `10gbase-sr` | `10gbase-sr` |
+| `10GBase-LR` | `10gbase-lr` | `10gbase-lr` |
+| `1000BaseSX SFP` | `1000basesx` | `1000base-sx` |
+| `1000BaseLX/LH` | `1000baselx` | `1000base-lx` |
+| `SFP-10GBase-SR` | `sfp-10gbase-sr` | `10gbase-sr` |
+| `10/100/1000BaseTX` | _(нет паттерна)_ | fallback на port_type |
+
+Если значение TYPE не совпадает ни с одним паттерном — используется fallback
+на `PORT_TYPE_MAP` (port_type → generic NetBox тип). Список всех паттернов
+смотри в `NETBOX_INTERFACE_TYPE_MAP` (~80 записей).
 
 #### Итого: что добавлять для новой платформы
 
@@ -1831,6 +1995,14 @@ SECONDARY_COMMANDS["transceiver"] = {
 
 Если у нового вендора нет `show inventory` — добавьте его в `SECONDARY_COMMANDS["transceiver"]`.
 Inventory collector автоматически пропустит шаг `show inventory` и соберёт только трансиверы.
+
+> **Важно:** Команда `show interface transceiver` используется **двумя коллекторами**:
+> - **InventoryCollector** — для создания inventory items (SFP модули с серийниками)
+> - **InterfaceCollector** — для определения media_type (точный тип порта в NetBox)
+>
+> Это две разные цепочки: InventoryCollector берёт команду из `SECONDARY_COMMANDS["transceiver"]`,
+> InterfaceCollector — из `SECONDARY_COMMANDS["media_type"]`. Обе указывают на одну и ту же
+> команду `show interface transceiver`, но парсят результат для разных целей.
 
 ### 12.16 QTech SVI: добавление VLAN интерфейсов
 

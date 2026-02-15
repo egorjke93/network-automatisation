@@ -706,15 +706,18 @@ def _find_interface(self, device_id, name):
 - get_interface_aliases() — добавлен HundredGigabitEthernet алиас
 - 75+ новых тестов (1788 всего): QTech support, templates, refactoring utils
 
-### TODO: QTech transceiver (media_type)
+### ✅ QTech transceiver (media_type) — ВЫПОЛНЕНО
 
-- [ ] Добавить `show interface transceiver` в media_type_commands для qtech/qtech_qsw
-- [ ] Написать парсер для QTech transceiver формата (Transceiver Type: 10GBASE-SR-SFP+)
-- [ ] Сопоставить transceiver type с media_type для detect_port_type / get_netbox_interface_type
-- [ ] Сейчас: TFGigabitEthernet fallback на 10g-sfp+ по имени (без учёта реального модуля)
-- [ ] Нужно: если воткнут 25G модуль → тип должен быть 25g-sfp28, не 10g-sfp+
-- [ ] TextFSM шаблон уже есть: qtech_show_interface_transceiver.textfsm (парсит TYPE, SERIAL, BANDWIDTH)
-- [ ] Проверить на реальном устройстве перед реализацией
+Реализован Вариант A (минимальный код): QTech добавлен в `SECONDARY_COMMANDS["media_type"]`
+с командой `show interface transceiver`. Метод `_parse_media_types()` расширен для поддержки
+полей TextFSM (`INTERFACE`/`TYPE`).
+
+- [x] Добавить `show interface transceiver` в media_type_commands для qtech/qtech_qsw
+- [x] `_parse_media_types()` поддерживает оба формата: NTC (port/type) и TextFSM (INTERFACE/TYPE)
+- [x] Двухуровневый маппинг: media_type → port_type (грубый) + media_type → NETBOX_INTERFACE_TYPE_MAP (точный)
+- [x] Результат: `10GBASE-SR-SFP+` → NetBox тип `10gbase-sr` (вместо generic `10gbase-x-sfpp`)
+- [x] TextFSM шаблон уже был: `qtech_show_interface_transceiver.textfsm`
+- [x] Новый парсер не нужен — используется существующий `_parse_media_types()` с fallback на поля TextFSM
 
 ---
 
