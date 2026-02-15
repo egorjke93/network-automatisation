@@ -17,6 +17,17 @@ from ...core.domain.vlan import parse_vlan_range, VlanSet
 logger = logging.getLogger(__name__)
 
 
+def _is_lag_interface(name: str) -> bool:
+    """Проверяет является ли интерфейс LAG (Port-channel, AggregatePort)."""
+    name_lower = name.lower()
+    if name_lower.startswith(("port-channel", "po", "aggregateport")):
+        return True
+    # Короткий префикс "ag" — только если за ним сразу цифра (Ag1, Ag10)
+    if name_lower.startswith("ag") and len(name_lower) > 2 and name_lower[2].isdigit():
+        return True
+    return False
+
+
 class InterfacesSyncMixin:
     """Mixin для синхронизации интерфейсов."""
 
@@ -89,10 +100,10 @@ class InterfacesSyncMixin:
         exclude_patterns = sync_cfg.get_option("exclude_interfaces", [])
         interface_models = Interface.ensure_list(interfaces)
 
-        def is_lag(intf: Interface) -> int:
-            return 0 if intf.name.lower().startswith(("port-channel", "po")) else 1
-
-        sorted_interfaces = sorted(interface_models, key=is_lag)
+        sorted_interfaces = sorted(
+            interface_models,
+            key=lambda intf: 0 if _is_lag_interface(intf.name) else 1,
+        )
 
         comparator = SyncComparator()
         # Добавляем вычисленные поля в данные для сравнения
@@ -202,7 +213,7 @@ class InterfacesSyncMixin:
             if not intf:
                 logger.warning(f"Интерфейс {item.name} не найден в локальных данных")
                 continue
-            if intf.name.lower().startswith(("port-channel", "po")):
+            if _is_lag_interface(intf.name):
                 lag_items.append((item, intf))
             else:
                 member_items.append((item, intf))
@@ -721,7 +732,7 @@ class InterfacesSyncMixin:
                 updates["lag"] = lag_interface.id
                 actual_changes.append(f"lag: {current_lag_name} → {intf.lag}")
         else:
-            logger.debug(f"LAG интерфейс {intf.lag} не найден в NetBox")
+            logger.warning(f"LAG интерфейс {intf.lag} не найден в NetBox для {intf.name}")
 
     # ==================== ОРКЕСТРАТОР ====================
 

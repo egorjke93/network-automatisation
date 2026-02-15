@@ -77,7 +77,7 @@ class InterfacesMixin:
                 return interfaces[0]
 
         # Для LAG попробуем регистронезависимый поиск
-        if interface_name.lower().startswith(("po", "port-channel")):
+        if interface_name.lower().startswith(("po", "port-channel", "ag", "aggregateport")):
             all_interfaces = list(self.api.dcim.interfaces.filter(device_id=device_id))
             name_lower = normalized_name.lower()
             for intf in all_interfaces:
