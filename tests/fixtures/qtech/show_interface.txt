@@ -101,6 +101,25 @@ TFGigabitEthernet 0/3 is DOWN  , line protocol is DOWN
     0 input errors, 0 CRC, 0 frame, 0 overrun, 0 abort
     0 packets output, 0 bytes, 0 underruns , 0 no buffer, 0 dropped
     0 output errors, 0 collisions, 0 interface resets
+========================== Vlan 10 ========================
+Index(dec):4010 (hex):faa
+Vlan 10 is UP  , line protocol is UP
+  Hardware is Ethernet SVI, address is 001f.ce62.1e96 (bia 001f.ce62.1e96)
+  Description: Management VLAN
+  Interface address is: 10.0.10.1/24
+  Interface IPv6 address is:
+    No IPv6 address
+  MTU 1500 bytes, BW 1000000 Kbit
+  Encapsulation protocol is Ethernet-II, loopback not set
+========================== Vlan 20 ========================
+Index(dec):4020 (hex):fb4
+Vlan 20 is UP  , line protocol is UP
+  Hardware is Ethernet SVI, address is 001f.ce62.1e96 (bia 001f.ce62.1e96)
+  Interface address is: 10.0.20.1/24
+  Interface IPv6 address is:
+    No IPv6 address
+  MTU 1500 bytes, BW 1000000 Kbit
+  Encapsulation protocol is Ethernet-II, loopback not set
 ========================== TFGigabitEthernet 0/4 ========================
 Index(dec):4 (hex):4
 TFGigabitEthernet 0/4 is DOWN  , line protocol is DOWN    

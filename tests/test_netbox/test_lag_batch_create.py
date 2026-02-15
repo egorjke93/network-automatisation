@@ -31,11 +31,11 @@ def mock_device():
 def lag_interfaces():
     """Интерфейсы с LAG: Port-channel1 + два member'а."""
     return [
-        Interface(name="Port-channel1", status="up", description="LAG to core"),
+        Interface(name="Port-channel1", status="up", port_type="lag", description="LAG to core"),
         Interface(name="GigabitEthernet0/1", status="up", lag="Port-channel1", description="Member 1"),
         Interface(name="GigabitEthernet0/2", status="up", lag="Port-channel1", description="Member 2"),
         Interface(name="GigabitEthernet0/3", status="up", description="Standalone"),
-        Interface(name="Port-channel2", status="up", description="LAG to server"),
+        Interface(name="Port-channel2", status="up", port_type="lag", description="LAG to server"),
         Interface(name="GigabitEthernet0/4", status="up", lag="Port-channel2", description="Server link"),
     ]
 
@@ -387,8 +387,9 @@ class TestPipelineLAGFlow:
         mock_sync_config.return_value = cfg
 
         # Эмулируем данные из collect_dicts (как pipeline получает)
+        # port_type заполняется нормализатором до вызова sync
         collected_dicts = [
-            {"interface": "Port-channel1", "status": "up", "description": "LAG", "hostname": "switch-test-01"},
+            {"interface": "Port-channel1", "status": "up", "description": "LAG", "hostname": "switch-test-01", "port_type": "lag"},
             {"interface": "GigabitEthernet0/1", "status": "up", "lag": "Port-channel1", "hostname": "switch-test-01"},
             {"interface": "GigabitEthernet0/2", "status": "up", "lag": "Port-channel1", "hostname": "switch-test-01"},
             {"interface": "GigabitEthernet0/3", "status": "up", "hostname": "switch-test-01"},
@@ -463,8 +464,9 @@ class TestPipelineLAGFlow:
         mock_client.bulk_delete_interfaces.return_value = True
 
         # Данные с устройства (через pipeline collect_dicts)
+        # port_type заполняется нормализатором до вызова sync
         collected_dicts = [
-            {"interface": "Port-channel1", "status": "up", "hostname": "switch-test-01"},
+            {"interface": "Port-channel1", "status": "up", "hostname": "switch-test-01", "port_type": "lag"},
             {"interface": "GigabitEthernet0/1", "status": "up", "lag": "Port-channel1", "hostname": "switch-test-01"},
         ]
 

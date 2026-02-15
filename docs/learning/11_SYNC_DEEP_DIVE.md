@@ -1022,23 +1022,26 @@ class InterfacesSyncMixin:
         exclude_patterns = sync_cfg.get_option("exclude_interfaces", [])
         interface_models = Interface.ensure_list(interfaces)
 
-        def is_lag(intf: Interface) -> int:
-            return 0 if intf.name.lower().startswith(("port-channel", "po")) else 1
-
-        sorted_interfaces = sorted(interface_models, key=is_lag)
+        # port_type заполняется нормализатором (detect_port_type)
+        sorted_interfaces = sorted(
+            interface_models,
+            key=lambda intf: 0 if intf.port_type == "lag" else 1,
+        )
 ```
 
 ### Что здесь происходит (сортировка)
 
-LAG интерфейсы (Port-channel, Po) идут первыми, потому что при создании member-интерфейса нужен ID LAG, а LAG должен уже существовать в NetBox.
+LAG интерфейсы идут первыми, потому что при создании member-интерфейса нужен ID LAG, а LAG должен уже существовать в NetBox. Тип определяется через `port_type` — поле модели `Interface`, заполненное нормализатором (`detect_port_type()`) до вызова sync.
 
 ```
-Вход:  [Gi0/1, Po1, Gi0/2, Po2, Gi0/3]
-                  | sorted(key=is_lag)
-Выход: [Po1, Po2, Gi0/1, Gi0/2, Gi0/3]
-         ^         ^
-      is_lag=0   is_lag=1
+Вход:  [Gi0/1, Po1, Gi0/2, Ag10, Gi0/3]
+                  | sorted(key=lambda intf: 0 if intf.port_type == "lag" else 1)
+Выход: [Po1, Ag10, Gi0/1, Gi0/2, Gi0/3]
+         ^          ^
+      port_type="lag"   port_type!="lag"
 ```
+
+Универсальность: не проверяем имена напрямую (`"port-channel"`, `"ag"` и т.д.), а используем уже вычисленный `port_type`. Если добавится новая платформа с другим именем LAG — достаточно обновить только `detect_port_type()`.
 
 > **Python-концепция: sorted(key=)**
 > Параметр `key` принимает функцию, которая вызывается для каждого элемента и возвращает значение для сортировки. `sorted` стабилен: элементы с одинаковым ключом сохраняют исходный порядок.
@@ -2239,7 +2242,7 @@ sync_interfaces("switch-01", interfaces)
   +-- _get_vlan_by_vid(1, site)              <-- 1 GET (все VLAN сайта в кэш)
   +-- client.get_interfaces(device_id=42)    <-- 1 GET
   |
-  +-- sorted(interfaces, key=is_lag)         <-- LAG первыми
+  +-- sorted(interfaces, key=port_type=="lag") <-- LAG первыми
   |
   +-- for intf in sorted_interfaces:
   |     data = intf.to_dict()

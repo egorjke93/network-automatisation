@@ -1093,12 +1093,15 @@ Lambda удобна как аргумент `key=` для сортировки.
 
 ```python
 # netbox/sync/interfaces.py — sync_interfaces()
-def is_lag(intf: Interface) -> int:
-    """LAG-интерфейсы (Port-channel) первыми (0), остальные потом (1)."""
-    return 0 if intf.name.lower().startswith(("port-channel", "po")) else 1
-
-sorted_interfaces = sorted(interface_models, key=is_lag)
+# port_type заполняется нормализатором (detect_port_type) до вызова sync
+sorted_interfaces = sorted(
+    interface_models,
+    key=lambda intf: 0 if intf.port_type == "lag" else 1,
+)
 ```
+
+Здесь lambda возвращает 0 для LAG (они сортируются первыми) и 1 для остальных.
+`port_type` — поле модели `Interface`, заполненное domain layer'ом.
 
 Lambda в fallback-обработке:
 
@@ -1117,7 +1120,7 @@ self._batch_with_fallback(
 
 ### Где это в проекте
 
-- `netbox/sync/interfaces.py` строки 92-93 -- `is_lag()` (в проекте как def, но мог бы быть lambda)
+- `netbox/sync/interfaces.py` — сортировка LAG через `lambda intf: 0 if intf.port_type == "lag" else 1`
 - `netbox/sync/interfaces.py` строка 388 -- lambda в `fallback_fn`
 
 ---

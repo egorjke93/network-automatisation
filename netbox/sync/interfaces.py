@@ -17,17 +17,6 @@ from ...core.domain.vlan import parse_vlan_range, VlanSet
 logger = logging.getLogger(__name__)
 
 
-def _is_lag_interface(name: str) -> bool:
-    """Проверяет является ли интерфейс LAG (Port-channel, AggregatePort)."""
-    name_lower = name.lower()
-    if name_lower.startswith(("port-channel", "po", "aggregateport")):
-        return True
-    # Короткий префикс "ag" — только если за ним сразу цифра (Ag1, Ag10)
-    if name_lower.startswith("ag") and len(name_lower) > 2 and name_lower[2].isdigit():
-        return True
-    return False
-
-
 class InterfacesSyncMixin:
     """Mixin для синхронизации интерфейсов."""
 
@@ -102,7 +91,7 @@ class InterfacesSyncMixin:
 
         sorted_interfaces = sorted(
             interface_models,
-            key=lambda intf: 0 if _is_lag_interface(intf.name) else 1,
+            key=lambda intf: 0 if intf.port_type == "lag" else 1,
         )
 
         comparator = SyncComparator()
@@ -213,7 +202,7 @@ class InterfacesSyncMixin:
             if not intf:
                 logger.warning(f"Интерфейс {item.name} не найден в локальных данных")
                 continue
-            if _is_lag_interface(intf.name):
+            if intf.port_type == "lag":
                 lag_items.append((item, intf))
             else:
                 member_items.append((item, intf))

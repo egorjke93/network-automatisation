@@ -16,6 +16,7 @@ Value INPUT_PACKETS (\d+)
 Value OUTPUT_PACKETS (\d+)
 
 Start
+  ^={5,} -> Continue.Record
   ^=+\s+${INTERFACE}\s+=+ -> Continue
   ^${INTERFACE}\s+is\s+${LINK_STATUS}\s*,\s*line protocol is\s+${PROTOCOL_STATUS}
   ^\s+Hardware is ${HARDWARE}.+address is ${ADDRESS}\s+\(bia\s+${BIA}\)

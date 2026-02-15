@@ -62,7 +62,7 @@ class TestQtechShowInterface:
         )
 
         print(f"Parsed {len(result)} interfaces")
-        assert len(result) > 0, "Должны быть интерфейсы"
+        assert len(result) >= 6, "Должны быть физические + SVI интерфейсы"
 
         # Проверяем первый интерфейс
         intf = result[0]
@@ -75,6 +75,10 @@ class TestQtechShowInterface:
         # Проверяем значения
         assert "TFGigabitEthernet" in intf.get("INTERFACE", "")
         assert intf.get("LINK_STATUS") in ["UP", "DOWN"]
+
+        # Проверяем что SVI (VLAN) интерфейсы парсятся
+        names = [r.get("INTERFACE", "") for r in result]
+        assert any("Vlan" in n for n in names), f"Vlan SVI не найден в: {names}"
 
 
 class TestQtechShowInterfaceStatus:

@@ -404,7 +404,7 @@ class TestInterfacesSyncPolygon:
         base_client.get_interface_by_name.side_effect = lambda dev_id, name: created_lags.get(name)
 
         local = [
-            Interface(name="Port-channel1", status="up"),
+            Interface(name="Port-channel1", status="up", port_type="lag"),
             Interface(name="GigabitEthernet0/1", status="up", lag="Port-channel1"),
             Interface(name="GigabitEthernet0/2", status="up", lag="Port-channel1"),
             Interface(name="GigabitEthernet0/3", status="up"),  # standalone
@@ -1175,7 +1175,7 @@ class TestPipelineFullFlow:
 
         # Step 1: Interfaces с LAG
         interfaces = [
-            Interface(name="Port-channel1", status="up"),
+            Interface(name="Port-channel1", status="up", port_type="lag"),
             Interface(name="GigabitEthernet0/1", status="up", lag="Port-channel1"),
             Interface(name="Vlan100", status="up"),
         ]
