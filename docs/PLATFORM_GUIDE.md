@@ -1558,6 +1558,25 @@ SECONDARY_COMMANDS["media_type"] = {
 }
 ```
 
+**Кастомная настройка:** Можно добавить любую платформу в `SECONDARY_COMMANDS["media_type"]`,
+даже если media_type уже приходит из основной команды. Например, для Cisco IOS/IOS-XE
+или Arista EOS:
+
+```python
+"media_type": {
+    "cisco_nxos": "show interface status",
+    "cisco_ios": "show interfaces status",      # опционально (данные уже в show interfaces)
+    "cisco_iosxe": "show interfaces status",    # опционально (данные уже в show interfaces)
+    "arista_eos": "show interfaces status",     # опционально (NTC шаблон готов)
+    "qtech": "show interface transceiver",
+    "qtech_qsw": "show interface transceiver",
+}
+```
+
+Механизм `enrich_with_media_type()` перезапишет media_type только если новое значение
+более информативно (содержит "base", "sfp" или "qsfp"). Для Cisco IOS это лишний SSH
+запрос, но технически будет работать.
+
 **ВНИМАНИЕ: Cisco IOS `show interface transceiver` НЕ подходит!**
 
 На Cisco IOS команда `show interface transceiver` возвращает **только оптические

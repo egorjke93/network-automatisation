@@ -900,14 +900,29 @@ def detect_port_type(self, row: Dict[str, Any], iface_lower: str) -> str:
 
 | Платформа | Откуда берётся media_type | Доп. команда? |
 |-----------|--------------------------|---------------|
-| `cisco_ios` | Основная `show interfaces` (поле `MEDIA_TYPE`) | Не нужна |
-| `cisco_iosxe` | Основная `show interfaces` (поле `MEDIA_TYPE`) | Не нужна |
+| `cisco_ios` | Основная `show interfaces` (поле `MEDIA_TYPE`) | Не нужна (уже в основной) |
+| `cisco_iosxe` | Основная `show interfaces` (поле `MEDIA_TYPE`) | Не нужна (уже в основной) |
 | `cisco_nxos` | `show interface status` (поле `type`) | ✅ В SECONDARY_COMMANDS |
 | `qtech` | `show interface transceiver` (поле `TYPE`) | ✅ В SECONDARY_COMMANDS |
 
+**Кастомная настройка:** Любую платформу можно добавить в `SECONDARY_COMMANDS["media_type"]`,
+даже если media_type уже приходит из основной команды. Например:
+
+```python
+"media_type": {
+    "cisco_nxos": "show interface status",
+    "cisco_ios": "show interfaces status",      # опционально
+    "arista_eos": "show interfaces status",     # опционально (NTC шаблон готов)
+    "qtech": "show interface transceiver",
+}
+```
+
+`enrich_with_media_type()` перезапишет media_type только если новое значение более
+информативно. Для Cisco IOS это лишний SSH запрос (данные уже есть), но работать будет.
+
 > **Важно:** Cisco IOS `show interface transceiver` **НЕ подходит** — возвращает только оптические
 > параметры (температура, напряжение, мощность), но **не тип трансивера**. Тип трансивера на
-> Cisco IOS находится в команде `show interfaces status` (поле Type: "10GBase-SR SFP+").
+> Cisco IOS находится в `show interfaces` (основная) или `show interfaces status` (доп.).
 > Это отличается от QTech, где `show interface transceiver` возвращает `Transceiver Type: 10GBASE-SR-SFP+`.
 
 **Если нужен кастомный шаблон:**
