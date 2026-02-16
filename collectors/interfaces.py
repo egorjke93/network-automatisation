@@ -621,8 +621,8 @@ class InterfaceCollector(BaseCollector):
 
             for row in parsed:
                 # NTC (show interface status): port, name, status, vlan, duplex, speed, type
-                # TextFSM (show interface transceiver): INTERFACE, TYPE, SERIAL, BANDWIDTH
-                port = row.get("port") or row.get("INTERFACE", "")
+                # TextFSM (show interface transceiver): interface, type (lowercase после _parse_with_textfsm)
+                port = row.get("port") or row.get("interface") or row.get("INTERFACE", "")
                 media_type = row.get("type") or row.get("TYPE", "")
 
                 if not port:
