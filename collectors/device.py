@@ -432,10 +432,12 @@ class DeviceInventoryCollector(DeviceCollector):
         """
         # Сохраняем дефолтные значения для использования в lambda
         default_role = role
+        default_manufacturer = manufacturer
 
         extra_fields = {
             "status": "active",
-            "manufacturer": manufacturer,
+            # manufacturer из device.vendor имеет приоритет над CLI дефолтом
+            "manufacturer": lambda data, dev: dev.vendor.capitalize() if dev.vendor else default_manufacturer,
             "site": site,
             # role из devices_ips.py имеет приоритет над CLI дефолтом
             "role": lambda data, dev: dev.role if dev.role else default_role,
