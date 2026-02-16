@@ -80,6 +80,37 @@ class TestQtechShowInterface:
         names = [r.get("INTERFACE", "") for r in result]
         assert any("Vlan" in n for n in names), f"Vlan SVI не найден в: {names}"
 
+    def test_parse_ip_address_from_vlan(self):
+        """IP-адрес парсится из QTech 'Interface address is: X.X.X.X/Y'."""
+        result = parse_with_template(
+            "qtech_show_interface.textfsm",
+            "show_interface.txt"
+        )
+
+        # Ищем Vlan 10 с IP 10.0.10.1/24
+        vlan10 = [r for r in result if r.get("INTERFACE") == "Vlan 10"]
+        assert len(vlan10) == 1, f"Vlan 10 не найден, интерфейсы: {[r.get('INTERFACE') for r in result]}"
+        assert vlan10[0]["IP_ADDRESS"] == "10.0.10.1"
+        assert vlan10[0]["PREFIX_LENGTH"] == "24"
+
+        # Ищем Vlan 20 с IP 10.0.20.1/24
+        vlan20 = [r for r in result if r.get("INTERFACE") == "Vlan 20"]
+        assert len(vlan20) == 1, f"Vlan 20 не найден"
+        assert vlan20[0]["IP_ADDRESS"] == "10.0.20.1"
+        assert vlan20[0]["PREFIX_LENGTH"] == "24"
+
+    def test_no_ip_address_on_physical(self):
+        """Физические порты без IP — поля пустые."""
+        result = parse_with_template(
+            "qtech_show_interface.textfsm",
+            "show_interface.txt"
+        )
+
+        # Первый физический порт — нет IP
+        phys = result[0]
+        assert phys["IP_ADDRESS"] == ""
+        assert phys["PREFIX_LENGTH"] == ""
+
 
 class TestQtechShowInterfaceStatus:
     """Тесты show interface status."""

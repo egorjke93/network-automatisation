@@ -107,6 +107,11 @@ class InterfaceNormalizer:
         """
         result = dict(row)
 
+        # Убираем пробелы в имени интерфейса (QTech: "TFGigabitEthernet 0/39" → "TFGigabitEthernet0/39")
+        iface_name = row.get("interface", "")
+        if iface_name:
+            result["interface"] = iface_name.replace(" ", "")
+
         # Нормализуем статус
         status = row.get("link_status", row.get("status", ""))
         if status:

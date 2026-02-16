@@ -24,10 +24,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Callback для прогресса: (current_index, total, device_host, success)
 ProgressCallback = Callable[[int, int, str, bool], None]
 
-from ntc_templates.parse import parse_output
+from ..parsers.textfsm_parser import NTCParser
 
 from ..core.device import Device
-from ..core.connection import ConnectionManager, get_ntc_platform, get_scrapli_platform
+from ..core.connection import ConnectionManager
 from ..core.credentials import Credentials
 from ..core.constants import normalize_device_model
 from ..core.logging import get_logger
@@ -129,6 +129,8 @@ class DeviceCollector:
             max_retries=max_retries,
             retry_delay=retry_delay,
         )
+
+        self._parser = NTCParser()
 
         # Флаг для --format parsed: пропускает нормализацию
         self._skip_normalize = False
@@ -256,21 +258,17 @@ class DeviceCollector:
         data["platform"] = device.platform
         data["manufacturer"] = device.vendor.capitalize() if device.vendor else "Cisco"
 
-        # Определяем платформы
-        scrapli_platform = get_scrapli_platform(device.platform)
-        ntc_platform = get_ntc_platform(device.platform)
-
         try:
             with self._conn_manager.connect(device, self.credentials) as conn:
                 # Выполняем show version
                 response = conn.send_command("show version")
                 output = response.result
 
-                # Парсим через NTC Templates
-                parsed_data = parse_output(
-                    platform=ntc_platform,
+                # Парсим через NTCParser (кастомный шаблон → NTC Templates fallback)
+                parsed_data = self._parser.parse(
+                    output=output,
+                    platform=device.platform,
                     command="show version",
-                    data=output
                 )
 
                 # Нормализуем результат

@@ -448,6 +448,179 @@ def _get_retry_delay(self, attempt: int) -> float:
 
 ---
 
+## Баг 5: QTech — пробелы в именах интерфейсов ломали LAG и transceiver
+
+**Дата:** Февраль 2026
+**Симптом:** QTech LAG member не привязывался: `LAG интерфейс Ag39 не найден для TFGigabitEthernet 0/39`. Типы интерфейсов (SFP+) из transceiver не подтягивались.
+
+### Причина
+
+QTech TextFSM шаблоны возвращают имена с пробелом: `TFGigabitEthernet 0/39`. Это ломало:
+1. **LAG binding:** Имя `TFGigabitEthernet 0/39` не находилось при поиске LAG member
+2. **Transceiver matching:** Ключи media_types содержали пробел, нормализованные имена — нет
+
+### Исправление
+
+**Файл:** `core/domain/interface.py` — метод `_normalize_row()`
+
+Добавлена нормализация пробелов на раннем этапе:
+
+```python
+# Убираем пробелы в имени интерфейса (QTech: "TFGigabitEthernet 0/39" → "TFGigabitEthernet0/39")
+iface_name = row.get("interface", "")
+if iface_name:
+    result["interface"] = iface_name.replace(" ", "")
+```
+
+### Цепочка transceiver → interface type (полная)
+
+Для QTech определение типа интерфейса (SFP+, RJ45) работает через цепочку transceiver:
+
+```
+1. SSH → "show interface transceiver"
+     ↓
+2. TextFSM (qtech_show_interface_transceiver.textfsm)
+   Regex: INTERFACE = (\S+\s+\d+/\d+)  ← С ПРОБЕЛОМ!
+   Результат: {"INTERFACE": "TFGigabitEthernet 0/1", "TYPE": "10GBASE-SR-SFP+"}
+     ↓
+3. _parse_media_types() [collectors/interfaces.py:580]
+   port = "TFGigabitEthernet 0/1"  (с пробелом)
+     ↓
+4. get_interface_aliases(port) [core/constants/interfaces.py:148]
+   Генерирует ВСЕ варианты имени:
+   - "TFGigabitEthernet 0/1"  (оригинал с пробелом)
+   - "TFGigabitEthernet0/1"   (без пробела) ← КЛЮЧ для матчинга!
+   - "TF0/1"                   (короткая форма)
+     ↓
+5. media_types = {
+     "TFGigabitEthernet 0/1": "10GBASE-SR-SFP+",
+     "TFGigabitEthernet0/1": "10GBASE-SR-SFP+",   ← без пробела
+     "TF0/1": "10GBASE-SR-SFP+",
+   }
+     ↓
+6. _normalize_row() [core/domain/interface.py]
+   "TFGigabitEthernet 0/1" → "TFGigabitEthernet0/1"  (пробел убран)
+     ↓
+7. enrich_with_media_type() [core/domain/interface.py:482]
+   Ищет: "TFGigabitEthernet0/1" in media_types → НАЙДЕНО!
+   Устанавливает: media_type = "10GBASE-SR-SFP+"
+     ↓
+8. detect_port_type() [core/domain/interface.py]
+   media_type "10GBASE-SR-SFP+" содержит "sfp" → port_type = "10g-sfp+"
+     ↓
+9. get_netbox_interface_type() [core/constants/netbox.py]
+   "10g-sfp+" → "10gbase-x-sfpp"  (значение для NetBox API)
+     ↓
+10. NetBox API: interface.type = "10gbase-x-sfpp" (SFP+ 10G)
+```
+
+### Порядок операций в _collect_from_device()
+
+```
+Line 229: normalize_dicts()           → пробелы УБРАНЫ из interface names
+Line 282: _parse_media_types()        → ключи через get_interface_aliases() (оба варианта)
+Line 300: enrich_with_media_type()    → матчинг нормализованных имён → НАЙДЕНО
+```
+
+Критически важно: `get_interface_aliases()` на строке 171 делает `clean = interface.replace(" ", "")` — это гарантирует что media_types dict содержит ключ БЕЗ пробела, который совпадёт с нормализованным именем.
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `core/domain/interface.py` | `_normalize_row()` — добавлен `replace(" ", "")` |
+| `tests/test_core/test_domain/test_interface_normalizer.py` | 3 теста: пробелы, transceiver match, aliases |
+
+---
+
+## Баг 6: QTech IP-адреса не парсились из show interfaces
+
+**Дата:** Февраль 2026
+**Симптом:** VLAN SVI интерфейсы QTech не получали IP-адреса при sync в NetBox.
+
+### Причина: два дефекта
+
+#### 6a. TextFSM шаблон без IP-полей
+
+**Файл:** `templates/qtech_show_interface.textfsm`
+
+Шаблон не содержал полей `IP_ADDRESS` и `PREFIX_LENGTH`. Формат QTech:
+```
+Interface address is: 10.0.10.1/24
+```
+
+#### 6b. Regex fallback только для Cisco
+
+**Файл:** `collectors/interfaces.py`
+
+Regex fallback для прямого парсинга IP использовал паттерн Cisco:
+```python
+# Было:
+ip_pattern = re.compile(r"Internet address is\s+(\d+\.\d+\.\d+\.\d+)/(\d+)")
+```
+
+QTech использует `"Interface address is:"` (с двоеточием), Cisco — `"Internet address is"` (без).
+
+### Исправление
+
+**TextFSM:** Добавлены поля и правило парсинга:
+```
+Value IP_ADDRESS (\d+\.\d+\.\d+\.\d+)
+Value PREFIX_LENGTH (\d+)
+...
+^\s+Interface\s+address\s+is:\s+${IP_ADDRESS}/${PREFIX_LENGTH}
+```
+
+**Regex fallback:** Универсальный паттерн для обеих платформ:
+```python
+# Стало:
+ip_pattern = re.compile(r"(?:Internet|Interface)\s+address\s+is:?\s+(\d+\.\d+\.\d+\.\d+)/(\d+)")
+```
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `templates/qtech_show_interface.textfsm` | Добавлены IP_ADDRESS, PREFIX_LENGTH + правило парсинга |
+| `collectors/interfaces.py` | Regex: `Internet` → `(?:Internet\|Interface)`, добавлена `?` после `:` |
+| `tests/test_qtech_templates.py` | 2 теста: IP из Vlan, пустой IP у физических портов |
+
+---
+
+## Баг 7: QTech show version не парсился
+
+**Дата:** Февраль 2026
+**Симптом:** Hostname, model, serial, version не заполнялись для QTech устройств.
+
+### Причина
+
+**Файл:** `collectors/device.py`
+
+Коллектор использовал `ntc_templates.parse.parse_output()` напрямую. NTC Templates **не содержит** шаблона для QTech. Кастомный шаблон `qtech_show_version.textfsm` зарегистрирован в `CUSTOM_TEXTFSM_TEMPLATES`, но `parse_output()` не проверяет кастомные шаблоны.
+
+```python
+# Было:
+from ntc_templates.parse import parse_output
+parsed_data = parse_output(platform=ntc_platform, command="show version", data=output)
+
+# Стало:
+parsed_data = self._parser.parse(
+    output=output,
+    platform=device.platform,
+    command="show version",
+)
+```
+
+`NTCParser.parse()` проверяет кастомные шаблоны первым (`CUSTOM_TEXTFSM_TEMPLATES`), затем NTC Templates как fallback.
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `collectors/device.py` | Заменён `parse_output()` на `self._parser.parse()`, убраны неиспользуемые imports |
+
+---
+
 ## Общие уроки
 
 1. **При добавлении платформы — проверять ВСЕ места**, где есть хардкод имён (не только парсинг, но и сортировку, поиск, case-insensitive сравнение)
@@ -459,3 +632,6 @@ def _get_retry_delay(self, attempt: int) -> float:
 7. **Batch API вместо циклов** — один bulk-запрос вместо N поштучных. Fallback на поштучные при ошибке batch обеспечивает надёжность
 8. **Jitter в retry** — стандартный паттерн exponential backoff + random jitter предотвращает thundering herd при параллельном сборе
 9. **Unit-тесты для каждого sync mixin** — покрытие edge cases (dedup, fallback, recreate) защищает от регрессий при рефакторинге
+10. **Пробелы в именах интерфейсов** — QTech возвращает `TFGigabitEthernet 0/1` с пробелом. Нормализация (`replace(" ", "")`) должна быть на раннем этапе в `_normalize_row()`, а `get_interface_aliases()` — в каждом месте где строится dict по имени интерфейса
+11. **Кастомные TextFSM шаблоны** — использовать `NTCParser.parse()` вместо `ntc_templates.parse.parse_output()`. NTCParser проверяет `CUSTOM_TEXTFSM_TEMPLATES` первым
+12. **Regex для разных платформ** — один паттерн `(?:Internet|Interface)\s+address\s+is:?\s+` покрывает и Cisco и QTech. При добавлении платформы проверять формат вывода каждой команды

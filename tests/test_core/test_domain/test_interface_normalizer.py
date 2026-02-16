@@ -351,3 +351,46 @@ class TestInterfaceNormalizerEnrich:
         assert result[0]["media_type"] == "10GBase-LR"
         assert result[0]["port_type"] == "10g-sfp+"
         assert result[1]["media_type"] == "10GBase-SR"
+
+    def test_qtech_space_in_interface_name_removed(self):
+        """QTech имена с пробелом нормализуются: 'TFGigabitEthernet 0/1' → 'TFGigabitEthernet0/1'."""
+        raw = [
+            {"interface": "TFGigabitEthernet 0/1", "link_status": "UP", "address": "001f.ce62.1e96"},
+            {"interface": "TFGigabitEthernet 0/39", "link_status": "DOWN", "address": "001f.ce62.1ebc"},
+        ]
+
+        result = self.normalizer.normalize_dicts(raw, hostname="switch01")
+
+        assert result[0]["interface"] == "TFGigabitEthernet0/1"
+        assert result[1]["interface"] == "TFGigabitEthernet0/39"
+
+    def test_qtech_transceiver_matches_after_space_removal(self):
+        """Трансивер-данные (с пробелом) матчатся с нормализованным интерфейсом (без пробела)."""
+        from network_collector.core.constants.interfaces import get_interface_aliases
+
+        # Интерфейсы после нормализации (пробел убран)
+        interfaces = [
+            {"interface": "TFGigabitEthernet0/1"},
+            {"interface": "TFGigabitEthernet0/2"},
+        ]
+
+        # media_types строятся из TextFSM с пробелом через get_interface_aliases
+        media_types = {}
+        for alias in get_interface_aliases("TFGigabitEthernet 0/1"):
+            media_types[alias] = "10GBASE-SR-SFP+"
+        for alias in get_interface_aliases("TFGigabitEthernet 0/2"):
+            media_types[alias] = "10GBASE-LR-SFP+"
+
+        result = self.normalizer.enrich_with_media_type(interfaces, media_types)
+
+        assert result[0]["media_type"] == "10GBASE-SR-SFP+"
+        assert result[0]["port_type"] == "10g-sfp+"
+        assert result[1]["media_type"] == "10GBASE-LR-SFP+"
+
+    def test_get_interface_aliases_removes_space(self):
+        """get_interface_aliases генерирует вариант без пробела для QTech."""
+        from network_collector.core.constants.interfaces import get_interface_aliases
+
+        aliases = get_interface_aliases("TFGigabitEthernet 0/39")
+        assert "TFGigabitEthernet0/39" in aliases  # Без пробела
+        assert "TFGigabitEthernet 0/39" in aliases  # С пробелом (оригинал)

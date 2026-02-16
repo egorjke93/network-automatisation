@@ -140,7 +140,7 @@ class InterfaceCollector(BaseCollector):
 
         # Паттерны для Cisco IOS "show interfaces"
         intf_pattern = re.compile(r"^(\S+)\s+is\s+(up|down|administratively down)", re.MULTILINE)
-        ip_pattern = re.compile(r"Internet address is (\d+\.\d+\.\d+\.\d+)/(\d+)")
+        ip_pattern = re.compile(r"(?:Internet|Interface)\s+address\s+is:?\s+(\d+\.\d+\.\d+\.\d+)/(\d+)")
         mac_pattern = re.compile(r"address is ([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})")
         desc_pattern = re.compile(r"Description: (.+)")
         mtu_pattern = re.compile(r"MTU (\d+) bytes")

@@ -1472,10 +1472,22 @@ _parse_media_types(output, platform, command)
   ↓
 Dict[str, str]  →  {"Ethernet1/1": "10Gbase-SR"} или {"TFGigabitEthernet 0/1": "10GBASE-SR-SFP+"}
   ↓
+get_interface_aliases() генерирует ВСЕ варианты имени:
+  "TFGigabitEthernet 0/1"  (оригинал с пробелом)
+  "TFGigabitEthernet0/1"   (без пробела — для матчинга!)
+  "TF0/1"                   (короткая форма)
+  ↓
 normalizer.enrich_with_media_type(data, media_types)
+  интерфейсы уже нормализованы (пробелы убраны в _normalize_row())
+  ищет "TFGigabitEthernet0/1" в media_types → НАЙДЕНО (через alias)
   ↓
 detect_port_type() → пересчитывает port_type по media_type
 ```
+
+> **ВАЖНО (QTech):** TextFSM шаблон `qtech_show_interface_transceiver.textfsm` возвращает
+> имена с пробелом (`TFGigabitEthernet 0/1`). Нормализатор убирает пробелы
+> (`TFGigabitEthernet0/1`). Матчинг работает благодаря `get_interface_aliases()`,
+> который создаёт ключи для ОБОИХ вариантов. См. подробную цепочку в `docs/BUGFIX_LOG.md` (Баг 5).
 
 ```python
 # core/constants/commands.py → SECONDARY_COMMANDS["media_type"]
