@@ -279,6 +279,8 @@ class DeviceCollector:
                 else:
                     parsed = {}
 
+                logger.debug(f"{device.host}: show version parsed={parsed}")
+
                 # --format parsed: сырые данные NTC Templates, без нормализации
                 if self._skip_normalize:
                     result = dict(parsed)

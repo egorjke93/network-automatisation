@@ -1,5 +1,5 @@
 Value HOSTNAME (\S+)
-Value MODEL (\S+\))
+Value MODEL ([^()]+)
 Value VERSION (.+)
 Value SERIAL (\S+)
 Value UPTIME ([\d:]+)

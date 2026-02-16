@@ -47,7 +47,7 @@ class TestQtechShowVersion:
         assert "VERSION" in entry
 
         # Проверяем значения
-        assert "QSW-6900-56F" in entry.get("MODEL", "")
+        assert entry.get("MODEL") == "QSW-6900-56F"
         assert entry.get("SERIAL") == "G1S82H800078B"
 
 
