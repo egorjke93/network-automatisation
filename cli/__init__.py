@@ -40,6 +40,7 @@ from .commands import (
     cmd_run,
     cmd_match_mac,
     cmd_push_descriptions,
+    cmd_push_config,
     cmd_validate_fields,
     cmd_pipeline,
     _print_sync_summary,
@@ -346,6 +347,45 @@ def setup_parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help="Применить изменения (отключает dry-run)",
+    )
+
+    # === Push config (конфигурация по платформам) ===
+    push_config_parser = subparsers.add_parser(
+        "push-config",
+        help="Применение конфигурационных команд по платформам",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Примеры:
+  %(prog)s --commands config_commands.yaml                      # dry-run
+  %(prog)s --commands config_commands.yaml --apply              # применить
+  %(prog)s --commands config_commands.yaml --platform cisco_iosxe  # фильтр
+  %(prog)s --commands config_commands.yaml --apply --no-save    # без сохранения
+        """,
+    )
+    push_config_parser.add_argument(
+        "--commands",
+        required=True,
+        help="YAML-файл с командами по платформам",
+    )
+    push_config_parser.add_argument(
+        "--platform",
+        help="Фильтр: применить только для указанной платформы (cisco_iosxe, arista_eos, etc.)",
+    )
+    push_config_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Режим симуляции (default: True)",
+    )
+    push_config_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Применить изменения (отключает dry-run)",
+    )
+    push_config_parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Не сохранять конфигурацию на устройствах после применения",
     )
 
     # === NetBox Sync ===
@@ -681,6 +721,8 @@ def main() -> None:
         cmd_match_mac(args, ctx)
     elif args.command == "push-descriptions":
         cmd_push_descriptions(args, ctx)
+    elif args.command == "push-config":
+        cmd_push_config(args, ctx)
     elif args.command == "sync-netbox":
         cmd_sync_netbox(args, ctx)
     elif args.command == "backup":
@@ -714,6 +756,7 @@ __all__ = [
     "cmd_run",
     "cmd_match_mac",
     "cmd_push_descriptions",
+    "cmd_push_config",
     "cmd_validate_fields",
     "cmd_pipeline",
     "_print_sync_summary",

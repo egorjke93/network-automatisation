@@ -21,7 +21,7 @@ from .collect import (
 from .sync import cmd_sync_netbox, _print_sync_summary
 from .backup import cmd_backup, cmd_run
 from .match import cmd_match_mac
-from .push import cmd_push_descriptions
+from .push import cmd_push_descriptions, cmd_push_config
 from .validate import cmd_validate_fields
 from .pipeline import cmd_pipeline
 
@@ -36,6 +36,7 @@ __all__ = [
     "cmd_run",
     "cmd_match_mac",
     "cmd_push_descriptions",
+    "cmd_push_config",
     "cmd_validate_fields",
     "cmd_pipeline",
     "_print_sync_summary",

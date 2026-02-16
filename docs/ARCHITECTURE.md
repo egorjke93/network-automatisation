@@ -118,7 +118,7 @@ cli/
     ├── sync.py           # cmd_sync_netbox
     ├── backup.py         # cmd_backup, cmd_run
     ├── match.py          # cmd_match_mac
-    ├── push.py           # cmd_push_descriptions
+    ├── push.py           # cmd_push_descriptions, cmd_push_config
     └── validate.py       # cmd_validate_fields
 ```
 

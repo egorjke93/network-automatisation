@@ -22,7 +22,7 @@
 
 | Метрика | Значение |
 |---------|----------|
-| **Всего тестов** | 1788 |
+| **Всего тестов** | 1792 |
 | **Framework** | pytest |
 | **Coverage** | ~85% |
 
@@ -40,7 +40,7 @@
 | `test_fixes/` | Регрессионные тесты для багфиксов | 31 |
 | `test_e2e/` | End-to-end тесты pipeline и collectors | 189 |
 | `test_cli/` | CLI команды (pipeline, sync summary, format) | 53 |
-| `test_configurator/` | Push описаний, retry логика | 12 |
+| `test_configurator/` | Push описаний, retry логика, push-config | 49 |
 | *корневые* | QTech support, templates, refactoring utils | 75 |
 
 ---
@@ -239,8 +239,9 @@ tests/
 │   ├── test_pipeline.py    # Pipeline E2E
 │   └── test_sync_pipeline.py  # Sync pipeline E2E
 │
-├── test_configurator/      # Push описаний (12)
-│   └── test_pusher_retry.py  # Retry логика push описаний
+├── test_configurator/      # Конфигурация устройств (49)
+│   ├── test_pusher_retry.py    # Retry логика ConfigPusher (12)
+│   └── test_push_config.py    # Push-config: YAML loading, device commands, integration (37)
 │
 └── test_cli/               # CLI тесты (53)
     ├── test_format_parsed.py  # --format parsed

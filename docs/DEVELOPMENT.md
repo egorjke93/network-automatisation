@@ -314,6 +314,54 @@ pytest tests/test_core/test_connection_retry.py -v
 pytest tests/test_configurator/test_pusher_retry.py -v
 ```
 
+**Push-config тесты** — `tests/test_configurator/test_push_config.py`:
+
+```python
+# 25 тестов:
+# Загрузка YAML:
+- test_load_valid_yaml                  # Корректный YAML
+- test_load_common_commands             # Содержимое _common
+- test_load_platform_commands           # Содержимое платформенных секций
+- test_file_not_found                   # Несуществующий файл
+- test_invalid_yaml_syntax              # Ошибка парсинга
+- test_empty_yaml                       # Пустой файл
+- test_non_dict_yaml                    # Некорректный формат
+- test_non_list_commands                # Команды не список
+- test_commands_converted_to_strings    # Конвертация в строки
+
+# Сборка команд:
+- test_common_plus_platform             # _common + платформенные
+- test_only_platform_no_common          # Без _common
+- test_only_common                      # Только _common
+- test_unknown_platform_with_common     # Неизвестная платформа + _common
+- test_unknown_platform_no_common       # Неизвестная платформа без _common
+- test_nxos_commands                    # Команды для NX-OS
+
+# Backward compatibility:
+- test_old_format_device_type_as_platform     # device_type → platform
+- test_old_format_device_type_cisco_ios       # cisco_ios как device_type
+- test_new_format_both_fields                 # platform + device_type
+- test_commands_match_regardless_of_format    # Одинаковый результат
+
+# Интеграция cmd_push_config:
+- test_dry_run_shows_commands           # dry-run без применения
+- test_platform_filter                  # Фильтр --platform
+- test_apply_calls_pusher              # --apply вызывает ConfigPusher
+- test_apply_no_save                   # --no-save не сохраняет конфиг
+- test_no_commands_for_platform        # Платформа без команд
+- test_no_commands_at_all              # Нет команд совсем
+```
+
+**Запуск push-config тестов:**
+
+```bash
+# Push-config тесты
+pytest tests/test_configurator/test_push_config.py -v
+
+# Все configurator тесты (push-config + retry)
+pytest tests/test_configurator/ -v
+```
+
 ---
 
 ## 3. Добавление новой платформы

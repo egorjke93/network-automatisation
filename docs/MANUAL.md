@@ -447,6 +447,128 @@ python -m network_collector push-descriptions --matched-file matched.xlsx --only
 python -m network_collector push-descriptions --matched-file matched.xlsx --overwrite --apply
 ```
 
+### 3.11 push-config — Применение конфигурации по платформам
+
+Отправка конфигурационных команд на устройства из YAML-файла. Команды группируются по платформам, что позволяет одним файлом описать конфигурацию для разнородного парка оборудования.
+
+```bash
+python -m network_collector push-config [опции]
+
+Опции:
+  --commands FILE        YAML-файл с командами по платформам [обязательный]
+  --platform PLATFORM    Фильтр: применить только для указанной платформы
+  --apply                Реально применить (без флага = dry-run)
+  --no-save              Не сохранять конфигурацию на устройствах
+```
+
+**Формат YAML-файла (`config_commands.yaml`):**
+
+Каждая секция платформы содержит подсекции `config:` и `exec:`:
+
+- **`config:`** — команды конфигурационного режима (Netmiko `send_config_set()`: conf t → ... → end)
+- **`exec:`** — команды привилегированного режима (Netmiko `send_command()`: show, copy, etc.)
+
+```yaml
+# Единый формат (рекомендуется): config/exec подсекции
+# _common — применяется ко ВСЕМ платформам
+_common:
+  config:
+    - logging buffered 16384
+    - no ip domain-lookup
+  exec:
+    - show running-config | include logging
+
+cisco_iosxe:
+  config:
+    - interface range GigabitEthernet0/1 - 48
+    - spanning-tree portfast
+    - no shutdown
+  exec:
+    - show version
+
+cisco_nxos:
+  config:
+    - interface Ethernet1/1-48
+    - spanning-tree port type edge
+
+qtech:
+  exec:
+    - copy running-config startup-config
+```
+
+**Подсекции необязательны** — можно указать только `config:`, только `exec:`, или обе:
+
+```yaml
+# Только config-команды для платформы
+arista_eos:
+  config:
+    - spanning-tree mode mstp
+
+# Только exec-команды для платформы
+qtech:
+  exec:
+    - copy running-config startup-config
+
+# Обе подсекции
+cisco_iosxe:
+  config:
+    - spanning-tree portfast
+  exec:
+    - show version
+```
+
+**Как работает маппинг:**
+
+```
+devices_ips.py                      config_commands.yaml
+┌──────────────────────┐            ┌──────────────────────────┐
+│ device_type: cisco_iosxe │──┐     │ _common:                 │
+│ host: 192.168.1.1    │   │     │   config:               │
+└──────────────────────┘   │     │     - logging buffered  │
+                           │     │   exec:                 │
+                           ├──→  │     - show run | inc .. │
+Device.__post_init__()     │     │                          │
+  platform = "cisco_iosxe" │     │ cisco_iosxe:             │
+                           │     │   config:               │
+┌──────────────────────┐   │     │     - spanning-tree     │
+│ platform: cisco_nxos │───┘     │   exec:                 │
+│ host: 192.168.2.1    │         │     - show version      │
+└──────────────────────┘         └──────────────────────────┘
+                                            │
+                                            ▼
+                                  ConfigPusher (Netmiko)
+                                  NETMIKO_PLATFORM_MAP:
+                                    cisco_iosxe → cisco_ios
+                                    cisco_nxos  → cisco_nxos
+```
+
+Обратная совместимость: старый формат `device_type: "cisco_iosxe"` автоматически конвертируется в `platform: "cisco_iosxe"` через `Device.__post_init__()`.
+
+**Примеры:**
+
+```bash
+# Показать что будет отправлено (dry-run)
+python -m network_collector push-config --commands config_commands.yaml
+
+# Применить ко всем устройствам
+python -m network_collector push-config --commands config_commands.yaml --apply
+
+# Только для устройств cisco_iosxe
+python -m network_collector push-config --commands config_commands.yaml --platform cisco_iosxe --apply
+
+# Другой файл устройств
+python -m network_collector push-config --commands config_commands.yaml -d datacenter_devices.py --apply
+
+# Применить без сохранения конфигурации (не выполняет write memory)
+python -m network_collector push-config --commands config_commands.yaml --apply --no-save
+```
+
+**Порядок выполнения команд:**
+1. **Config mode** (conf t → ... → end): `_common.config` → `{platform}.config`
+2. **Exec mode** (privileged): `_common.exec` → `{platform}.exec`
+3. **Save**: `write mem` (если не `--no-save`)
+4. Если для платформы нет ни одной секции — устройство пропускается с warning
+
 ---
 
 ## 4. Синхронизация с NetBox

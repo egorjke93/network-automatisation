@@ -125,19 +125,23 @@ class ConfigPusher:
         device: Device,
         commands: List[str],
         dry_run: bool = True,
+        exec_commands: Optional[List[str]] = None,
     ) -> ConfigResult:
         """
         Применяет конфигурационные команды на устройстве с retry.
 
         Args:
             device: Устройство
-            commands: Список конфигурационных команд
+            commands: Список конфигурационных команд (config mode)
             dry_run: Режим симуляции (без реальных изменений)
+            exec_commands: Список exec-команд (privileged mode, после config)
 
         Returns:
             ConfigResult: Результат применения
         """
-        if not commands:
+        total_cmds = len(commands) + len(exec_commands or [])
+
+        if not commands and not exec_commands:
             return ConfigResult(
                 success=True,
                 device=device.host,
@@ -146,13 +150,15 @@ class ConfigPusher:
             )
 
         if dry_run:
-            logger.info(f"[DRY RUN] {device.host}: {len(commands)} команд")
+            logger.info(f"[DRY RUN] {device.host}: {total_cmds} команд")
             for cmd in commands:
-                logger.debug(f"  {cmd}")
+                logger.debug(f"  [config] {cmd}")
+            for cmd in (exec_commands or []):
+                logger.debug(f"  [exec] {cmd}")
             return ConfigResult(
                 success=True,
                 device=device.host,
-                commands_sent=len(commands),
+                commands_sent=total_cmds,
                 output="[DRY RUN] Команды не применены",
             )
 
@@ -174,20 +180,29 @@ class ConfigPusher:
                     if self.credentials.secret:
                         conn.enable()
 
-                    # Применяем конфигурацию
-                    output = conn.send_config_set(commands)
+                    # Применяем конфигурационные команды (config mode)
+                    output = ""
+                    if commands:
+                        output = conn.send_config_set(commands)
+
+                    # Выполняем exec-команды (privileged mode)
+                    if exec_commands:
+                        for exec_cmd in exec_commands:
+                            exec_output = conn.send_command(exec_cmd)
+                            output += f"\n{exec_output}"
+                            logger.debug(f"{device.host}: [exec] {exec_cmd}")
 
                     # Сохраняем если нужно
                     if self.save_config:
                         save_output = conn.save_config()
                         output += f"\n{save_output}"
 
-                    logger.info(f"{device.host}: применено {len(commands)} команд")
+                    logger.info(f"{device.host}: применено {total_cmds} команд")
 
                     return ConfigResult(
                         success=True,
                         device=device.host,
-                        commands_sent=len(commands),
+                        commands_sent=total_cmds,
                         output=output,
                     )
 

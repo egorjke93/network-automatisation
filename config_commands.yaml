@@ -1,0 +1,72 @@
+# =============================================================================
+# Конфигурационные команды по платформам
+# =============================================================================
+#
+# Использование:
+#   python -m network_collector push-config --commands config_commands.yaml
+#   python -m network_collector push-config --commands config_commands.yaml --apply
+#   python -m network_collector push-config --commands config_commands.yaml --platform cisco_iosxe
+#
+# Ключи = значения device.platform:
+#   cisco_ios, cisco_iosxe, cisco_nxos, arista_eos, juniper_junos, qtech
+#
+# Структура секции:
+#   {platform}:
+#     config:   — команды config mode (conf t → ... → end)
+#     exec:     — команды exec mode (privileged mode)
+#
+#   _common:    — общие команды для ВСЕХ платформ (config + exec)
+#
+# Порядок выполнения:
+#   1. Config mode:  _common.config → {platform}.config
+#   2. Exec mode:    _common.exec   → {platform}.exec
+#   3. Save config:  write mem (если не --no-save)
+# =============================================================================
+
+# --- Общие команды для ВСЕХ платформ ---
+
+# _common:
+#   config:
+#     - logging buffered 16384
+#   exec:
+#     - show running-config | include logging
+
+# --- Команды по платформам ---
+
+# Cisco IOS / IOS-XE
+cisco_iosxe:
+  config:
+    - interface range GigabitEthernet0/1 - 48
+    - spanning-tree portfast
+    - no shutdown
+  # exec:
+  #   - show spanning-tree summary
+
+# Cisco NX-OS
+# cisco_nxos:
+#   config:
+#     - interface Ethernet1/1-48
+#     - spanning-tree port type edge
+#   exec:
+#     - show spanning-tree summary
+
+# Arista EOS
+# arista_eos:
+#   config:
+#     - interface Ethernet1
+#     - spanning-tree portfast
+#   exec:
+#     - show interfaces status
+
+# Juniper Junos
+# juniper_junos:
+#   config:
+#     - set interfaces ge-0/0/0 description "uplink"
+
+# QTech
+# qtech:
+#   config:
+#     - interface range GigabitEthernet 0/1-24
+#     - spanning-tree portfast
+#   exec:
+#     - copy running-config startup-config

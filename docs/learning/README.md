@@ -55,10 +55,11 @@
 | 12 | [Internals и Testing](12_INTERNALS_AND_TESTING.md) | Инфраструктура: Config система, constants пакет, иерархия исключений, RunContext, паттерны тестирования с MagicMock и pytest | ~45 мин |
 | 13 | [Switchport Flow](13_SWITCHPORT_FLOW.md) | Полная цепочка определения switchport mode: SSH → TextFSM → нормализация → enrichment → NetBox sync. Три платформы (IOS, NX-OS, QTech), различия форматов, история бага | ~40 мин |
 | 14 | [Маппинг имён интерфейсов](14_INTERFACE_NAME_MAPPINGS.md) | Проблема разных форматов имён (Gi0/1 vs GigabitEthernet0/1), два маппинга + три функции, как алиасы связывают данные из разных команд, использование на всех слоях | ~35 мин |
+| 15 | [Push Config](15_PUSH_CONFIG.md) | Полная цепочка push-config: YAML с командами → маппинг платформ → backward compatibility → ConfigPusher → Netmiko → retry. Сравнение с push-descriptions | ~35 мин |
 
-**Итого deep dive:** примерно 4 часа.
+**Итого deep dive:** примерно 4.5 часа.
 
-**Рекомендуемый порядок:** 10 → 11 → 12 → 13 → 14 (doc 10 вводит паттерны, которые используются в doc 11; doc 12 независимый, но ссылается на оба; doc 13 — глубокий разбор конкретного flow с историей бага; doc 14 — сквозной механизм нормализации имён).
+**Рекомендуемый порядок:** 10 → 11 → 12 → 13 → 14 → 15 (doc 10 вводит паттерны, которые используются в doc 11; doc 12 независимый, но ссылается на оба; doc 13 — глубокий разбор конкретного flow с историей бага; doc 14 — сквозной механизм нормализации имён; doc 15 — конфигурирование устройств через YAML и Netmiko).
 
 ## Как связана обучающая документация с официальной
 
@@ -80,5 +81,6 @@
 | 12 Internals и Testing | [TESTING.md](../TESTING.md), [DEVELOPMENT.md](../DEVELOPMENT.md) |
 | 13 Switchport Flow | [PLATFORM_GUIDE.md](../PLATFORM_GUIDE.md), [ARCHITECTURE.md](../ARCHITECTURE.md) |
 | 14 Маппинг имён интерфейсов | [PLATFORM_GUIDE.md](../PLATFORM_GUIDE.md), [ARCHITECTURE.md](../ARCHITECTURE.md) |
+| 15 Push Config | [MANUAL.md](../MANUAL.md), [DEVELOPMENT.md](../DEVELOPMENT.md), [ARCHITECTURE.md](../ARCHITECTURE.md) |
 
 **Рекомендация:** сначала прочитай обучающий документ, чтобы понять концепцию. Потом загляни в связанный документ из основной документации для полной картины.
