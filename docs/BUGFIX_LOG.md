@@ -621,6 +621,136 @@ parsed_data = self._parser.parse(
 
 ---
 
+## Баг 8: QTech media_types = 0 записей (lowercase ключи TextFSM)
+
+**Дата:** Февраль 2026
+**Симптом:** На проде `media_types содержит 0 записей` при 56 распарсенных transceiver записях. Типы интерфейсов (10gbase-sr) не применялись.
+
+### Причина
+
+**Файл:** `parsers/textfsm_parser.py` строка 247
+
+Метод `_parse_with_textfsm()` **всегда** приводит заголовки к lowercase:
+
+```python
+headers = [h.lower() for h in fsm.header]
+# TextFSM шаблон: INTERFACE, TYPE → dict: {'interface': ..., 'type': ...}
+```
+
+А `_parse_media_types()` искал ключи в **UPPERCASE**:
+
+```python
+port = row.get("port") or row.get("INTERFACE", "")  # ← "INTERFACE" не найден!
+```
+
+`row.get("port")` → None (NTC-ключ, нет в TextFSM), `row.get("INTERFACE")` → None (ключ `interface` lowercase) → `port = ""` → `continue` → все 56 записей пропущены.
+
+### Почему затронут только QTech
+
+| Платформа | Источник media_type | Парсер | Ключи | Статус |
+|-----------|-------------------|--------|-------|--------|
+| NX-OS | `show interface status` | NTC Templates | `port`, `type` (lowercase) | ✅ Работало |
+| QTech | `show interface transceiver` | Кастомный TextFSM | `interface`, `type` (lowercase) | ❌ `"INTERFACE"` не найден |
+
+NTC Templates (`parse_output()`) возвращает ключи в lowercase (`port`). Кастомный TextFSM тоже возвращает lowercase (из-за строки 247), но `_parse_media_types()` искал `"INTERFACE"` в uppercase.
+
+### Исправление
+
+**Файл:** `collectors/interfaces.py` — `_parse_media_types()`
+
+```python
+# Было:
+port = row.get("port") or row.get("INTERFACE", "")
+
+# Стало:
+port = row.get("port") or row.get("interface") or row.get("INTERFACE", "")
+```
+
+Добавлен `row.get("interface")` — покрывает lowercase от `_parse_with_textfsm()`.
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `collectors/interfaces.py` | Добавлен `row.get("interface")` в цепочку поиска |
+
+---
+
+## Баг 9: QTech show version — MODEL содержал закрывающую скобку
+
+**Дата:** Февраль 2026
+**Симптом:** Модель устройства `QSW-6900-56F)` с лишней `)` — не совпадала с моделью в NetBox `QSW-6900-56F`.
+
+### Причина
+
+**Файл:** `templates/qtech_show_version.textfsm`
+
+Regex для MODEL: `(\S+\))` — "непробельные символы + закрывающая скобка". Из строки:
+```
+System description : Qtech Full 25G Routing Switch(QSW-6900-56F)
+```
+Захватывал `QSW-6900-56F)` **с `)` на конце**.
+
+Тест использовал `assert "QSW-6900-56F" in entry.get("MODEL")` (substring) → проходил несмотря на лишнюю скобку.
+
+### Исправление
+
+```
+# Было:
+Value MODEL (\S+\))    → "QSW-6900-56F)"
+
+# Стало:
+Value MODEL ([^()]+)   → "QSW-6900-56F"
+```
+
+Тест обновлён на точное совпадение: `assert entry.get("MODEL") == "QSW-6900-56F"`.
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `templates/qtech_show_version.textfsm` | Regex: `(\S+\))` → `([^()]+)` |
+| `tests/test_qtech_templates.py` | `in` → `==` для точной проверки |
+
+---
+
+## Баг 10: --update-devices не работал без --create-devices
+
+**Дата:** Февраль 2026
+**Симптом:** `sync-netbox --update-devices` пропускал все устройства — обновления не применялись.
+
+### Причина
+
+**Файл:** `cli/commands/sync.py` строка 83
+
+Весь блок синхронизации устройств был за условием `if create_devices`:
+
+```python
+if getattr(args, "create_devices", False):  # ← без --create-devices блок пропускался!
+    update_devices = getattr(args, "update_devices", False)
+    sync.sync_devices_from_inventory(..., update_existing=update_devices)
+```
+
+`--update-devices` устанавливал флаг `update_devices=True`, но без `--create-devices` код даже не доходил до этой строки.
+
+### Исправление
+
+```python
+# Было:
+if getattr(args, "create_devices", False):
+
+# Стало:
+if getattr(args, "create_devices", False) or getattr(args, "update_devices", False):
+```
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `cli/commands/sync.py` | Условие блока: добавлен `or update_devices` |
+
+---
+
 ## Общие уроки
 
 1. **При добавлении платформы — проверять ВСЕ места**, где есть хардкод имён (не только парсинг, но и сортировку, поиск, case-insensitive сравнение)
@@ -635,3 +765,7 @@ parsed_data = self._parser.parse(
 10. **Пробелы в именах интерфейсов** — QTech возвращает `TFGigabitEthernet 0/1` с пробелом. Нормализация (`replace(" ", "")`) должна быть на раннем этапе в `_normalize_row()`, а `get_interface_aliases()` — в каждом месте где строится dict по имени интерфейса
 11. **Кастомные TextFSM шаблоны** — использовать `NTCParser.parse()` вместо `ntc_templates.parse.parse_output()`. NTCParser проверяет `CUSTOM_TEXTFSM_TEMPLATES` первым
 12. **Regex для разных платформ** — один паттерн `(?:Internet|Interface)\s+address\s+is:?\s+` покрывает и Cisco и QTech. При добавлении платформы проверять формат вывода каждой команды
+13. **`_parse_with_textfsm()` приводит ключи к lowercase** — при обращении к полям TextFSM использовать lowercase: `row.get("interface")`, не `row.get("INTERFACE")`. Для совместимости проверять оба варианта
+14. **TextFSM regex: проверять точное значение** — `(\S+\))` захватывает лишнюю скобку. Тесты с `in` (substring) маскируют проблему — использовать `==` (exact match)
+15. **CLI флаги: проверять что каждый работает самостоятельно** — `--update-devices` зависел от `--create-devices`. Каждый флаг должен активировать нужный блок независимо
+16. **Тестировать на проде** — unit-тесты с фикстурами не ловят проблемы формата реального вывода. Debug-логирование на каждом шаге цепочки критически важно для отладки
