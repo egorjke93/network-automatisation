@@ -621,58 +621,171 @@ parsed_data = self._parser.parse(
 
 ---
 
-## Баг 8: QTech media_types = 0 записей (lowercase ключи TextFSM)
+## Баг 8: QTech transceiver типы не применялись (media_types = 0 записей)
 
 **Дата:** Февраль 2026
-**Симптом:** На проде `media_types содержит 0 записей` при 56 распарсенных transceiver записях. Типы интерфейсов (10gbase-sr) не применялись.
+**Симптом:** На проде QTech интерфейсы получали generic тип (`10gbase-x-sfpp`) вместо точного (`10gbase-sr`). Debug-лог показал: `media_types содержит 0 записей` — при том что TextFSM распарсил 56 transceiver записей.
 
-### Причина
+### Полная цепочка: как устроено определение типа интерфейса
 
-**Файл:** `parsers/textfsm_parser.py` строка 247
+Тип интерфейса в NetBox (например `10gbase-sr` для SFP+ модуля) определяется через цепочку transceiver. Вот как она работает:
 
-Метод `_parse_with_textfsm()` **всегда** приводит заголовки к lowercase:
+```
+_collect_from_device() [collectors/interfaces.py]
+  │
+  ├─ 1. SSH → "show interface transceiver" (QTech)
+  │      Вывод: "========Interface TFGigabitEthernet 0/1========
+  │              Transceiver Type    :  10GBASE-SR-SFP+"
+  │
+  ├─ 2. NTCParser.parse(output, "qtech", "show interface transceiver")
+  │      │
+  │      ├─ Проверяет CUSTOM_TEXTFSM_TEMPLATES[("qtech", "show interface transceiver")]
+  │      │  → находит шаблон "qtech_show_interface_transceiver.textfsm"
+  │      │
+  │      └─ _parse_with_textfsm(output, template_path)
+  │           TextFSM шаблон содержит: Value Required INTERFACE (\S+\s+\d+/\d+)
+  │                                    Value TYPE (.+)
+  │           │
+  │           │  ВАЖНО: строка 247 в parsers/textfsm_parser.py:
+  │           │  headers = [h.lower() for h in fsm.header]
+  │           │  Заголовки ВСЕГДА приводятся к LOWERCASE!
+  │           │
+  │           └─ Результат: [{"interface": "TFGigabitEthernet 0/1", "type": "10GBASE-SR-SFP+"}, ...]
+  │                            ^^^^^^^^^ lowercase!                   ^^^^ lowercase!
+  │
+  ├─ 3. _parse_media_types(output, platform, command)
+  │      │  Получает parsed = [{"interface": ..., "type": ...}, ...]
+  │      │
+  │      │  Для каждой записи:
+  │      │    port = row.get("port") or row.get("interface") or row.get("INTERFACE", "")
+  │      │           │                   │                       │
+  │      │           │                   │                       └─ UPPERCASE — fallback
+  │      │           │                   └─ lowercase — для кастомных TextFSM шаблонов
+  │      │           └─ NTC Templates (show interface status, NX-OS) — ключ "port"
+  │      │
+  │      │    media_type = row.get("type") or row.get("TYPE", "")
+  │      │
+  │      │  Затем для каждого port вызывает get_interface_aliases(port):
+  │      │    "TFGigabitEthernet 0/1" → ["TFGigabitEthernet 0/1",     ← с пробелом
+  │      │                                "TFGigabitEthernet0/1",      ← без пробела
+  │      │                                "TF0/1"]                     ← короткая форма
+  │      │
+  │      └─ Результат: media_types = {
+  │           "TFGigabitEthernet 0/1": "10GBASE-SR-SFP+",
+  │           "TFGigabitEthernet0/1":  "10GBASE-SR-SFP+",   ← для матчинга!
+  │           "TF0/1":                 "10GBASE-SR-SFP+",
+  │           ...  (все 56 портов × 3 варианта = ~168 ключей)
+  │         }
+  │
+  ├─ 4. normalizer.enrich_with_media_type(data, media_types)
+  │      │  Интерфейсы уже нормализованы (_normalize_row убрал пробелы):
+  │      │    interface = "TFGigabitEthernet0/1" (без пробела)
+  │      │
+  │      │  Ищет: "TFGigabitEthernet0/1" in media_types → НАЙДЕНО!
+  │      │  Устанавливает: iface["media_type"] = "10GBASE-SR-SFP+"
+  │      │
+  │      └─ detect_port_type() → "10g-sfp+" (содержит "sfp")
+  │
+  └─ 5. Позже при sync → get_netbox_interface_type()
+         media_type = "10GBASE-SR-SFP+" → lowercase → "10gbase-sr-sfp+"
+         Ищет в NETBOX_INTERFACE_TYPE_MAP: "10gbase-sr" in "10gbase-sr-sfp+" → True!
+         Результат: "10gbase-sr" (точный тип для NetBox API)
+```
+
+### Где была проблема (баг)
+
+Баг был на **шаге 3** — в `_parse_media_types()`:
+
+```python
+# БЫЛО (баг):
+port = row.get("port") or row.get("INTERFACE", "")
+#                                  ^^^^^^^^^ UPPERCASE!
+#
+# row = {"interface": "TFGigabitEthernet 0/1", "type": "10GBASE-SR-SFP+"}
+#
+# row.get("port")      → None (нет такого ключа)
+# row.get("INTERFACE")  → None (ключ "interface" в LOWERCASE, а ищем "INTERFACE")
+# port = ""
+# if not port: continue   ← ВСЕ 56 ЗАПИСЕЙ ПРОПУЩЕНЫ!
+#
+# Результат: media_types = {} (пустой dict)
+```
+
+**Почему ключи в lowercase?**
+
+Файл `parsers/textfsm_parser.py`, метод `_parse_with_textfsm()`, строка 247:
 
 ```python
 headers = [h.lower() for h in fsm.header]
-# TextFSM шаблон: INTERFACE, TYPE → dict: {'interface': ..., 'type': ...}
+#           ^^^^^^^^^ ВСЕГДА lowercase!
 ```
 
-А `_parse_media_types()` искал ключи в **UPPERCASE**:
+TextFSM шаблон определяет поля как `INTERFACE`, `TYPE` (uppercase). Но `_parse_with_textfsm()` приводит все заголовки к lowercase **перед** созданием словаря. Это сделано для унификации — чтобы разные шаблоны возвращали одинаковый формат. Но `_parse_media_types()` об этом не знал и искал `"INTERFACE"` в uppercase.
 
-```python
-port = row.get("port") or row.get("INTERFACE", "")  # ← "INTERFACE" не найден!
+### Почему баг затронул только QTech
+
+Два пути парсинга media_type:
+
+| Путь | Платформа | Парсер | Как ключи попадают в dict | Какой ключ ищет `_parse_media_types()` | Результат |
+|------|-----------|--------|--------------------------|--------------------------------------|-----------|
+| NTC Templates | NX-OS | `parse_output()` (библиотека ntc-templates) | Возвращает lowercase: `{"port": ..., "type": ...}` | `row.get("port")` → найден! | ✅ Работало |
+| Кастомный TextFSM | QTech | `_parse_with_textfsm()` (наш код) | `h.lower()` → lowercase: `{"interface": ..., "type": ...}` | `row.get("port")` → None, `row.get("INTERFACE")` → None | ❌ Не работало |
+
+**NX-OS** использует NTC Templates (внешняя библиотека), которая возвращает ключ `"port"` — первый вариант в `row.get("port") or ...` находит его сразу.
+
+**QTech** использует кастомный TextFSM шаблон (наш), где поле называется `INTERFACE`. После `h.lower()` ключ становится `"interface"`, а код искал `"INTERFACE"` (uppercase) — не находил.
+
+### Как debug-лог помог найти проблему
+
+Без debug-логирования баг был невидим — `_parse_media_types()` просто возвращал пустой dict, и всё тихо работало без transceiver типов (fallback на generic тип по имени интерфейса).
+
+Debug-логи которые помогли:
+
+```
+# Шаг 1: Команда отправлена ✅
+collect_media_type=True, platform=qtech_qsw, mt_cmd=show interface transceiver
+
+# Шаг 2: TextFSM распарсил 56 записей ✅
+_parse_media_types: parsed 56 записей из transceiver
+
+# Шаг 3: Первая запись — ключи в lowercase ✅ (но это подсказка!)
+_parse_media_types: первая запись: {'interface': 'TFGigabitEthernet 0/1', 'type': '10GBASE-SR-SFP+'}
+
+# Шаг 4: ПРОБЛЕМА — 0 записей в dict! ❌
+media_types содержит 0 записей
 ```
 
-`row.get("port")` → None (NTC-ключ, нет в TextFSM), `row.get("INTERFACE")` → None (ключ `interface` lowercase) → `port = ""` → `continue` → все 56 записей пропущены.
-
-### Почему затронут только QTech
-
-| Платформа | Источник media_type | Парсер | Ключи | Статус |
-|-----------|-------------------|--------|-------|--------|
-| NX-OS | `show interface status` | NTC Templates | `port`, `type` (lowercase) | ✅ Работало |
-| QTech | `show interface transceiver` | Кастомный TextFSM | `interface`, `type` (lowercase) | ❌ `"INTERFACE"` не найден |
-
-NTC Templates (`parse_output()`) возвращает ключи в lowercase (`port`). Кастомный TextFSM тоже возвращает lowercase (из-за строки 247), но `_parse_media_types()` искал `"INTERFACE"` в uppercase.
+Между шагом 2 (56 записей распарсено) и шагом 4 (0 в dict) — теряются все записи. Шаг 3 показывает что ключи lowercase (`interface`). Но код искал uppercase (`INTERFACE`).
 
 ### Исправление
 
 **Файл:** `collectors/interfaces.py` — `_parse_media_types()`
 
 ```python
-# Было:
-port = row.get("port") or row.get("INTERFACE", "")
-
-# Стало:
+# СТАЛО (исправлено):
 port = row.get("port") or row.get("interface") or row.get("INTERFACE", "")
+#                          ^^^^^^^^^^^^^^^^^^^^
+#                          Добавлен lowercase вариант!
 ```
 
-Добавлен `row.get("interface")` — покрывает lowercase от `_parse_with_textfsm()`.
+Теперь цепочка поиска покрывает все варианты:
+1. `"port"` — NTC Templates (NX-OS show interface status)
+2. `"interface"` — кастомный TextFSM после `h.lower()` (QTech show interface transceiver)
+3. `"INTERFACE"` — fallback на случай если TextFSM не приводит к lowercase
 
 ### Файлы изменены
 
 | Файл | Что изменено |
 |------|-------------|
-| `collectors/interfaces.py` | Добавлен `row.get("interface")` в цепочку поиска |
+| `collectors/interfaces.py` | Добавлен `row.get("interface")` в цепочку поиска ключа порта |
+
+### Урок
+
+При работе с двумя путями парсинга (NTC Templates и кастомный TextFSM) нужно учитывать что они возвращают **разные форматы ключей**:
+- NTC Templates: свои ключи (`port`, `type`, `name`) — всегда lowercase
+- Кастомный TextFSM: ключи из шаблона (`INTERFACE`, `TYPE`) — но `_parse_with_textfsm()` приводит к lowercase
+
+Код который читает результат должен проверять **все возможные варианты** названия ключа, либо нормализовать ключи заранее
 
 ---
 
