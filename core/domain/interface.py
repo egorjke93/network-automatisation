@@ -5,9 +5,12 @@ Domain logic для интерфейсов.
 Не зависит от SSH/collectors — работает с сырыми данными.
 """
 
+import logging
 from typing import List, Dict, Any, Optional
 
 from ..models import Interface
+
+logger = logging.getLogger(__name__)
 from ..constants import normalize_interface_short
 from ..constants.interfaces import get_interface_aliases, is_lag_name
 
@@ -494,6 +497,8 @@ class InterfaceNormalizer:
         Returns:
             List[Dict]: Обогащённые интерфейсы
         """
+        enriched_count = 0
+        not_found = []
         for iface in interfaces:
             iface_name = iface.get("interface", "")
             if iface_name in media_types and media_types[iface_name]:
@@ -505,4 +510,11 @@ class InterfaceNormalizer:
                     iface["port_type"] = self.detect_port_type(
                         iface, iface_name.lower()
                     )
+                    enriched_count += 1
+            elif iface_name and not iface_name.lower().startswith(("vlan", "lo", "mgmt", "null")):
+                not_found.append(iface_name)
+
+        logger.debug(f"enrich_with_media_type: обогащено {enriched_count} из {len(interfaces)}")
+        if not_found:
+            logger.debug(f"enrich_with_media_type: не найдены в media_types (первые 5): {not_found[:5]}")
         return interfaces

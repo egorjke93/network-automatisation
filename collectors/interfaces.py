@@ -276,16 +276,22 @@ class InterfaceCollector(BaseCollector):
                 media_types = {}
                 if self.collect_media_type:
                     mt_cmd = self.media_type_commands.get(device.platform)
+                    logger.debug(f"{hostname}: collect_media_type={self.collect_media_type}, platform={device.platform}, mt_cmd={mt_cmd}")
                     if mt_cmd:
                         try:
                             mt_response = conn.send_command(mt_cmd)
+                            logger.debug(f"{hostname}: transceiver output length={len(mt_response.result)}")
                             media_types = self._parse_media_types(
                                 mt_response.result,
                                 device.platform,
                                 mt_cmd,
                             )
+                            logger.debug(f"{hostname}: media_types содержит {len(media_types)} записей")
+                            if media_types:
+                                sample = list(media_types.items())[:3]
+                                logger.debug(f"{hostname}: пример media_types: {sample}")
                         except Exception as e:
-                            logger.debug(f"Ошибка получения media_type info: {e}")
+                            logger.warning(f"{hostname}: ошибка получения media_type: {e}")
 
                 # 4. Domain Layer: обогащение данных
                 if lag_membership:
@@ -609,6 +615,10 @@ class InterfaceCollector(BaseCollector):
                 normalize=False,
             ) if self._parser else []
 
+            logger.debug(f"_parse_media_types: parsed {len(parsed)} записей из transceiver")
+            if parsed:
+                logger.debug(f"_parse_media_types: первая запись: {parsed[0]}")
+
             for row in parsed:
                 # NTC (show interface status): port, name, status, vlan, duplex, speed, type
                 # TextFSM (show interface transceiver): INTERFACE, TYPE, SERIAL, BANDWIDTH
@@ -627,7 +637,7 @@ class InterfaceCollector(BaseCollector):
                     media_types[alias] = media_type
 
         except Exception as e:
-            logger.debug(f"Ошибка парсинга media_type через NTC: {e}")
+            logger.warning(f"Ошибка парсинга media_type: {e}")
 
         return media_types
 
