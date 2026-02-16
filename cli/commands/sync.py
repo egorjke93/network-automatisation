@@ -80,7 +80,7 @@ def cmd_sync_netbox(args, ctx=None) -> None:
     }
 
     # Создание/обновление устройств в NetBox из инвентаризации
-    if getattr(args, "create_devices", False):
+    if getattr(args, "create_devices", False) or getattr(args, "update_devices", False):
         from ...collectors import DeviceInventoryCollector
 
         update_devices = getattr(args, "update_devices", False)
