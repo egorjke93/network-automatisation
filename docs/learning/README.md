@@ -56,10 +56,11 @@
 | 13 | [Switchport Flow](13_SWITCHPORT_FLOW.md) | Полная цепочка определения switchport mode: SSH → TextFSM → нормализация → enrichment → NetBox sync. Три платформы (IOS, NX-OS, QTech), различия форматов, история бага | ~40 мин |
 | 14 | [Маппинг имён интерфейсов](14_INTERFACE_NAME_MAPPINGS.md) | Проблема разных форматов имён (Gi0/1 vs GigabitEthernet0/1), два маппинга + три функции, как алиасы связывают данные из разных команд, использование на всех слоях | ~35 мин |
 | 15 | [Push Config](15_PUSH_CONFIG.md) | Полная цепочка push-config: YAML с командами → маппинг платформ → backward compatibility → ConfigPusher → Netmiko → retry. Сравнение с push-descriptions | ~35 мин |
+| 16 | [NetBox Client Deep Dive](16_NETBOX_CLIENT_DEEP_DIVE.md) | Клиентский слой NetBox API: pynetbox, все 6 миксинов (Devices, Interfaces, IP, VLAN, Inventory, DCIM), bulk операции, slug generation, lazy loading, связь sync→client→API | ~40 мин |
 
-**Итого deep dive:** примерно 4.5 часа.
+**Итого deep dive:** примерно 5 часов.
 
-**Рекомендуемый порядок:** 10 → 11 → 12 → 13 → 14 → 15 (doc 10 вводит паттерны, которые используются в doc 11; doc 12 независимый, но ссылается на оба; doc 13 — глубокий разбор конкретного flow с историей бага; doc 14 — сквозной механизм нормализации имён; doc 15 — конфигурирование устройств через YAML и Netmiko).
+**Рекомендуемый порядок:** 10 → 11 → 12 → 13 → 14 → 15 → 16 (doc 10 вводит паттерны, которые используются в doc 11; doc 12 независимый, но ссылается на оба; doc 13 — глубокий разбор конкретного flow с историей бага; doc 14 — сквозной механизм нормализации имён; doc 15 — конфигурирование устройств через YAML и Netmiko; doc 16 — клиентский слой NetBox API, дополняет doc 11).
 
 ## Как связана обучающая документация с официальной
 
@@ -82,5 +83,6 @@
 | 13 Switchport Flow | [PLATFORM_GUIDE.md](../PLATFORM_GUIDE.md), [ARCHITECTURE.md](../ARCHITECTURE.md) |
 | 14 Маппинг имён интерфейсов | [PLATFORM_GUIDE.md](../PLATFORM_GUIDE.md), [ARCHITECTURE.md](../ARCHITECTURE.md) |
 | 15 Push Config | [MANUAL.md](../MANUAL.md), [DEVELOPMENT.md](../DEVELOPMENT.md), [ARCHITECTURE.md](../ARCHITECTURE.md) |
+| 16 NetBox Client Deep Dive | [ARCHITECTURE.md](../ARCHITECTURE.md), [DEVELOPMENT.md](../DEVELOPMENT.md) |
 
 **Рекомендация:** сначала прочитай обучающий документ, чтобы понять концепцию. Потом загляни в связанный документ из основной документации для полной картины.
