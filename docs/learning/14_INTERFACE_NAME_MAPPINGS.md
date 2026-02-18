@@ -228,6 +228,10 @@ short + result[len(full_lower):]  # "Gi" + "0/1" → "Gi0/1"
 ```python
 def normalize_interface_full(interface: str) -> str:
     """Gi0/1 → GigabitEthernet0/1"""
+    # Убираем пробелы между типом и номером
+    # QTech: "TFGigabitEthernet 0/48" → "TFGigabitEthernet0/48"
+    interface = interface.replace(" ", "").strip()
+
     for short_name, full_name in INTERFACE_FULL_MAP.items():
         if (
             interface.startswith(short_name)       # Начинается с сокращения
@@ -238,6 +242,8 @@ def normalize_interface_full(interface: str) -> str:
             return interface.replace(short_name, full_name, 1)
     return interface
 ```
+
+> **Важно:** `.replace(" ", "")` добавлен по аналогии с `normalize_interface_short()`. QTech возвращает имена с пробелом (`TFGigabitEthernet 0/48`), а в NetBox они хранятся без пробела. Без этой нормализации `_find_interface()` не находил интерфейсы при синхронизации кабелей (LLDP).
 
 **Python-концепция: `str.replace(old, new, 1)` — замена только первого вхождения**
 

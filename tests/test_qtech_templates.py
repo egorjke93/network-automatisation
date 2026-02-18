@@ -74,7 +74,12 @@ class TestQtechShowInterface:
 
         # Проверяем значения
         assert "TFGigabitEthernet" in intf.get("INTERFACE", "")
-        assert intf.get("LINK_STATUS") in ["UP", "DOWN"]
+        assert intf.get("LINK_STATUS") in ["UP", "DOWN", "administratively down"]
+
+        # Проверяем administratively down
+        intf3 = next(r for r in result if r.get("INTERFACE") == "TFGigabitEthernet 0/3")
+        assert intf3.get("LINK_STATUS") == "administratively down"
+        assert intf3.get("PROTOCOL_STATUS") == "DOWN"
 
         # Проверяем что SVI (VLAN) интерфейсы парсятся
         names = [r.get("INTERFACE", "") for r in result]

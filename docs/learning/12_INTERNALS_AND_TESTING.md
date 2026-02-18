@@ -349,8 +349,15 @@ def apply_fields_config(data: List[Dict], data_type: str) -> List[Dict]:
 # Интерфейсы
 from .interfaces import (
     INTERFACE_SHORT_MAP,
+    INTERFACE_FULL_MAP,
+    LAG_PREFIXES,
+    MEDIA_TYPE_PORT_TYPE_MAP,
+    HARDWARE_TYPE_PORT_TYPE_MAP,
+    INTERFACE_NAME_PORT_TYPE_MAP,
     normalize_interface_short,
     normalize_interface_full,
+    get_interface_aliases,
+    is_lag_name,
 )
 
 # MAC
@@ -363,17 +370,25 @@ from .mac import (
 # NetBox
 from .netbox import (
     NETBOX_INTERFACE_TYPE_MAP,
+    NETBOX_HARDWARE_TYPE_MAP,
+    VIRTUAL_INTERFACE_PREFIXES,
+    PORT_TYPE_MAP,
+    INTERFACE_NAME_PREFIX_MAP,
     get_netbox_interface_type,
 )
 
-# ... и другие модули
+# ... и другие модули (platforms, utils, devices, commands)
 
 __all__ = [
-    "INTERFACE_SHORT_MAP",
-    "normalize_interface_short",
-    "normalize_mac_ieee",
+    "INTERFACE_SHORT_MAP", "INTERFACE_FULL_MAP", "LAG_PREFIXES",
+    "MEDIA_TYPE_PORT_TYPE_MAP", "HARDWARE_TYPE_PORT_TYPE_MAP",
+    "INTERFACE_NAME_PORT_TYPE_MAP",
+    "normalize_interface_short", "normalize_interface_full",
+    "get_interface_aliases", "is_lag_name",
+    "normalize_mac_ieee", "normalize_mac_netbox",
+    "NETBOX_INTERFACE_TYPE_MAP", "PORT_TYPE_MAP",
     "get_netbox_interface_type",
-    # ... полный список
+    # ... полный список (~50 символов)
 ]
 ```
 
@@ -521,9 +536,11 @@ def is_lag_name(interface: str) -> bool:
     iface_lower = interface.lower().replace(" ", "")
     if iface_lower.startswith(("port-channel", "aggregateport")):
         return True
-    # Короткие (po, ag) — после них должна быть цифра
+    # Короткие (po, ag) — после них должна быть цифра (+ проверка длины!)
     for prefix in ("po", "ag"):
-        if iface_lower.startswith(prefix) and iface_lower[len(prefix)].isdigit():
+        if (iface_lower.startswith(prefix)
+                and len(iface_lower) > len(prefix)
+                and iface_lower[len(prefix)].isdigit()):
             return True
     return False
 ```
@@ -532,6 +549,23 @@ def is_lag_name(interface: str) -> bool:
 `detect_port_type()` (domain), `enrich_with_switchport()` (domain),
 `get_netbox_interface_type()` (constants/netbox). Добавление нового формата LAG —
 одно изменение в этой функции.
+
+Ещё в `interfaces.py` — три маппинга для определения port_type:
+
+```python
+# media_type паттерн → port_type (порядок: специфичные первыми)
+MEDIA_TYPE_PORT_TYPE_MAP = {"100gbase": "100g-qsfp28", "10gbase": "10g-sfp+", ...}
+
+# hardware_type паттерн → port_type (порядок: "10000" перед "1000"!)
+HARDWARE_TYPE_PORT_TYPE_MAP = {"100000": "100g-qsfp28", "10000": "10g-sfp+", ...}
+
+# Префикс имени → port_type (короткие: hu, te, gi — требуют цифру после)
+INTERFACE_NAME_PORT_TYPE_MAP = {"hundredgig": "100g-qsfp28", "tengig": "10g-sfp+", ...}
+```
+
+Используются в `detect_port_type()` через `_detect_from_media_type()`,
+`_detect_from_hardware_type()`, `_detect_from_interface_name()`. Каждый метод
+итерирует по маппингу вместо if/elif — единый источник паттернов скоростей.
 
 А в `platforms.py` есть `DEFAULT_PLATFORM`:
 
@@ -582,6 +616,8 @@ def get_netbox_interface_type(
         return "1000base-t"
 
     # 4. media_type -- ВЫСШИЙ ПРИОРИТЕТ
+    media_lower = media_type.lower() if media_type else ""
+    hw_lower = hardware_type.lower() if hardware_type else ""
     if media_lower and media_lower not in ("unknown", "not present", ""):
         for pattern, netbox_type in NETBOX_INTERFACE_TYPE_MAP.items():
             if pattern in media_lower:

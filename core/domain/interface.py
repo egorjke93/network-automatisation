@@ -12,7 +12,14 @@ from ..models import Interface
 
 logger = logging.getLogger(__name__)
 from ..constants import normalize_interface_short
-from ..constants.interfaces import get_interface_aliases, is_lag_name
+from ..constants.interfaces import (
+    get_interface_aliases,
+    is_lag_name,
+    MEDIA_TYPE_PORT_TYPE_MAP,
+    HARDWARE_TYPE_PORT_TYPE_MAP,
+    INTERFACE_NAME_PORT_TYPE_MAP,
+    _SHORT_PORT_TYPE_PREFIXES,
+)
 
 
 # Маппинг статусов из show interfaces в стандартные значения
@@ -206,65 +213,32 @@ class InterfaceNormalizer:
         return self._detect_from_interface_name(iface_lower)
 
     def _detect_from_media_type(self, media_type: str) -> str:
-        """Определяет port_type из media_type."""
-        if "100gbase" in media_type or "100g" in media_type:
-            return "100g-qsfp28"
-        if "40gbase" in media_type or "40g" in media_type:
-            return "40g-qsfp"
-        if "25gbase" in media_type or "25g" in media_type:
-            return "25g-sfp28"
-        if "10gbase" in media_type or "10g" in media_type:
-            return "10g-sfp+"
-        if "1000base-t" in media_type or "rj45" in media_type:
-            return "1g-rj45"
-        if "1000base" in media_type or "sfp" in media_type:
-            return "1g-sfp"
+        """Определяет port_type из media_type через MEDIA_TYPE_PORT_TYPE_MAP."""
+        for pattern, port_type in MEDIA_TYPE_PORT_TYPE_MAP.items():
+            if pattern in media_type:
+                return port_type
         return ""
 
     def _detect_from_hardware_type(self, hardware_type: str) -> str:
-        """Определяет port_type из hardware_type."""
-        # NX-OS: "100/1000/10000 Ethernet" = SFP+
-        if "100000" in hardware_type or "100g" in hardware_type or "hundred" in hardware_type:
-            return "100g-qsfp28"
-        if "40000" in hardware_type or "40g" in hardware_type or "forty" in hardware_type:
-            return "40g-qsfp"
-        if "25000" in hardware_type or "25g" in hardware_type or "twenty five" in hardware_type:
-            return "25g-sfp28"
-        if "10000" in hardware_type or "10g" in hardware_type or "ten gig" in hardware_type:
-            return "10g-sfp+"
-        # QTech: "Broadcom TFGigabitEthernet" = 10G SFP+
-        if "tfgigabitethernet" in hardware_type:
-            return "10g-sfp+"
-        # Только 1G без 10G (Gigabit Ethernet, 1000 Ethernet)
-        if ("1000" in hardware_type or "gigabit" in hardware_type) and "10000" not in hardware_type:
-            if "sfp" in hardware_type:
-                return "1g-sfp"
-            return "1g-rj45"
+        """Определяет port_type из hardware_type через HARDWARE_TYPE_PORT_TYPE_MAP."""
+        for pattern, port_type in HARDWARE_TYPE_PORT_TYPE_MAP.items():
+            if pattern in hardware_type:
+                # Для 1G: проверяем SFP в hardware_type
+                if port_type == "1g-rj45" and "sfp" in hardware_type:
+                    return "1g-sfp"
+                return port_type
         return ""
 
     def _detect_from_interface_name(self, iface_lower: str) -> str:
-        """Определяет port_type из имени интерфейса."""
-        if iface_lower.startswith(("hundredgig", "hu")):
-            return "100g-qsfp28"
-        if iface_lower.startswith(("fortygig", "fo")):
-            return "40g-qsfp"
-        if iface_lower.startswith(("twentyfivegig", "twe")):
-            return "25g-sfp28"
-        # QTech TFGigabitEthernet (10G)
-        if iface_lower.startswith("tfgigabitethernet"):
-            return "10g-sfp+"
-        # TF0/1 - короткий формат QTech 10G
-        if len(iface_lower) >= 3 and iface_lower[:2] == "tf" and iface_lower[2].isdigit():
-            return "10g-sfp+"
-        if iface_lower.startswith("tengig"):
-            return "10g-sfp+"
-        # Te1/1 - короткий формат
-        if len(iface_lower) >= 3 and iface_lower[:2] == "te" and iface_lower[2].isdigit():
-            return "10g-sfp+"
-        if iface_lower.startswith(("gigabit", "gi")):
-            return "1g-rj45"
-        if iface_lower.startswith(("fastethernet", "fa")):
-            return "100m-rj45"
+        """Определяет port_type из имени интерфейса через INTERFACE_NAME_PORT_TYPE_MAP."""
+        for prefix, port_type in INTERFACE_NAME_PORT_TYPE_MAP.items():
+            if not iface_lower.startswith(prefix):
+                continue
+            # Короткие префиксы: после них должна быть цифра
+            if prefix in _SHORT_PORT_TYPE_PREFIXES:
+                if len(iface_lower) <= len(prefix) or not iface_lower[len(prefix)].isdigit():
+                    continue
+            return port_type
         return ""
 
     def enrich_with_lag(
@@ -287,6 +261,36 @@ class InterfaceNormalizer:
             if iface_name in lag_membership:
                 iface["lag"] = lag_membership[iface_name]
         return interfaces
+
+    @staticmethod
+    def _resolve_trunk_mode(raw_vlans) -> tuple:
+        """
+        Определяет NetBox trunk mode из списка/строки VLAN.
+
+        Логика: "all", пустые, "1-4094", "1-4093", "1-4095" → tagged-all.
+        Конкретные VLAN → tagged.
+
+        Args:
+            raw_vlans: Строка или список VLAN из TextFSM/NTC
+
+        Returns:
+            tuple: (netbox_mode, cleaned_vlans)
+                netbox_mode: "tagged-all" или "tagged"
+                cleaned_vlans: Строка VLAN (пустая для tagged-all)
+        """
+        # Нормализуем: список → строка через запятую
+        if isinstance(raw_vlans, list):
+            vlans_str = ",".join(str(v) for v in raw_vlans).lower().strip()
+        else:
+            vlans_str = str(raw_vlans).lower().strip()
+
+        # "all", пустые или полный диапазон → tagged-all
+        if (not vlans_str or
+                vlans_str == "all" or
+                vlans_str in ("1-4094", "1-4093", "1-4095")):
+            return "tagged-all", ""
+
+        return "tagged", vlans_str
 
     def normalize_switchport_data(
         self,
@@ -335,30 +339,13 @@ class InterfaceNormalizer:
                     netbox_mode = "access"
                 elif "trunk" in admin_mode or "dynamic" in admin_mode:
                     raw_vlans = row.get("trunking_vlans", "")
-                    if isinstance(raw_vlans, list):
-                        trunking_vlans = ",".join(str(v) for v in raw_vlans).lower().strip()
-                    else:
-                        trunking_vlans = str(raw_vlans).lower().strip()
-                    if (not trunking_vlans or
-                        trunking_vlans == "all" or
-                        trunking_vlans in ("1-4094", "1-4093", "1-4095")):
-                        netbox_mode = "tagged-all"
-                        trunking_vlans = ""
-                    else:
-                        netbox_mode = "tagged"
+                    netbox_mode, trunking_vlans = self._resolve_trunk_mode(raw_vlans)
             elif row.get("trunking_vlans") is not None and row.get("mode"):
                 # NX-OS формат (mode + trunking_vlans, без admin_mode)
                 nxos_mode = row.get("mode", "").lower()
                 if "trunk" in nxos_mode:
                     raw_vlans = row.get("trunking_vlans", "")
-                    trunking_vlans = str(raw_vlans).lower().strip()
-                    if (not trunking_vlans or
-                        trunking_vlans == "all" or
-                        trunking_vlans in ("1-4094", "1-4093", "1-4095")):
-                        netbox_mode = "tagged-all"
-                        trunking_vlans = ""
-                    else:
-                        netbox_mode = "tagged"
+                    netbox_mode, trunking_vlans = self._resolve_trunk_mode(raw_vlans)
                 elif "access" in nxos_mode:
                     netbox_mode = "access"
             elif switchport == "enabled":

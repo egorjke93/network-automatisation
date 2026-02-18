@@ -864,6 +864,93 @@ if getattr(args, "create_devices", False) or getattr(args, "update_devices", Fal
 
 ---
 
+## Баг 11: QTech — три проблемы: кабели, MAC, administratively down
+
+**Дата:** Февраль 2026
+**Симптом:** Три связанные проблемы при работе с QTech:
+1. Кабели (LLDP) не создаются — `"Интерфейс не найден: SU-QSW-6900-56F-02:TFGigabitEthernet 0/48"`
+2. MAC не назначаются на интерфейсы с IP при повторном sync
+3. `administratively down` не парсится TextFSM шаблоном
+
+### 11a. Кабели: пробелы в normalize_interface_full()
+
+**Файл:** `core/constants/interfaces.py`
+
+LLDP возвращает имена с пробелом (`TFGigabitEthernet 0/48`), в NetBox интерфейсы без пробела (`TFGigabitEthernet0/48`). При поиске в `_find_interface()` вызывается `normalize_interface_full()`, но эта функция **не убирала пробелы** (в отличие от `normalize_interface_short()`, где `.replace(" ", "")` уже был).
+
+```python
+# Было:
+def normalize_interface_full(interface: str) -> str:
+    for short_name, full_name in INTERFACE_FULL_MAP.items():
+        ...
+
+# Стало:
+def normalize_interface_full(interface: str) -> str:
+    # Убираем пробелы (QTech: "TFGigabitEthernet 0/48" → "TFGigabitEthernet0/48")
+    interface = interface.replace(" ", "").strip()
+    for short_name, full_name in INTERFACE_FULL_MAP.items():
+        ...
+```
+
+### 11b. MAC не назначается на пропущенные интерфейсы
+
+**Файл:** `netbox/sync/interfaces.py`
+
+MAC не входит в `compare_fields` компаратора (description, enabled, mode, mtu, duplex, speed). Если все эти поля совпадают — интерфейс попадает в `to_skip`. Метод `_check_mac()` вызывается только для `to_update`.
+
+**Цепочка:**
+```
+1. Интерфейс создан без MAC (IP ещё не было → sync_mac_only_with_ip заблокировал)
+2. Позже IP появился, повторный sync
+3. compare_interfaces() — все поля совпали → to_skip
+4. _batch_update_interfaces() обрабатывает только to_update
+5. _check_mac() НИКОГДА не вызывается для to_skip
+6. MAC не назначается — навсегда
+```
+
+**Исправление:** Добавлен метод `_post_sync_mac_check()` — пост-обработка MAC для пропущенных интерфейсов. Вызывается в `sync_interfaces()` после `_batch_update_interfaces()`:
+
+```python
+def _post_sync_mac_check(self, to_skip, sorted_interfaces, stats, details) -> int:
+    """Проверяет и назначает MAC для пропущенных интерфейсов."""
+    # Для каждого skipped интерфейса:
+    # 1. Проверяет mac_address enabled, intf.mac, sync_mac_only_with_ip
+    # 2. Сравнивает с текущим MAC в NetBox (get_interface_mac)
+    # 3. Если отличается — добавляет в очередь
+    # Batch назначение через bulk_assign_macs()
+```
+
+### 11c. TextFSM: administratively down
+
+**Файл:** `templates/qtech_show_interface.textfsm`
+
+Паттерн LINK_STATUS `(UP|DOWN)` не матчил строку:
+```
+TFGigabitEthernet 0/3 is administratively down  , line protocol is DOWN
+```
+
+```
+# Было:
+Value LINK_STATUS (UP|DOWN)
+
+# Стало:
+Value LINK_STATUS ((?:administratively\s+)?(?:UP|DOWN|up|down))
+```
+
+Нормализатор `STATUS_MAP` уже содержал `"administratively down": "disabled"` — нужно было только донести значение из TextFSM.
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `core/constants/interfaces.py` | `normalize_interface_full()` — добавлен `.replace(" ", "")` |
+| `netbox/sync/interfaces.py` | Новый метод `_post_sync_mac_check()`, вызов в `sync_interfaces()` |
+| `templates/qtech_show_interface.textfsm` | LINK_STATUS расширен на `administratively down` |
+| `tests/fixtures/qtech/show_interface.txt` | Фикстура: `DOWN` → `administratively down` для TFGi 0/3 |
+| `tests/test_qtech_templates.py` | Тест: проверка парсинга `administratively down` |
+
+---
+
 ## Общие уроки
 
 1. **При добавлении платформы — проверять ВСЕ места**, где есть хардкод имён (не только парсинг, но и сортировку, поиск, case-insensitive сравнение)
@@ -882,3 +969,9 @@ if getattr(args, "create_devices", False) or getattr(args, "update_devices", Fal
 14. **TextFSM regex: проверять точное значение** — `(\S+\))` захватывает лишнюю скобку. Тесты с `in` (substring) маскируют проблему — использовать `==` (exact match)
 15. **CLI флаги: проверять что каждый работает самостоятельно** — `--update-devices` зависел от `--create-devices`. Каждый флаг должен активировать нужный блок независимо
 16. **Тестировать на проде** — unit-тесты с фикстурами не ловят проблемы формата реального вывода. Debug-логирование на каждом шаге цепочки критически важно для отладки
+17. **Пробелы в обеих normalize-функциях** — `normalize_interface_short()` убирал пробелы, `normalize_interface_full()` — нет. При добавлении нормализации проверять симметричность обеих функций
+18. **MAC не в compare_fields** — поля, назначаемые через отдельный endpoint (не через bulk update), не участвуют в сравнении компаратора. Нужна пост-обработка для таких полей
+19. **TextFSM Value regex ≠ line regex** — паттерн `Value LINK_STATUS (UP|DOWN)` слишком узкий для `administratively down`. При описании Value проверять ВСЕ варианты реального вывода, включая admin-статусы
+20. **Data-driven dispatch вместо if/elif** — LAG_PARSERS dict + getattr() заменяет if/elif dispatch по платформе. Добавление новой платформы = одна строка в dict вместо новой ветки
+21. **Shared маппинги между слоями** — detect_port_type() (domain) и get_netbox_interface_type() (constants) дублировали speed-паттерны. Решение: общие маппинги в constants/interfaces.py, domain итерирует по ним. constants/netbox.py сохраняет свои более специфичные маппинги (media_type → конкретный NetBox type)
+22. **Порядок ключей в dict — контракт** — HARDWARE_TYPE_PORT_TYPE_MAP: "10000" перед "1000", "100/1000/10000" первым. Нарушение порядка = ложное совпадение. Python 3.7+ гарантирует insertion order, но при редактировании dict порядок — не случайность, а архитектурное решение

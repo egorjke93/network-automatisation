@@ -394,3 +394,35 @@ class TestInterfaceNormalizerEnrich:
         aliases = get_interface_aliases("TFGigabitEthernet 0/39")
         assert "TFGigabitEthernet0/39" in aliases  # Без пробела
         assert "TFGigabitEthernet 0/39" in aliases  # С пробелом (оригинал)
+
+
+@pytest.mark.unit
+class TestResolveTrunkMode:
+    """Тесты для _resolve_trunk_mode — helper определения trunk type из VLAN списка."""
+
+    def setup_method(self):
+        self.normalizer = InterfaceNormalizer()
+
+    @pytest.mark.parametrize("raw_vlans,expected_mode,expected_vlans", [
+        # tagged-all: пустые, "all", полные диапазоны
+        ("", "tagged-all", ""),
+        ("ALL", "tagged-all", ""),
+        ("all", "tagged-all", ""),
+        ("1-4094", "tagged-all", ""),
+        ("1-4093", "tagged-all", ""),
+        ("1-4095", "tagged-all", ""),
+        # tagged: конкретные VLAN
+        ("10,20,30", "tagged", "10,20,30"),
+        ("100-200", "tagged", "100-200"),
+        ("10,20,100-200", "tagged", "10,20,100-200"),
+        # list → str (Cisco IOS NTC формат)
+        (["10", "20", "30"], "tagged", "10,20,30"),
+        (["ALL"], "tagged-all", ""),
+        (["1-4094"], "tagged-all", ""),
+        ([], "tagged-all", ""),
+    ])
+    def test_resolve_trunk_mode(self, raw_vlans, expected_mode, expected_vlans):
+        """Проверяет определение trunk mode из raw VLAN данных."""
+        mode, vlans = self.normalizer._resolve_trunk_mode(raw_vlans)
+        assert mode == expected_mode
+        assert vlans == expected_vlans

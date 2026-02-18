@@ -996,6 +996,31 @@ Trunking VLANs Enabled: 10,20,30
 Универсальная функция `InterfaceNormalizer.normalize_switchport_data()` (в `core/domain/interface.py`)
 обрабатывает оба формата автоматически, определяя формат по наличию характерных полей.
 
+### 11.5 TextFSM: show interface и administratively down
+
+QTech `show interface` имеет особенности:
+
+**1. Пробелы в именах:** `TFGigabitEthernet 0/1` (с пробелом) — TextFSM шаблон использует `\S+\s+\d+(?:/\d+)?` для захвата. Нормализатор (`_normalize_row`) убирает пробел: `TFGigabitEthernet0/1`.
+
+**2. Статус administratively down:** QTech возвращает `administratively down` вместо просто `DOWN` для административно выключенных портов:
+
+```
+TFGigabitEthernet 0/3 is administratively down  , line protocol is DOWN
+```
+
+TextFSM шаблон (`qtech_show_interface.textfsm`):
+```
+Value LINK_STATUS ((?:administratively\s+)?(?:UP|DOWN|up|down))
+```
+
+Цепочка нормализации: `"administratively down"` → STATUS_MAP → `"disabled"` → NetBox: `enabled=False`.
+
+**3. Функции нормализации имён:** Обе функции убирают пробелы:
+- `normalize_interface_short()` — `interface.replace(" ", "")` на входе
+- `normalize_interface_full()` — `interface.replace(" ", "")` на входе
+
+Это критически важно для `_find_interface()` при синхронизации кабелей (LLDP), где имена приходят с пробелами.
+
 ---
 
 ## 12. Добавление нового вендора: полное руководство
@@ -1743,23 +1768,22 @@ Port-channel) — ничего добавлять не нужно, маппин�
 
 ```python
 def detect_port_type(self, row, iface_lower):
-    # LAG
-    if iface_lower.startswith(("port-channel", "po", "aggregateport")):
+    # LAG — единый источник: is_lag_name() из core/constants/interfaces.py
+    if is_lag_name(iface_lower):
         return "lag"
-    # QTech: Ag1 (короткое имя)
-    if len(iface_lower) >= 3 and iface_lower[:2] == "ag" and iface_lower[2].isdigit():
-        return "lag"
+    # Для нового LAG формата: добавить в is_lag_name()
 
-    # Eltex пример: если LAG называется "Trunk-group 1"
-    # if iface_lower.startswith("trunk-group"):
-    #     return "lag"
+    # Виртуальные интерфейсы
+    if iface_lower.startswith(("vlan", "loopback", "null", "tunnel", "nve")):
+        return "virtual"
 
-    # По имени интерфейса (fallback)
-    # TFGigabitEthernet → 10g-sfp+ (QTech)
-    if iface_lower.startswith("tfgigabitethernet"):
-        return "10g-sfp+"
-    if len(iface_lower) >= 3 and iface_lower[:2] == "tf" and iface_lower[2].isdigit():
-        return "10g-sfp+"
+    # По media_type, hardware_type (data-driven маппинги)
+    # → _detect_from_media_type()  — итерация MEDIA_TYPE_PORT_TYPE_MAP
+    # → _detect_from_hardware_type() — итерация HARDWARE_TYPE_PORT_TYPE_MAP
+
+    # По имени интерфейса (data-driven)
+    # → _detect_from_interface_name() — итерация INTERFACE_NAME_PORT_TYPE_MAP
+    # Для нового типа: добавить в INTERFACE_NAME_PORT_TYPE_MAP (core/constants/interfaces.py)
 ```
 
 #### 6b. `get_netbox_interface_type()` — NetBox Layer
@@ -1767,22 +1791,18 @@ def detect_port_type(self, row, iface_lower):
 **Файл:** `core/constants/netbox.py`
 
 ```python
-def get_netbox_interface_type(name, speed=None, media_type=None, ...):
-    name_lower = name.lower()
+def get_netbox_interface_type(interface_name, media_type, hardware_type, port_type, speed_mbps, ...):
+    name_lower = interface_name.lower()
 
-    # LAG
-    if name_lower.startswith(("port-channel", "po", "aggregateport")) or port_type == "lag":
+    # LAG — единый источник: is_lag_name()
+    if is_lag_name(name_lower) or port_type == "lag":
         return "lag"
 
-    # QTech TFGigabitEthernet = 10G SFP+
-    if name_lower.startswith("tfgigabitethernet") or (
-        len(name_lower) >= 3 and name_lower[:2] == "tf" and name_lower[2].isdigit()
-    ):
-        return "10gbase-x-sfpp"
-
-    # Eltex пример: если есть свой тип интерфейса
-    # if name_lower.startswith("extremeethernet"):
-    #     return "10gbase-x-sfpp"
+    # Приоритеты: media_type → port_type → hardware_type → имя → speed
+    # media_type → NETBOX_INTERFACE_TYPE_MAP (точный тип трансивера)
+    # port_type → PORT_TYPE_MAP (нормализованный из коллектора)
+    # Для нового вендора: если стандартные имена — ничего добавлять не нужно
+    # Если уникальные имена — добавить в INTERFACE_NAME_PREFIX_MAP (core/constants/netbox.py)
 ```
 
 **Если Eltex использует стандартные имена** — ничего добавлять не нужно.
@@ -2121,12 +2141,13 @@ python -m network_collector sync-netbox --interfaces --dry-run 2>&1 | grep -i vl
 
 - [ ] `core/constants/interfaces.py` — добавить в `INTERFACE_SHORT_MAP` / `INTERFACE_FULL_MAP` [§12.6]
 - [ ] `core/constants/interfaces.py` — добавить в `SHORT_TO_EXTRA` (алиасы для LAG matching) [§12.8]
-- [ ] `core/domain/interface.py` — добавить в `detect_port_type()` [§12.7]
-- [ ] `core/constants/netbox.py` — добавить в `get_netbox_interface_type()` [§12.7]
+- [ ] `core/constants/interfaces.py` — добавить в `INTERFACE_NAME_PORT_TYPE_MAP` (data-driven detect_port_type) [§12.7]
+- [ ] `core/constants/netbox.py` — добавить в `INTERFACE_NAME_PREFIX_MAP` или `get_netbox_interface_type()` [§12.7]
 
 ### Если LAG/switchport формат уникальный
 
-- [ ] `collectors/interfaces.py` — написать `_parse_lag_membership_<vendor>()` (парсер вывода) [§12.5]
+- [ ] `collectors/interfaces.py` — написать `_parse_lag_membership_<vendor>()` + добавить в `LAG_PARSERS` dict [§12.5]
+- [ ] `core/constants/interfaces.py` — добавить LAG префикс в `is_lag_name()` [§12.7]
 - [ ] `core/domain/interface.py` — обновить `InterfaceNormalizer.normalize_switchport_data()` (нормализация) [§12.5]
 
 ### Опционально

@@ -143,7 +143,7 @@ tests/
 └── test_refactoring_utils.py      # Утилиты рефакторинга
 ```
 
-**Всего: 1788 тестов, покрытие ~85%**
+**Всего: 1906 тестов, покрытие ~85%**
 
 ### 2.2 Описание тестовых модулей
 
@@ -540,12 +540,16 @@ python -m network_collector sync-netbox --interfaces --dry-run
 **Пример: добавить 400G**
 
 ```python
-# 1. core/domain/interface.py → detect_port_type() → _detect_from_interface_name()
-if iface_lower.startswith(("fourhundredgig", "fh")):
-    return "400g-qsfp-dd"
+# 1. core/constants/interfaces.py → INTERFACE_NAME_PORT_TYPE_MAP
+# Добавить маппинг имени → port_type (используется в _detect_from_interface_name())
+INTERFACE_NAME_PORT_TYPE_MAP: Dict[str, str] = {
+    ...,
+    "fourhundredgig": "400g-qsfp-dd", "fh": "400g-qsfp-dd",
+}
+# + добавить "fh" в _SHORT_PORT_TYPE_PREFIXES
 
-# 2. core/constants/netbox.py → get_netbox_interface_type()
-# Добавить в INTERFACE_NAME_PREFIX_MAP или в логику функции
+# 2. core/constants/netbox.py → INTERFACE_NAME_PREFIX_MAP
+# Добавить маппинг для get_netbox_interface_type()
 
 # 3. core/constants/interfaces.py → INTERFACE_SHORT_MAP / INTERFACE_FULL_MAP
 # Если нужны сокращения/расширения имён
@@ -554,13 +558,15 @@ if iface_lower.startswith(("fourhundredgig", "fh")):
 **Пример из QTech: TFGigabitEthernet = 10G, AggregatePort = LAG**
 
 ```python
-# core/domain/interface.py → detect_port_type()
-if iface_lower.startswith(("tfgigabitethernet", "tf")):
-    return "10g-sfp+"
-if iface_lower.startswith(("aggregateport", "ag")):
-    return "lag"
+# core/constants/interfaces.py → INTERFACE_NAME_PORT_TYPE_MAP (data-driven)
+INTERFACE_NAME_PORT_TYPE_MAP = {
+    ...,
+    "tfgigabitethernet": "10g-sfp+", "tf": "10g-sfp+",
+    ...
+}
+# LAG: is_lag_name() в core/constants/interfaces.py (единый источник)
 
-# core/constants/interfaces.py
+# core/constants/interfaces.py → алиасы
 INTERFACE_SHORT_MAP: ("tfgigabitethernet", "TF"), ("aggregateport", "Ag")
 INTERFACE_FULL_MAP: "TF": "TFGigabitEthernet", "Ag": "AggregatePort"
 ```
@@ -570,7 +576,7 @@ INTERFACE_FULL_MAP: "TF": "TFGigabitEthernet", "Ag": "AggregatePort"
 Когда устройство возвращает неизвестный media_type (SFP модуль):
 
 ```python
-# core/constants.py → NETBOX_INTERFACE_TYPE_MAP
+# core/constants/netbox.py → NETBOX_INTERFACE_TYPE_MAP
 NETBOX_INTERFACE_TYPE_MAP = {
     # Добавить новый маппинг media_type → NetBox type
     "sfp-25gbase-sr": "25gbase-x-sfp28",
@@ -591,23 +597,25 @@ NETBOX_INTERFACE_TYPE_MAP = {
 
 | Источник | Файл | Переменная | Когда использовать |
 |----------|------|------------|-------------------|
-| Имя интерфейса | `core/domain/interface.py` | `InterfaceNormalizer.detect_port_type()` | Новый тип порта (400G, 800G) |
-| port_type → NetBox | `core/constants.py` | `PORT_TYPE_MAP` | Маппинг port_type в NetBox |
-| media_type → NetBox | `core/constants.py` | `NETBOX_INTERFACE_TYPE_MAP` | Новый SFP/трансивер |
-| hardware_type → NetBox | `core/constants.py` | `NETBOX_HARDWARE_TYPE_MAP` | Маппинг скорости |
+| Имя интерфейса | `core/constants/interfaces.py` | `INTERFACE_NAME_PORT_TYPE_MAP` | Новый тип порта (400G, 800G) |
+| port_type → NetBox | `core/constants/netbox.py` | `PORT_TYPE_MAP` | Маппинг port_type в NetBox |
+| media_type → NetBox | `core/constants/netbox.py` | `NETBOX_INTERFACE_TYPE_MAP` | Новый SFP/трансивер |
+| hardware_type → NetBox | `core/constants/netbox.py` | `NETBOX_HARDWARE_TYPE_MAP` | Маппинг скорости |
 
 ### 4.5 Приоритет определения типа
 
 ```
-1. port_type (из коллектора)     — платформонезависимый
+1. LAG/Virtual                    — по имени или port_type
+2. Management                     — → медь (1000base-t)
+3. media_type (SFP-10GBase-SR)   — самый точный (NETBOX_INTERFACE_TYPE_MAP)
    ↓ если пустой
-2. media_type (SFP-10GBase-SR)   — самый точный (NETBOX_INTERFACE_TYPE_MAP)
+4. port_type (из коллектора)     — платформонезависимый (PORT_TYPE_MAP)
    ↓ если пустой
-3. hardware_type (100/1000/10000) — макс. скорость (NETBOX_HARDWARE_TYPE_MAP)
+5. hardware_type (100/1000/10000) — макс. скорость (NETBOX_HARDWARE_TYPE_MAP)
    ↓ если пустой
-4. interface_name (TenGigabit)    — по имени
+6. interface_name (TenGigabit)    — по имени (INTERFACE_NAME_PREFIX_MAP)
    ↓ если не определился
-5. defaults.type из fields.yaml   — fallback
+7. speed (fallback)               — по скорости в Mbps
 ```
 
 ### 4.6 Проверка доступных типов NetBox

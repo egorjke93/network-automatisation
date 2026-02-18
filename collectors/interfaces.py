@@ -67,6 +67,13 @@ class InterfaceCollector(BaseCollector):
     switchport_commands = SECONDARY_COMMANDS.get("switchport", {})
     media_type_commands = SECONDARY_COMMANDS.get("media_type", {})
 
+    # Диспетчер парсеров LAG по платформам
+    # Платформы с кастомным парсером; все остальные — generic _parse_lag_membership
+    LAG_PARSERS: Dict[str, str] = {
+        "qtech": "_parse_lag_membership_qtech",
+        "qtech_qsw": "_parse_lag_membership_qtech",
+    }
+
     def __init__(
         self,
         include_errors: bool = False,
@@ -237,9 +244,10 @@ class InterfaceCollector(BaseCollector):
                     if lag_cmd:
                         try:
                             lag_response = conn.send_command(lag_cmd)
-                            # QTech: отдельный парсер для show aggregatePort summary
-                            if device.platform in ("qtech", "qtech_qsw"):
-                                lag_membership = self._parse_lag_membership_qtech(
+                            # Диспетч парсера LAG по платформе (data-driven)
+                            parser_name = self.LAG_PARSERS.get(device.platform)
+                            if parser_name:
+                                lag_membership = getattr(self, parser_name)(
                                     lag_response.result,
                                 )
                             else:

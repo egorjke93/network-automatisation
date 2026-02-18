@@ -1,5 +1,5 @@
 Value Required INTERFACE (\S+\s+\d+(?:/\d+)?)
-Value LINK_STATUS (UP|DOWN)
+Value LINK_STATUS ((?:administratively\s+)?(?:UP|DOWN|up|down))
 Value PROTOCOL_STATUS (UP|DOWN)
 Value HARDWARE (\S+)
 Value ADDRESS ([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})

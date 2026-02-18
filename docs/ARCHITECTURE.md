@@ -374,15 +374,16 @@ pynetbox использует lazy-loading: обращение к атрибут
 │                                                                              │
 │    УРОВЕНЬ 1: Коллектор → port_type (грубая категория)                       │
 │    detect_port_type() нормализует в единый формат:                           │
-│    • media_type "10GBASE-SR-SFP+" → "10g-sfp+"                              │
-│    • hardware_type → "1g-rj45"                                               │
-│    • interface_name → "lag", "virtual"                                       │
+│    • _detect_from_media_type() → MEDIA_TYPE_PORT_TYPE_MAP                   │
+│    • _detect_from_hardware_type() → HARDWARE_TYPE_PORT_TYPE_MAP             │
+│    • _detect_from_interface_name() → INTERFACE_NAME_PORT_TYPE_MAP           │
+│    Маппинги в core/constants/interfaces.py (единый источник паттернов)       │
 │                                                                              │
 │    УРОВЕНЬ 2: Sync → NetBox type (точный тип)                                │
 │    get_netbox_interface_type() — media_type приоритетнее port_type:          │
 │    • media_type "10GBASE-SR-SFP+" → "10gbase-sr" (ТОЧНЫЙ!)                  │
 │    • port_type "10g-sfp+" → "10gbase-x-sfpp" (generic, если нет media_type) │
-│    • "lag" → "lag"                                                           │
+│    • Свои маппинги в core/constants/netbox.py (более специфичные)            │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -576,7 +577,7 @@ network_collector/
 > core/constants/
 > ├── __init__.py       # Обратная совместимость (re-export всех констант)
 > ├── commands.py       # COLLECTOR_COMMANDS, SECONDARY_COMMANDS
-> ├── interfaces.py     # INTERFACE_SHORT_MAP, INTERFACE_FULL_MAP, LAG_PREFIXES, is_lag_name()
+> ├── interfaces.py     # INTERFACE_SHORT_MAP, INTERFACE_FULL_MAP, LAG_PREFIXES, is_lag_name(), *_PORT_TYPE_MAP
 > ├── netbox.py         # NETBOX_INTERFACE_TYPE_MAP, PORT_TYPE_MAP
 > ├── platforms.py      # SCRAPLI_PLATFORM_MAP, NTC_PLATFORM_MAP, DEFAULT_PLATFORM
 > ├── mac.py            # MAC нормализация
@@ -619,11 +620,17 @@ COLLECTOR_COMMANDS = {
 # lag_commands: {"qtech": "show aggregatePort summary", ...}
 # switchport_commands: {"qtech": "show interface switchport", ...}
 
-# Маппинг типов интерфейсов в NetBox
+# Маппинг типов интерфейсов в NetBox (core/constants/netbox.py)
 NETBOX_INTERFACE_TYPE_MAP = {
     "sfp-10gbase-lr": "10gbase-lr",
     "10gbase-sr": "10gbase-sr",
 }
+
+# Маппинги port_type для domain layer (core/constants/interfaces.py)
+# detect_port_type() итерирует по этим маппингам вместо if/elif
+MEDIA_TYPE_PORT_TYPE_MAP = {"100gbase": "100g-qsfp28", "10gbase": "10g-sfp+", ...}
+HARDWARE_TYPE_PORT_TYPE_MAP = {"100000": "100g-qsfp28", "10000": "10g-sfp+", ...}
+INTERFACE_NAME_PORT_TYPE_MAP = {"hundredgig": "100g-qsfp28", "tengig": "10g-sfp+", ...}
 ```
 
 ### 6.4 Функции-помощники (core/constants/)
@@ -649,11 +656,80 @@ normalize_interface_short("TFGigabitEthernet 0/1")   # → "TF0/1"    (QTech 10G
 normalize_interface_short("AggregatePort 1")          # → "Ag1"      (QTech LAG)
 normalize_interface_full("Gi0/1")                     # → "GigabitEthernet0/1"
 normalize_interface_full("TF0/1")                     # → "TFGigabitEthernet0/1"
+normalize_interface_full("TFGigabitEthernet 0/48")    # → "TFGigabitEthernet0/48" (пробел убран)
 normalize_interface_full("Ag1")                       # → "AggregatePort1"
 
 # Платформа по умолчанию (fallback)
 DEFAULT_PLATFORM = "cisco_ios"
 ```
+
+### 6.5 Паттерны рефакторинга (применённые)
+
+#### Data-driven LAG dispatch
+
+**Файл:** `collectors/interfaces.py`
+
+Вместо `if platform in ("qtech", "qtech_qsw"):` — dict с именами методов:
+
+```python
+# Class-level атрибут InterfaceCollector
+LAG_PARSERS = {
+    "qtech": "_parse_lag_membership_qtech",
+    "qtech_qsw": "_parse_lag_membership_qtech",
+}
+
+# В _collect_from_device():
+parser_name = self.LAG_PARSERS.get(device.platform)
+if parser_name:
+    lag_membership = getattr(self, parser_name)(lag_response.result)
+else:
+    lag_membership = self._parse_lag_membership(lag_response.result, device.platform, lag_cmd)
+```
+
+**Как добавить парсер для новой платформы:** одна строка в `LAG_PARSERS` + метод парсера.
+
+#### Shared port_type маппинги
+
+**Файлы:** `core/constants/interfaces.py` → `core/domain/interface.py`
+
+Три маппинга `{паттерн: port_type}` — единый источник паттернов скоростей:
+
+```python
+# core/constants/interfaces.py
+MEDIA_TYPE_PORT_TYPE_MAP    # media_type → port_type ("10gbase" → "10g-sfp+")
+HARDWARE_TYPE_PORT_TYPE_MAP # hardware_type → port_type ("10000" → "10g-sfp+")
+INTERFACE_NAME_PORT_TYPE_MAP # name prefix → port_type ("tengig" → "10g-sfp+")
+```
+
+Domain layer (`_detect_from_*()`) итерирует по маппингам:
+```python
+def _detect_from_media_type(self, media_type):
+    for pattern, port_type in MEDIA_TYPE_PORT_TYPE_MAP.items():
+        if pattern in media_type:
+            return port_type
+    return ""
+```
+
+**Порядок ключей критичен:** `"10000"` перед `"1000"`, `"100g"` перед `"sfp"`.
+Python 3.7+ гарантирует insertion order для dict.
+
+`core/constants/netbox.py` НЕ изменён — использует свои более специфичные маппинги
+(`NETBOX_INTERFACE_TYPE_MAP` и др.) для точного определения NetBox type.
+
+#### _resolve_trunk_mode() — DRY для trunk VLAN
+
+**Файл:** `core/domain/interface.py`
+
+Общая логика trunk VLAN resolution извлечена из Cisco IOS и NX-OS веток:
+
+```python
+@staticmethod
+def _resolve_trunk_mode(raw_vlans) -> tuple:
+    # list → str, "all"/"1-4094" → ("tagged-all", "")
+    # Конкретные VLAN → ("tagged", vlans_str)
+```
+
+Используется в `normalize_switchport_data()` — обе trunk-ветки вызывают один метод.
 
 ---
 

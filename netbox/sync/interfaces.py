@@ -152,10 +152,17 @@ class InterfacesSyncMixin:
             diff.to_update, sorted_interfaces, stats, details, site_name=site_name
         )
 
+        # === POST-SYNC: MAC для пропущенных интерфейсов ===
+        # MAC не входит в compare_fields, поэтому интерфейсы без изменений
+        # попадают в to_skip и MAC никогда не проверяется. Проверяем отдельно.
+        mac_assigned = self._post_sync_mac_check(
+            diff.to_skip, sorted_interfaces, stats, details
+        )
+
         # === BATCH DELETE ===
         self._batch_delete_interfaces(diff.to_delete, stats, details)
 
-        stats["skipped"] += len(diff.to_skip)
+        stats["skipped"] += len(diff.to_skip) - mac_assigned
 
         # Добавляем статистику по локальным/remote интерфейсам
         stats["local_count"] = len(sorted_interfaces)
@@ -392,6 +399,77 @@ class InterfacesSyncMixin:
             stats=stats, details=details,
             operation="deleted", entity_name="интерфейс",
         )
+
+    # ==================== POST-SYNC MAC ====================
+
+    def _post_sync_mac_check(
+        self: SyncBase,
+        to_skip: list,
+        sorted_interfaces: List[Interface],
+        stats: dict,
+        details: dict,
+    ) -> int:
+        """
+        Проверяет и назначает MAC для пропущенных интерфейсов.
+
+        MAC не входит в compare_fields, поэтому интерфейсы без изменений
+        полей попадают в to_skip. Но MAC мог быть не назначен ранее
+        (например, при создании не было IP, а sync_mac_only_with_ip=true).
+
+        Returns:
+            int: Количество интерфейсов с назначенным MAC
+        """
+        sync_cfg = get_sync_config("interfaces")
+        if not sync_cfg.is_field_enabled("mac_address"):
+            return 0
+
+        mac_queue = []  # (interface_id, mac_address, name)
+
+        for item in to_skip:
+            if not item.remote_data:
+                continue
+            intf = next((i for i in sorted_interfaces if i.name == item.name), None)
+            if not intf or not intf.mac:
+                continue
+
+            # Проверяем sync_mac_only_with_ip
+            sync_mac_only_with_ip = sync_cfg.get_option("sync_mac_only_with_ip", False)
+            if sync_mac_only_with_ip and not intf.ip_address:
+                continue
+
+            new_mac = normalize_mac_netbox(intf.mac)
+            if not new_mac:
+                continue
+
+            if self.dry_run:
+                mac_queue.append((item.remote_data.id, new_mac, item.name))
+                continue
+
+            # Проверяем текущий MAC — назначаем только если отличается
+            current_mac = self.client.get_interface_mac(item.remote_data.id)
+            if new_mac.upper() != (current_mac or "").upper():
+                mac_queue.append((item.remote_data.id, new_mac, item.name))
+
+        if not mac_queue:
+            return 0
+
+        if self.dry_run:
+            for intf_id, mac, name in mac_queue:
+                logger.info(f"[DRY-RUN] Назначение MAC {mac} на {name} (пропущенный)")
+            stats["updated"] += len(mac_queue)
+            return len(mac_queue)
+
+        # Batch назначение MAC
+        mac_assignments = [(intf_id, mac) for intf_id, mac, _ in mac_queue]
+        assigned = self.client.bulk_assign_macs(mac_assignments)
+        if assigned:
+            for _, mac, name in mac_queue:
+                logger.info(f"Назначен MAC {mac} на {name} (пост-обработка)")
+                details["update"].append({"name": name, "changes": [f"mac: → {mac}"]})
+            stats["updated"] += len(mac_queue)
+            return len(mac_queue)
+
+        return 0
 
     # ==================== BUILD DATA (без API-вызовов) ====================
 

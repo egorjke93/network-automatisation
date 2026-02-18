@@ -68,7 +68,7 @@ TFGigabitEthernet 0/2 is UP  , line protocol is UP
     0 output errors, 0 collisions, 0 interface resets
 ========================== TFGigabitEthernet 0/3 ========================
 Index(dec):3 (hex):3
-TFGigabitEthernet 0/3 is DOWN  , line protocol is DOWN    
+TFGigabitEthernet 0/3 is administratively down  , line protocol is DOWN
   Hardware is Broadcom TFGigabitEthernet, address is 001f.ce62.1e96 (bia 001f.ce62.1e96)
   Interface address is: no ip address
   Interface IPv6 address is:

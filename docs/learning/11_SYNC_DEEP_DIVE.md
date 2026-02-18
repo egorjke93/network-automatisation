@@ -1607,6 +1607,53 @@ def _batch_update_interfaces(
 
 При fallback `upd.pop("id")` извлекает ID из словаря (и удаляет его), потому что `update_interface(intf_id, **upd)` принимает ID отдельным аргументом.
 
+### 4.6 Post-sync MAC: `_post_sync_mac_check()`
+
+**Проблема:** MAC не входит в `compare_fields` компаратора (description, enabled, mode, mtu, duplex, speed). Если все поля совпали — интерфейс попадает в `to_skip` и `_check_mac()` никогда не вызывается. MAC, не назначенный при создании, остаётся пустым навсегда.
+
+**Решение:** Пост-обработка MAC после `_batch_update_interfaces()`:
+
+```python
+# Файл: netbox/sync/interfaces.py
+def _post_sync_mac_check(
+    self: SyncBase, to_skip: list, sorted_interfaces: List[Interface],
+    stats: dict, details: dict,
+) -> int:
+    """Проверяет и назначает MAC для пропущенных интерфейсов."""
+    sync_cfg = get_sync_config("interfaces")
+    if not sync_cfg.is_field_enabled("mac_address"):
+        return 0
+
+    mac_queue = []
+    for item in to_skip:
+        intf = next((i for i in sorted_interfaces if i.name == item.name), None)
+        if not intf or not intf.mac:
+            continue
+        # Проверяем sync_mac_only_with_ip
+        if sync_cfg.get_option("sync_mac_only_with_ip", False) and not intf.ip_address:
+            continue
+        new_mac = normalize_mac_netbox(intf.mac)
+        current_mac = self.client.get_interface_mac(item.remote_data.id)
+        if new_mac.upper() != (current_mac or "").upper():
+            mac_queue.append((item.remote_data.id, new_mac, item.name))
+
+    # Batch назначение через bulk_assign_macs()
+    if mac_queue:
+        self.client.bulk_assign_macs([(id, mac) for id, mac, _ in mac_queue])
+    return len(mac_queue)
+```
+
+**Когда это нужно:** Интерфейс был создан без MAC (не было IP → `sync_mac_only_with_ip` заблокировал). Позже IP появился, но при повторном sync все поля совпадают → `to_skip`. Без `_post_sync_mac_check()` MAC не назначится никогда.
+
+**Вызов в `sync_interfaces()`:**
+```python
+# После _batch_update_interfaces() и перед _batch_delete_interfaces():
+mac_assigned = self._post_sync_mac_check(diff.to_skip, sorted_interfaces, stats, details)
+stats["skipped"] += len(diff.to_skip) - mac_assigned
+```
+
+---
+
 Удаление использует `_batch_with_fallback` из SyncBase:
 
 ```python
@@ -2274,6 +2321,12 @@ sync_interfaces("switch-01", interfaces)
   |     |       +-- _check_tagged_vlans()
   |     |       +-- _check_lag()
   |     +-- bulk_update([{id:1, ...}, ...])                     <-- 1 PATCH
+  |
+  +-- _post_sync_mac_check()                                    <-- NEW
+  |     +-- for item in to_skip:
+  |     |     проверяем: mac_address enabled, intf.mac, sync_mac_only_with_ip
+  |     |     сравниваем: new_mac vs get_interface_mac()
+  |     +-- bulk_assign_macs([(id, mac), ...])                  <-- N POST
   |
   +-- _batch_delete_interfaces()
         +-- bulk_delete([id1, id2, ...])                        <-- 1 DELETE

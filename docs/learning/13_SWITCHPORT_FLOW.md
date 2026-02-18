@@ -305,6 +305,23 @@ NTC_PLATFORM_MAP = {
 
 ```python
 # core/domain/interface.py — метод InterfaceNormalizer.normalize_switchport_data()
+
+# === Вспомогательный метод: DRY для trunk VLAN resolution ===
+# Общая логика для Cisco IOS и NX-OS — вынесена, чтобы не дублировать
+@staticmethod
+def _resolve_trunk_mode(raw_vlans) -> tuple:
+    """Определяет trunk mode: tagged-all или tagged с конкретными VLAN."""
+    # Нормализуем: список → строка через запятую
+    if isinstance(raw_vlans, list):
+        vlans_str = ",".join(str(v) for v in raw_vlans).lower().strip()
+    else:
+        vlans_str = str(raw_vlans).lower().strip()
+    # "all", пустые или полный диапазон → tagged-all
+    if not vlans_str or vlans_str == "all" or vlans_str in ("1-4094", "1-4093", "1-4095"):
+        return "tagged-all", ""
+    return "tagged", vlans_str
+
+# === Основной метод нормализации ===
 def normalize_switchport_data(self, parsed, platform):
     modes = {}
 
@@ -333,21 +350,8 @@ def normalize_switchport_data(self, parsed, platform):
                 netbox_mode = "access"
             elif "trunk" in admin_mode or "dynamic" in admin_mode:
                 raw_vlans = row.get("trunking_vlans", "")
-                # NTC может вернуть список: ["10", "20", "30"]
-                if isinstance(raw_vlans, list):
-                    trunking_vlans = ",".join(str(v) for v in raw_vlans).lower().strip()
-                else:
-                    trunking_vlans = str(raw_vlans).lower().strip()
-
-                # "all" или "1-4094" → tagged-all (все VLAN)
-                if (not trunking_vlans or
-                    trunking_vlans == "all" or
-                    trunking_vlans in ("1-4094", "1-4093", "1-4095")):
-                    netbox_mode = "tagged-all"
-                    trunking_vlans = ""
-                else:
-                    # Конкретные VLAN → tagged
-                    netbox_mode = "tagged"
+                # _resolve_trunk_mode: list→str, "all"→tagged-all, конкретные→tagged
+                netbox_mode, trunking_vlans = self._resolve_trunk_mode(raw_vlans)
 
         # ═══════════════════════════════════════════════════
         # ВЕТКА 2: NX-OS
@@ -357,15 +361,8 @@ def normalize_switchport_data(self, parsed, platform):
             nxos_mode = row.get("mode", "").lower()
             if "trunk" in nxos_mode:
                 raw_vlans = row.get("trunking_vlans", "")
-                trunking_vlans = str(raw_vlans).lower().strip()
-
-                if (not trunking_vlans or
-                    trunking_vlans == "all" or
-                    trunking_vlans in ("1-4094", "1-4093", "1-4095")):
-                    netbox_mode = "tagged-all"
-                    trunking_vlans = ""
-                else:
-                    netbox_mode = "tagged"
+                # Тот же _resolve_trunk_mode — DRY
+                netbox_mode, trunking_vlans = self._resolve_trunk_mode(raw_vlans)
             elif "access" in nxos_mode:
                 netbox_mode = "access"
 
@@ -419,6 +416,32 @@ def normalize_switchport_data(self, parsed, platform):
 | `trunking_vlans` есть + `mode` есть | NX-OS | NX-OS имеет `mode` и `trunking_vlans`, но не `admin_mode` |
 | `switchport == "enabled"` | QTech | Кастомный шаблон возвращает `switchport` + `vlan_lists` |
 
+### _resolve_trunk_mode() — общий helper для trunk VLAN
+
+Ветки Cisco IOS и NX-OS обе определяют trunk mode по VLAN списку. Логика одинаковая:
+- "all", пустые, "1-4094/4093/4095" → `tagged-all`
+- Конкретные VLAN → `tagged`
+
+Раньше этот код был продублирован в двух местах. Теперь вынесен в `_resolve_trunk_mode()`:
+
+```python
+@staticmethod
+def _resolve_trunk_mode(raw_vlans) -> tuple:
+    # list → str (NTC может вернуть ["10", "20", "30"])
+    if isinstance(raw_vlans, list):
+        vlans_str = ",".join(str(v) for v in raw_vlans).lower().strip()
+    else:
+        vlans_str = str(raw_vlans).lower().strip()
+
+    if not vlans_str or vlans_str == "all" or vlans_str in ("1-4094", "1-4093", "1-4095"):
+        return "tagged-all", ""
+    return "tagged", vlans_str
+```
+
+**Что это даёт:** одно место для логики trunk resolution. Если добавится новый "полный диапазон" (например `"2-4094"`) — правится одна функция.
+
+**QTech НЕ использует этот helper** — у QTech другая логика (поле `vlan_lists`, режим `HYBRID`).
+
 ### Пример прохождения данных
 
 **Вход** (NX-OS, Ethernet1/2):
@@ -437,8 +460,8 @@ row = {
 1. `admin_mode = ""` → пустой → **ветка 1 пропущена**
 2. `row.get("trunking_vlans")` = `"10,30,38"` (не None) + `row.get("mode")` = `"trunk"` → **ветка 2 сработала!**
 3. `nxos_mode = "trunk"` → `"trunk" in nxos_mode` = True
-4. `trunking_vlans = "10,30,38"` → не пустой, не "all", не "1-4094"
-5. → `netbox_mode = "tagged"` ✅
+4. `_resolve_trunk_mode("10,30,38")` → `"10,30,38"` не пустой, не "all", не "1-4094"
+5. → возвращает `("tagged", "10,30,38")` ✅
 
 **Выход:**
 ```python
@@ -529,6 +552,7 @@ def enrich_with_switchport(self, interfaces, switchport_modes, lag_membership=No
     # 2. Для каждого интерфейса ищем его switchport данные
     for iface in interfaces:
         iface_name = iface.get("interface", "")
+        iface_lower = iface_name.lower()
 
         # Ищем по точному имени
         sw_data = switchport_modes.get(iface_name)
@@ -547,7 +571,7 @@ def enrich_with_switchport(self, interfaces, switchport_modes, lag_membership=No
             iface["access_vlan"] = sw_data.get("access_vlan", "")
             iface["tagged_vlans"] = sw_data.get("tagged_vlans", "")
 
-        elif iface_name.lower().startswith(("po", "port-channel")):
+        elif is_lag_name(iface_lower):
             # LAG — берём mode от member портов
             for lag_name, lag_mode in lag_modes.items():
                 if self._is_same_lag(iface_name, lag_name):

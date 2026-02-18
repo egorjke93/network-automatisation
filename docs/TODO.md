@@ -526,7 +526,7 @@ sync:
 - [x] Unit-тесты cables sync — ✅ 21 тест (dedup, LAG skip, neighbor lookup, cleanup)
 - [x] Unit-тесты ip_addresses sync — ✅ 17 тестов (batch create/fallback, mask recreate, primary IP)
 
-**Статус:** ✅ Выполнено. Всего 1838 тестов
+**Статус:** ✅ Выполнено. Всего 1906 тестов
 
 ---
 
@@ -560,7 +560,7 @@ sync:
 
 ## Что уже хорошо ✅
 
-- ✅ 1838 тестов (хорошее покрытие)
+- ✅ 1906 тестов (хорошее покрытие)
 - ✅ Структурированное JSON логирование
 - ✅ Domain Layer с нормализаторами
 - ✅ Pipeline система с транзакциями
@@ -727,9 +727,11 @@ def _find_interface(self, device_id, name):
 - Switchport: универсальная `InterfaceNormalizer.normalize_switchport_data()` для Cisco и QTech форматов
 - TextFSM fix: VLAN regex (\d+) → (\S+) для поддержки "routed"
 - Команда `show interface` (без 's') для QTech
-- normalize_interface_full() — исправлен баг с ложным срабатыванием на полных именах
+- normalize_interface_full() — исправлен баг с ложным срабатыванием на полных именах + добавлен `.replace(" ", "")` для QTech пробелов
 - get_interface_aliases() — добавлен HundredGigabitEthernet алиас
-- 75+ новых тестов (1788 всего): QTech support, templates, refactoring utils
+- TextFSM шаблон qtech_show_interface: LINK_STATUS расширен для `administratively down`
+- _post_sync_mac_check() — пост-обработка MAC для пропущенных интерфейсов (баг: MAC не назначался если все поля совпали)
+- 75+ новых тестов (1880 всего): QTech support, templates, refactoring utils
 
 ### ✅ QTech transceiver (media_type) — ВЫПОЛНЕНО
 
@@ -1161,35 +1163,43 @@ data-driven `_PLATFORM_PATTERNS` — список кортежей `(keyword, re
 
 ### Что ещё можно улучшить (TODO)
 
-#### LAG parser dispatch (Средний приоритет)
+*Все три задачи ниже выполнены (1906 тестов):*
 
-`collectors/interfaces.py:241` — `if platform in ("qtech", "qtech_qsw")` для выбора LAG парсера.
-Для новой платформы нужно добавлять ветку в if/elif.
+#### ~~LAG parser dispatch~~ ✅ ВЫПОЛНЕНО
 
-**Подход:** Создать `LAG_COMMAND_MAP` в constants:
+`collectors/interfaces.py` — заменён `if/elif` на data-driven `LAG_PARSERS` dict:
 ```python
-LAG_COMMAND_MAP = {
-    "cisco_ios": {"command": "show etherchannel summary", "parser": "ntc"},
-    "cisco_nxos": {"command": "show port-channel summary", "parser": "ntc"},
-    "qtech": {"command": "show aggregatePort summary", "parser": "textfsm"},
+LAG_PARSERS = {
+    "qtech": "_parse_lag_membership_qtech",
+    "qtech_qsw": "_parse_lag_membership_qtech",
 }
+# Dispatch: getattr(self, LAG_PARSERS.get(platform))(output)
+# Default: _parse_lag_membership() для всех остальных платформ
 ```
-Dispatcher выбирает парсер по конфигу. **Зависимость:** стандартизация output TextFSM шаблонов для LAG.
+Для новой платформы с кастомным парсером — добавить метод и запись в `LAG_PARSERS`.
 
-#### Switchport normalization (Средний приоритет)
+#### ~~Switchport normalization~~ ✅ ВЫПОЛНЕНО
 
-`normalize_switchport_data()` содержит три ветки для IOS/NX-OS/QTech с определением платформы по полям.
-Для новой платформы нужно добавлять ветку.
+Извлечён `_resolve_trunk_mode(raw_vlans)` в `core/domain/interface.py`:
+```python
+@staticmethod
+def _resolve_trunk_mode(raw_vlans) -> tuple:
+    # list → str, "all"/"1-4094"/"1-4093"/"1-4095" → ("tagged-all", "")
+    # Конкретные VLAN → ("tagged", vlans_str)
+```
+Дублирование trunk VLAN resolution между Cisco IOS и NX-OS ветками устранено.
+Три ветки определения платформы (по полям) сохранены — они необходимы.
 
-**Подход:** Унифицировать output TextFSM шаблонов switchport: все возвращают одинаковые поля
-(INTERFACE, MODE, ACCESS_VLAN, NATIVE_VLAN, TAGGED_VLANS). Тогда нормализация тривиальна.
-**Зависимость:** изменение существующих TextFSM шаблонов.
+#### ~~Domain layer deduplication~~ ✅ ВЫПОЛНЕНО
 
-#### Domain layer — `_detect_from_hardware_type()` / `_detect_from_interface_name()` (Низкий приоритет)
+Три новых маппинга в `core/constants/interfaces.py`:
+- `MEDIA_TYPE_PORT_TYPE_MAP` — media_type паттерн → port_type
+- `HARDWARE_TYPE_PORT_TYPE_MAP` — hardware_type паттерн → port_type
+- `INTERFACE_NAME_PORT_TYPE_MAP` — префикс имени → port_type
 
-Методы в `core/domain/interface.py` дублируют маппинги из `core/constants/netbox.py`, но возвращают
-разные типы (port_type vs NetBox type). Для унификации нужен обратный маппинг и тщательное
-тестирование совпадения поведения.
+Методы `_detect_from_media_type()`, `_detect_from_hardware_type()`, `_detect_from_interface_name()`
+теперь итерируют по маппингам вместо if/elif. Порядок ключей критичен (более специфичные первыми).
+`get_netbox_interface_type()` в `netbox.py` не изменён — использует свои более специфичные маппинги.
 
 ---
 
@@ -1199,7 +1209,7 @@ Dispatcher выбирает парсер по конфигу. **Зависимо
 |---------|----------|
 | Python файлов | ~90 |
 | Строк кода | ~17,000 |
-| Тестов | 1838 |
+| Тестов | 1906 |
 | Тестовых категорий | 12 (включая test_configurator, корневые) |
 | CLI команд | 11 |
 | API endpoints | 13 |

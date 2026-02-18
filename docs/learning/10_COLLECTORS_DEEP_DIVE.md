@@ -575,6 +575,19 @@ GigabitEthernet0/1 is up, line protocol is up
 ]
 ```
 
+> **QTech: LINK_STATUS и administratively down**
+>
+> QTech может вернуть `administratively down` вместо простого `DOWN`:
+> ```
+> TFGigabitEthernet 0/3 is administratively down  , line protocol is DOWN
+> ```
+> TextFSM шаблон использует расширенный regex:
+> ```
+> Value LINK_STATUS ((?:administratively\s+)?(?:UP|DOWN|up|down))
+> ```
+> `(?:administratively\s+)?` — опциональная non-capturing группа, матчит `administratively ` перед `down`.
+> Далее нормализатор `STATUS_MAP` преобразует: `"administratively down"` → `"disabled"`.
+
 ---
 
 ## 5. InterfaceCollector
@@ -676,7 +689,14 @@ def _collect_from_device(self, device: Device) -> List[Dict[str, Any]]:
                 lag_cmd = self.lag_commands.get(device.platform)
                 if lag_cmd:
                     lag_response = conn.send_command(lag_cmd)
-                    lag_membership = self._parse_lag_membership(...)
+                    # Data-driven dispatch: LAG_PARSERS dict вместо if/elif
+                    parser_name = self.LAG_PARSERS.get(device.platform)
+                    if parser_name:
+                        lag_membership = getattr(self, parser_name)(lag_response.result)
+                    else:
+                        lag_membership = self._parse_lag_membership(
+                            lag_response.result, device.platform, lag_cmd,
+                        )
 
             switchport_modes = {}
             if self.collect_switchport:
@@ -719,6 +739,17 @@ def _collect_from_device(self, device: Device) -> List[Dict[str, Any]]:
 
 Все эти данные объединяются через `InterfaceNormalizer` из Domain Layer.
 
+> **Паттерн: data-driven dispatch** -- для LAG парсинга используется `LAG_PARSERS` dict вместо `if/elif`:
+> ```python
+> LAG_PARSERS = {
+>     "qtech": "_parse_lag_membership_qtech",
+>     "qtech_qsw": "_parse_lag_membership_qtech",
+> }
+> ```
+> Платформы с кастомным парсером указаны в dict. Все остальные используют generic `_parse_lag_membership()`.
+> Добавление нового парсера = одна строка в dict + метод-парсер. Не нужно править if/elif.
+> Используется `getattr(self, parser_name)` для получения метода по имени из строки.
+
 > **Python-концепция: method override и dict.get()** -- `_collect_from_device` переопределяет метод родительского класса. Python использует MRO (Method Resolution Order) чтобы найти правильную реализацию. `self.lag_commands.get(device.platform)` безопасно возвращает `None` если платформа не поддерживается (вместо KeyError).
 
 **Входные данные:** объект `Device(host="10.0.0.1", platform="cisco_iosxe")`
@@ -758,6 +789,7 @@ STATUS_MAP: Dict[str, str] = {
     "down": "down",
     "disabled": "disabled",
     "err-disabled": "error",
+    "errdisabled": "error",  # вариант без дефиса
     "administratively down": "disabled",
     "admin down": "disabled",
 }
@@ -784,6 +816,11 @@ def normalize_dicts(
 
 def _normalize_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
     result = dict(row)
+
+    # Убираем пробелы в имени интерфейса (QTech: "TFGigabitEthernet 0/39" -> "TFGigabitEthernet0/39")
+    iface_name = row.get("interface", "")
+    if iface_name:
+        result["interface"] = iface_name.replace(" ", "")
 
     # Нормализуем статус
     status = row.get("link_status", row.get("status", ""))
@@ -828,9 +865,8 @@ def detect_port_type(self, row: Dict[str, Any], iface_lower: str) -> str:
     media_type = row.get("media_type", "").lower()
 
     # LAG интерфейсы (Cisco Port-channel, QTech AggregatePort)
-    if iface_lower.startswith(("port-channel", "po", "aggregateport")):
-        return "lag"
-    if len(iface_lower) >= 3 and iface_lower[:2] == "ag" and iface_lower[2].isdigit():
+    # Единый источник: is_lag_name() из core/constants/interfaces.py
+    if is_lag_name(iface_lower):
         return "lag"
 
     # Виртуальные интерфейсы
@@ -867,6 +903,39 @@ def detect_port_type(self, row: Dict[str, Any], iface_lower: str) -> str:
 4. **Имя интерфейса** -- fallback. `"TenGigabitEthernet1/1"` -> `"10g-sfp+"`
 
 Для NetBox эти значения потом преобразуются в конкретные типы через `PORT_TYPE_MAP` и `get_netbox_interface_type()`.
+
+### Маппинги port_type (core/constants/interfaces.py)
+
+Три `_detect_from_*()` метода используют **shared маппинги** из `core/constants/interfaces.py`:
+
+```python
+# media_type паттерн → port_type
+MEDIA_TYPE_PORT_TYPE_MAP = {
+    "100gbase": "100g-qsfp28", "100g": "100g-qsfp28",
+    "10gbase": "10g-sfp+",     "10g": "10g-sfp+",
+    "1000base-t": "1g-rj45",   "rj45": "1g-rj45",
+    "1000base": "1g-sfp",      "sfp": "1g-sfp",
+    ...
+}
+
+# hardware_type паттерн → port_type (порядок: 10000 перед 1000!)
+HARDWARE_TYPE_PORT_TYPE_MAP = {
+    "100/1000/10000": "10g-sfp+",  # NX-OS multi-speed первым
+    "100000": "100g-qsfp28", "10000": "10g-sfp+",
+    "gigabit": "1g-rj45",  # 1G только после 10G
+    ...
+}
+
+# Префикс имени → port_type (hu, te, gi — требуют цифру после)
+INTERFACE_NAME_PORT_TYPE_MAP = {
+    "hundredgig": "100g-qsfp28", "hu": "100g-qsfp28",
+    "tengig": "10g-sfp+",        "te": "10g-sfp+",
+    "gigabit": "1g-rj45",        "gi": "1g-rj45",
+    ...
+}
+```
+
+**Зачем маппинги, а не if/elif?** Единый источник данных, easy to extend, порядок гарантирован dict-ом (Python 3.7+). Для новой скорости — добавить запись в маппинг.
 
 ### Двухуровневый маппинг: port_type vs NetBox type
 

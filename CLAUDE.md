@@ -52,6 +52,7 @@ python -m network_collector --help
 | 14 | **[14_INTERFACE_NAME_MAPPINGS.md](docs/learning/14_INTERFACE_NAME_MAPPINGS.md)** | Маппинг имён интерфейсов: Gi0/1 vs GigabitEthernet0/1 |
 | 15 | **[15_PUSH_CONFIG.md](docs/learning/15_PUSH_CONFIG.md)** | Push Config: YAML → маппинг платформ → ConfigPusher → Netmiko |
 | 16 | **[16_NETBOX_CLIENT_DEEP_DIVE.md](docs/learning/16_NETBOX_CLIENT_DEEP_DIVE.md)** | NetBox Client: pynetbox, 6 миксинов, bulk API, slug, lazy loading |
+| 17 | **[17_PYTHON_WORKBOOK.md](docs/learning/17_PYTHON_WORKBOOK.md)** | Workbook: ~60 задач, 15 блоков, 3 мини-проекта — пиши код сам |
 
 ## Ключевые файлы
 

@@ -133,6 +133,9 @@ def normalize_interface_full(interface: str) -> str:
     Returns:
         str: Полное имя
     """
+    # Убираем пробелы между типом и номером (QTech: "TFGigabitEthernet 0/48" → "TFGigabitEthernet0/48")
+    interface = interface.replace(" ", "").strip()
+
     for short_name, full_name in INTERFACE_FULL_MAP.items():
         if (
             interface.startswith(short_name)
@@ -215,3 +218,77 @@ def get_interface_aliases(interface: str) -> List[str]:
                     aliases.add(f"{extra}{suffix}")
 
     return list(aliases)
+
+
+# =============================================================================
+# МАППИНГ PORT_TYPE (упрощённая категория скорости)
+# =============================================================================
+# Используется в domain layer (detect_port_type) для единообразного определения
+# типа порта. Порядок ключей критичен — более специфичные паттерны первыми.
+
+# media_type паттерн → port_type
+# Пример: "SFP-10GBase-SR" содержит "10gbase" → "10g-sfp+"
+MEDIA_TYPE_PORT_TYPE_MAP: Dict[str, str] = {
+    "100gbase": "100g-qsfp28",
+    "100g": "100g-qsfp28",
+    "40gbase": "40g-qsfp",
+    "40g": "40g-qsfp",
+    "25gbase": "25g-sfp28",
+    "25g": "25g-sfp28",
+    "10gbase": "10g-sfp+",
+    "10g": "10g-sfp+",
+    "1000base-t": "1g-rj45",
+    "rj45": "1g-rj45",
+    "1000base": "1g-sfp",
+    "sfp": "1g-sfp",
+}
+
+# hardware_type паттерн → port_type
+# Порядок: NX-OS multi-speed → 100G → 40G → 25G → 10G → 1G
+# "10000" перед "1000" чтобы не было ложного совпадения
+HARDWARE_TYPE_PORT_TYPE_MAP: Dict[str, str] = {
+    # NX-OS multi-speed (должны быть первыми)
+    "100/1000/10000": "10g-sfp+",
+    # 100G
+    "100000": "100g-qsfp28",
+    "100g": "100g-qsfp28",
+    "hundred": "100g-qsfp28",
+    # 40G
+    "40000": "40g-qsfp",
+    "40g": "40g-qsfp",
+    "forty": "40g-qsfp",
+    # 25G
+    "25000": "25g-sfp28",
+    "25g": "25g-sfp28",
+    "twenty five": "25g-sfp28",
+    # 10G
+    "10000": "10g-sfp+",
+    "10g": "10g-sfp+",
+    "ten gig": "10g-sfp+",
+    "tfgigabitethernet": "10g-sfp+",  # QTech 10G
+    # 1G (после 10G, чтобы "10000" не матчил "1000")
+    "1000": "1g-rj45",
+    "gigabit": "1g-rj45",
+}
+
+# Префикс имени интерфейса → port_type
+# Короткие префиксы (hu, fo, twe, tf, te, gi, fa) требуют цифру после
+INTERFACE_NAME_PORT_TYPE_MAP: Dict[str, str] = {
+    "hundredgig": "100g-qsfp28",
+    "hu": "100g-qsfp28",
+    "fortygig": "40g-qsfp",
+    "fo": "40g-qsfp",
+    "twentyfivegig": "25g-sfp28",
+    "twe": "25g-sfp28",
+    "tfgigabitethernet": "10g-sfp+",  # QTech 10G
+    "tf": "10g-sfp+",  # QTech 10G короткий
+    "tengig": "10g-sfp+",
+    "te": "10g-sfp+",
+    "gigabit": "1g-rj45",
+    "gi": "1g-rj45",
+    "fastethernet": "100m-rj45",
+    "fa": "100m-rj45",
+}
+
+# Короткие префиксы, требующие цифры после (для port_type detection)
+_SHORT_PORT_TYPE_PREFIXES = {"hu", "fo", "twe", "tf", "te", "gi", "fa"}
