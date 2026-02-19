@@ -26,6 +26,7 @@ from ...core.constants import (
     INTERFACE_FULL_MAP,
     DEFAULT_PREFIX_LENGTH,
     normalize_interface_full,
+    normalize_interface_short,
     normalize_device_model,
     normalize_mac_netbox,
     get_netbox_interface_type,
@@ -184,14 +185,19 @@ class SyncBase:
         """
         Нормализует имя интерфейса для сравнения.
 
+        Используем SHORT form (Hu, Gi, Te) а не FULL form, потому что
+        разные вендоры имеют разные полные имена для одного типа:
+        - Cisco: HundredGigE → Hu
+        - QTech: HundredGigabitEthernet → Hu
+        Short form одинаковая для всех → надёжное сравнение.
+
         Args:
             name: Имя интерфейса
 
         Returns:
-            str: Нормализованное имя
+            str: Нормализованное имя (короткое, lowercase)
         """
-        name = normalize_interface_full(name.strip())
-        return name.lower()
+        return normalize_interface_short(name.strip(), lowercase=True)
 
     def _find_device_by_mac(self, mac: str) -> Optional[Any]:
         """

@@ -621,8 +621,8 @@ def get_interface_by_name(self, device_id, interface_name):
         if interfaces:
             return interfaces[0]
 
-    # Шаг 3: Case-insensitive (для LAG)
-    if interface_name.lower().startswith(("po", "port-channel", "ag", "aggregateport")):
+    # Шаг 3: Case-insensitive (для LAG) — через is_lag_name() из core/constants/interfaces.py
+    if is_lag_name(interface_name):
         all_interfaces = list(self.api.dcim.interfaces.filter(device_id=device_id))
         name_lower = normalized.lower()
         for intf in all_interfaces:
@@ -788,14 +788,22 @@ for variant in get_interface_aliases("GigabitEthernet0/1"):
 Помимо алиасов, в `core/constants/interfaces.py` есть функция для определения LAG:
 
 ```python
-LAG_PREFIXES = ("port-channel", "po", "aggregateport", "ag")
+# Длинные LAG-префиксы (startswith достаточно)
+_LAG_LONG_PREFIXES = ("port-channel", "aggregateport")
+# Короткие LAG-префиксы (после них нужна цифра)
+_LAG_SHORT_PREFIXES = ("po", "ag")
+# Все LAG-префиксы (для документации и реэкспорта)
+LAG_PREFIXES = _LAG_LONG_PREFIXES + _LAG_SHORT_PREFIXES
 
 def is_lag_name(interface: str) -> bool:
-    """Проверяет, является ли интерфейс LAG по имени."""
+    """Проверяет, является ли интерфейс LAG по имени.
+    Использует LAG_PREFIXES как единый источник."""
     iface_lower = interface.lower().replace(" ", "")
-    if iface_lower.startswith(("port-channel", "aggregateport")):
+    # Длинные префиксы — простой startswith
+    if iface_lower.startswith(_LAG_LONG_PREFIXES):
         return True
-    for prefix in ("po", "ag"):
+    # Короткие (po, ag) — после них должна быть цифра
+    for prefix in _LAG_SHORT_PREFIXES:
         if (iface_lower.startswith(prefix)
                 and len(iface_lower) > len(prefix)
                 and iface_lower[len(prefix)].isdigit()):
@@ -825,7 +833,9 @@ def is_lag_name(interface: str) -> bool:
 | **Collector** | `collectors/mac.py` | `get_interface_aliases()` | Алиасы для trunk портов |
 | **Domain** | `core/domain/interface.py` | `get_interface_aliases()` | Алиасы для switchport modes |
 | **Domain** | `core/domain/interface.py` | `get_interface_aliases()` | Fallback поиск при enrichment |
-| **Sync** | `netbox/sync/base.py` | `normalize_interface_full()` | Нормализация для кэша |
+| **Sync** | `netbox/sync/base.py` | `normalize_interface_short()` | Поиск интерфейса + сравнение |
+| **Sync** | `netbox/sync/cables.py` | `normalize_interface_short()` | Cleanup кабелей |
+| **Sync** | `core/domain/sync.py` | `normalize_interface_short()` | compare_cables diff |
 | **Client** | `netbox/client/interfaces.py` | `normalize_interface_full()` | Поиск LAG в NetBox API |
 
 ---
@@ -915,3 +925,142 @@ extra_Eth = "Eth1/1"        # Совпадает с short → дубликат
 
 Возвращает `list` потому что вызывающий код использует `for alias in aliases:` — list и set оба поддерживают итерацию, но list привычнее и предсказуемее (хотя тут порядок не важен).
 </details>
+
+---
+
+## 10. Нормализация в кабельной синхронизации
+
+Кабельная синхронизация -- самый сложный случай использования маппингов.
+LLDP имена сравниваются с именами из NetBox, и несовпадение приводит к ложным
+удалениям/созданиям кабелей.
+
+### 10.1. Проблема: три формы одного имени
+
+Для 100G интерфейсов существуют **три разных написания**:
+
+| Форма | Пример | Источник |
+|-------|--------|----------|
+| Cisco полное | `HundredGigE0/51` | NetBox (Cisco устройство) |
+| QTech полное | `HundredGigabitEthernet0/51` | NetBox (QTech устройство) |
+| Сокращённое | `Hu0/51` | LLDP Port ID |
+
+Плюс QTech добавляет **пробелы**: `"HundredGigabitEthernet 0/51"`.
+
+### 10.2. Почему `normalize_interface_full()` не подходит для сравнения
+
+```python
+normalize_interface_full("Hu0/51")
+# → "HundredGigE0/51" (всегда Cisco-стиль!)
+
+normalize_interface_full("HundredGigabitEthernet0/51")
+# → "HundredGigabitEthernet0/51" (не трогает — не начинается с Hu)
+```
+
+Результат: `"HundredGigE0/51" != "HundredGigabitEthernet0/51"` — **не совпадают**.
+
+### 10.3. Решение: `normalize_interface_short()` для сравнения
+
+```python
+normalize_interface_short("Hu0/51", lowercase=True)
+# → "hu0/51"
+
+normalize_interface_short("HundredGigE0/51", lowercase=True)
+# → "hu0/51"
+
+normalize_interface_short("HundredGigabitEthernet0/51", lowercase=True)
+# → "hu0/51"
+
+normalize_interface_short("HundredGigabitEthernet 0/51", lowercase=True)
+# → "hu0/51"
+```
+
+Все четыре варианта → одна короткая форма. **Надёжное сравнение.**
+
+### 10.4. Где используется short form
+
+| Место в коде | Файл | Что сравнивает |
+|---|---|---|
+| `_normalize_interface_name()` | `netbox/sync/base.py` | Поиск интерфейса в NetBox по LLDP имени |
+| `_cleanup_cables()` | `netbox/sync/cables.py` | LLDP endpoints vs NetBox cable endpoints |
+| `compare_cables()` | `core/domain/sync.py` | Diff: какие кабели создать/удалить |
+
+### 10.5. Полная цепочка: от сырого текста до кабеля
+
+```
+[1] Сырой LLDP вывод QTech:
+    Port ID : TFGigabitEthernet 0/48
+
+[2] TextFSM парсинг (NEIGHBOR_PORT_ID):
+    {"neighbor_port_id": "TFGigabitEthernet 0/48"}
+
+[3] KEY_MAPPING → port_id_value:
+    port_id_value = "TFGigabitEthernet 0/48"
+
+[4] _is_interface_name() → True → remote_port:
+    remote_port = "TFGigabitEthernet 0/48"
+
+[5] _find_interface("TFGigabitEthernet 0/48"):
+    normalize_interface_short → "tf0/48"
+    Ищем в кэше: "TFGigabitEthernet0/48" → normalize → "tf0/48" → MATCH!
+
+[6] cable_key (из NetBox объектов):
+    sorted(["QSW-01:TFGigabitEthernet0/48", "QSW-02:TFGigabitEthernet0/48"])
+
+[7] Повторный sync — compare_cables():
+    LLDP:  normalize_short("TFGigabitEthernet 0/48") → "tf0/48"
+    NetBox: normalize_short("TFGigabitEthernet0/48") → "tf0/48"
+    → MATCH → skip (не создаём дубликат)
+
+[8] Cleanup — _cleanup_cables():
+    valid_endpoints: {"qsw-01:tf0/48", "qsw-02:tf0/48"}
+    cable_endpoints: {"qsw-01:tf0/48", "qsw-02:tf0/48"}
+    → MATCH → не удаляем
+```
+
+### 10.6. Реальный пример: QTech + Cisco 9500
+
+Устройства:
+- `SU-QSW-6900-56F-01` (QTech) — порт `HundredGigabitEthernet 0/51`
+- `SU-C9500-48Y4C-01` (Cisco) — порт `HundredGigE2/0/52`
+
+LLDP от QTech видит Cisco сосед: `Port ID: Hu2/0/52` (сокращённое Cisco имя).
+
+```
+LLDP:   local = HundredGigabitEthernet 0/51    remote = Hu2/0/52
+         ↓ normalize_short()                     ↓ normalize_short()
+         hu0/51                                  hu2/0/52
+
+NetBox: QSW-01:HundredGigabitEthernet0/51 ↔ C9500-01:HundredGigE2/0/52
+         ↓ normalize_short()                ↓ normalize_short()
+         hu0/51                             hu2/0/52
+
+LLDP key:   ("su-c9500-48y4c-01:hu2/0/52", "su-qsw-6900-56f-01:hu0/51")
+NetBox key: ("su-c9500-48y4c-01:hu2/0/52", "su-qsw-6900-56f-01:hu0/51")
+                                              → MATCH ✅
+```
+
+### 10.7. Что проверить при добавлении нового вендора
+
+1. **TextFSM шаблон LLDP**: поле Port ID → `NEIGHBOR_PORT_ID` (не `NEIGHBOR_INTERFACE`)
+2. **INTERFACE_SHORT_MAP**: полное имя нового вендора → короткое
+   ```python
+   ("новоеполноеимя", "XX"),  # НовоеПолноеИмя0/1 → XX0/1
+   ```
+3. **INTERFACE_FULL_MAP**: короткое → полное
+   ```python
+   "XX": "НовоеПолноеИмя",  # XX0/1 → НовоеПолноеИмя0/1
+   ```
+4. **Тест**: запустить `sync-netbox --cables --dry-run` дважды — второй запуск
+   не должен создавать или удалять кабели
+5. **Пробелы**: если вендор ставит пробел в имени (`"НовоеИмя 0/1"`),
+   обе normalize-функции уберут его автоматически
+
+### 10.8. Итоговая таблица нормализации
+
+| Функция | Направление | Для чего | Пример |
+|---------|------------|----------|--------|
+| `normalize_interface_short(n, lowercase=True)` | Full → Short | **Сравнение** | `HundredGigabitEthernet0/51` → `hu0/51` |
+| `normalize_interface_full(n)` | Short → Full | **Отображение** | `Hu0/51` → `HundredGigE0/51` |
+| `get_interface_aliases(n)` | Any → All | **Поиск по dict** | `Te1/0/1` → `[Te1/0/1, TenGigabitEthernet1/0/1, Ten1/0/1]` |
+
+**Правило:** для **сравнения** всегда `normalize_interface_short()`. Для **отображения** — `normalize_interface_full()`. Для **поиска в dict** — `get_interface_aliases()`.

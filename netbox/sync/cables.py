@@ -10,7 +10,9 @@ from typing import List, Dict, Any, Optional
 from .base import (
     SyncBase, SyncStats, LLDPNeighbor, get_cable_endpoints,
     NetBoxError, format_error_for_log, logger,
+    normalize_interface_short,
 )
+from ...core.constants import normalize_hostname
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +87,7 @@ class CablesSyncMixin:
                 logger.warning(
                     f"Интерфейс соседа не найден: "
                     f"{remote_device_obj.name}:{remote_port}"
+                    f" (raw LLDP: '{entry.remote_port}')"
                 )
                 stats["skipped"] += 1
                 continue
@@ -108,22 +111,27 @@ class CablesSyncMixin:
             result = self._create_cable(local_intf_obj, remote_intf_obj)
 
             if result == "created":
-                # Используем имена из NetBox объектов (нормализованные)
+                # Используем имена из NetBox объектов (нормализованные, без пробелов)
                 a_name = local_device_obj.name
                 b_name = remote_device_obj.name
+                a_intf_name = local_intf_obj.name
+                b_intf_name = remote_intf_obj.name
                 # Дедупликация: сортируем endpoints чтобы A-B и B-A были одинаковы
-                cable_key = tuple(sorted([f"{a_name}:{local_intf}", f"{b_name}:{remote_port}"]))
+                cable_key = tuple(sorted([
+                    f"{a_name}:{a_intf_name}",
+                    f"{b_name}:{b_intf_name}",
+                ]))
                 if cable_key not in seen_cables:
                     seen_cables.add(cable_key)
                     stats["created"] += 1
                     if self.dry_run:
-                        logger.info(f"[DRY-RUN] Создание кабеля: {a_name}:{local_intf} ↔ {b_name}:{remote_port}")
+                        logger.info(f"[DRY-RUN] Создание кабеля: {a_name}:{a_intf_name} ↔ {b_name}:{b_intf_name}")
                     details["create"].append({
-                        "name": f"{a_name}:{local_intf} ↔ {b_name}:{remote_port}",
+                        "name": f"{a_name}:{a_intf_name} ↔ {b_name}:{b_intf_name}",
                         "a_device": a_name,
-                        "a_interface": local_intf,
+                        "a_interface": a_intf_name,
                         "b_device": b_name,
-                        "b_interface": remote_port,
+                        "b_interface": b_intf_name,
                     })
             elif result == "exists":
                 stats["already_exists"] += 1
@@ -163,17 +171,18 @@ class CablesSyncMixin:
         deleted_details = []
         failed_devices = 0
 
-        def normalize_hostname(name: str) -> str:
-            """Убирает домен из hostname (switch2.mylab.local -> switch2)."""
-            return name.split(".")[0] if "." in name else name
-
-        # Строим set валидных endpoints с нормализованными hostname
+        # Строим set валидных endpoints с нормализованными hostname и интерфейсами
+        # ВАЖНО: используем normalize_interface_short (не full!) потому что разные
+        # вендоры имеют разные полные имена для одного типа:
+        # Cisco: HundredGigE, QTech: HundredGigabitEthernet → оба → Hu (short)
         valid_endpoints = set()
         for entry in lldp_neighbors:
             if entry.hostname and entry.local_interface and entry.remote_hostname and entry.remote_port:
+                local_intf_norm = normalize_interface_short(entry.local_interface, lowercase=True)
+                remote_port_norm = normalize_interface_short(entry.remote_port, lowercase=True)
                 endpoints = tuple(sorted([
-                    f"{normalize_hostname(entry.hostname)}:{entry.local_interface}",
-                    f"{normalize_hostname(entry.remote_hostname)}:{entry.remote_port}",
+                    f"{normalize_hostname(entry.hostname)}:{local_intf_norm}",
+                    f"{normalize_hostname(entry.remote_hostname)}:{remote_port_norm}",
                 ]))
                 valid_endpoints.add(endpoints)
 
@@ -194,8 +203,17 @@ class CablesSyncMixin:
                 continue
 
             for cable in cables:
-                cable_endpoints = get_cable_endpoints(cable)
-                if cable_endpoints and cable_endpoints not in valid_endpoints:
+                raw_endpoints = get_cable_endpoints(cable)
+                if not raw_endpoints:
+                    continue
+                # Нормализуем hostname (strip domain) и interface name (short form)
+                # Short form нужна потому что NetBox может хранить HundredGigabitEthernet,
+                # а LLDP дать HundredGigE — оба → Hu (одинаковая short form)
+                cable_endpoints = tuple(sorted(
+                    f"{normalize_hostname(ep.split(':')[0])}:{normalize_interface_short(':'.join(ep.split(':')[1:]), lowercase=True)}"
+                    for ep in raw_endpoints
+                ))
+                if cable_endpoints not in valid_endpoints:
                     endpoint_devices = set()
                     for ep in cable_endpoints:
                         dev = ep.split(":")[0]
@@ -247,7 +265,7 @@ class CablesSyncMixin:
         neighbor_type = entry.neighbor_type or "unknown"
 
         if neighbor_type == "hostname":
-            clean_hostname = hostname.split(".")[0] if "." in hostname else hostname
+            clean_hostname = normalize_hostname(hostname)
             device = self._find_device(clean_hostname)
             if device:
                 return device

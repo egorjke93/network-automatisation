@@ -548,8 +548,9 @@ INTERFACE_NAME_PORT_TYPE_MAP: Dict[str, str] = {
 }
 # + добавить "fh" в _SHORT_PORT_TYPE_PREFIXES
 
-# 2. core/constants/netbox.py → INTERFACE_NAME_PREFIX_MAP
-# Добавить маппинг для get_netbox_interface_type()
+# 2. core/constants/netbox.py → PORT_TYPE_MAP
+# Добавить маппинг port_type → NetBox тип (автоматически подхватится в get_netbox_interface_type())
+# PORT_TYPE_MAP = { ..., "400g-qsfp-dd": "400gbase-x-qsfp-dd", }
 
 # 3. core/constants/interfaces.py → INTERFACE_SHORT_MAP / INTERFACE_FULL_MAP
 # Если нужны сокращения/расширения имён
@@ -613,7 +614,7 @@ NETBOX_INTERFACE_TYPE_MAP = {
    ↓ если пустой
 5. hardware_type (100/1000/10000) — макс. скорость (NETBOX_HARDWARE_TYPE_MAP)
    ↓ если пустой
-6. interface_name (TenGigabit)    — по имени (INTERFACE_NAME_PREFIX_MAP)
+6. interface_name (TenGigabit)    — по имени (INTERFACE_NAME_PORT_TYPE_MAP + PORT_TYPE_MAP)
    ↓ если не определился
 7. speed (fallback)               — по скорости в Mbps
 ```

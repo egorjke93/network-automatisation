@@ -135,6 +135,24 @@ def transliterate_to_slug(name: str) -> str:
 # =============================================================================
 
 
+def normalize_hostname(name: str) -> str:
+    """
+    Нормализует hostname: убирает домен.
+
+    switch2.mylab.local → switch2
+    switch2 → switch2
+
+    Args:
+        name: Hostname (с доменом или без)
+
+    Returns:
+        str: Короткое имя без домена
+    """
+    if not name:
+        return ""
+    return name.split(".")[0]
+
+
 def mask_to_prefix(mask: str) -> int:
     """
     Конвертирует маску сети в длину префикса.

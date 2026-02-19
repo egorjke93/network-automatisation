@@ -413,8 +413,8 @@ class DeviceInventoryCollector(DeviceCollector):
     def __init__(
         self,
         credentials: Optional[Credentials] = None,
-        site: str = "Main",
-        role: str = "Switch",
+        site: Optional[str] = None,
+        role: Optional[str] = None,
         tenant: str = "",
         manufacturer: str = "Cisco",
         **kwargs,
@@ -424,12 +424,19 @@ class DeviceInventoryCollector(DeviceCollector):
 
         Args:
             credentials: Учётные данные
-            site: Сайт по умолчанию
-            role: Роль устройства по умолчанию
+            site: Сайт по умолчанию (None = из fields.yaml)
+            role: Роль устройства по умолчанию (None = из fields.yaml)
             tenant: Арендатор по умолчанию
             manufacturer: Производитель по умолчанию
             **kwargs: Дополнительные параметры для DeviceCollector
         """
+        # Читаем defaults из конфига если не переданы явно
+        from ..fields_config import get_sync_config
+        sync_cfg = get_sync_config("devices")
+        if site is None:
+            site = sync_cfg.get_default("site", "Main")
+        if role is None:
+            role = sync_cfg.get_default("role", "Switch")
         # Сохраняем дефолтные значения для использования в lambda
         default_role = role
         default_manufacturer = manufacturer

@@ -1739,16 +1739,20 @@ def sync_cables_from_lldp(
         # 6. Создание кабеля
         result = self._create_cable(local_intf_obj, remote_intf_obj)
 
-        # 7. Дедупликация
+        # 7. Дедупликация (имена из NetBox объектов, не из LLDP!)
         if result == "created":
             cable_key = tuple(sorted([
-                f"{local_device_obj.name}:{local_intf}",
-                f"{remote_device_obj.name}:{remote_port}",
+                f"{local_device_obj.name}:{local_intf_obj.name}",
+                f"{remote_device_obj.name}:{remote_intf_obj.name}",
             ]))
             if cable_key not in seen_cables:
                 seen_cables.add(cable_key)
                 stats["created"] += 1
 ```
+
+> **Важно:** `cable_key` использует имена из **NetBox объектов** (`local_intf_obj.name`),
+> а не из сырых LLDP данных (`local_intf`). Это гарантирует что ключ совпадает
+> с тем, как кабель хранится в NetBox (нормализованные имена без пробелов).
 
 ### 5.2 Четыре стратегии поиска соседа
 
@@ -1855,6 +1859,651 @@ def _create_cable(self: SyncBase, interface_a, interface_b) -> str:
 
 > **Python-концепция: tuple как элемент set**
 > `tuple(sorted([...]))` создаёт неизменяемый (hashable) кортеж, который можно хранить в `set`. Сортировка гарантирует, что `("A:Gi0/1", "B:Gi0/2")` и `("B:Gi0/2", "A:Gi0/1")` дадут одинаковый кортеж.
+
+### 5.4 Нормализация имён: как LLDP и NetBox согласуются
+
+LLDP возвращает "сырые" имена интерфейсов (`"Mgmt 0"`, `"Gi1/0/4"`, `"Hu2/0/52"`),
+а NetBox хранит нормализованные (`"Mgmt0"`, `"GigabitEthernet1/0/4"`, `"HundredGigE2/0/52"`).
+
+Проблема усложняется тем, что **разные вендоры используют разные полные имена**:
+- Cisco: `HundredGigE` (100G), `TenGigabitEthernet` (10G)
+- QTech: `HundredGigabitEthernet` (100G), `TFGigabitEthernet` (10G)
+
+**Решение:** для сравнения используется **короткая форма** (`normalize_interface_short`),
+которая одинакова для всех вендоров:
+
+```
+HundredGigE0/51             → hu0/51  ← Cisco
+HundredGigabitEthernet0/51  → hu0/51  ← QTech
+Hu0/51                      → hu0/51  ← сокращение
+                                         Все три совпадают!
+```
+
+Где используется:
+
+| Место | Как нормализует |
+|-------|----------------|
+| `_find_interface()` | `normalize_interface_short(name, lowercase=True)` для обеих сторон |
+| `_cleanup_cables()` | Short form для valid_endpoints и cable_endpoints |
+| `compare_cables()` | Short form для local_set и remote_set |
+| `cable_key` в sync | Имена из NetBox объектов (уже нормализованные NetBox-ом) |
+
+```python
+# Файл: netbox/sync/base.py
+def _normalize_interface_name(self, name: str) -> str:
+    # Short form гарантирует совпадение кросс-вендорных имён:
+    # HundredGigE и HundredGigabitEthernet → оба → hu
+    return normalize_interface_short(name.strip(), lowercase=True)
+```
+
+> **Почему не `normalize_interface_full()`?**
+> `normalize_interface_full("Hu0/51")` → `HundredGigE0/51` (всегда Cisco-стиль).
+> Если NetBox хранит QTech-стиль `HundredGigabitEthernet0/51` — они **не совпадут**.
+> `normalize_interface_short()` приводит оба к `Hu0/51` → надёжное сравнение.
+
+### 5.5 Cleanup кабелей: что удалять
+
+`_cleanup_cables()` удаляет кабели из NetBox, которых нет в LLDP данных:
+
+```python
+# 1. Строим set валидных endpoints из LLDP (short form)
+valid_endpoints = set()
+for entry in lldp_neighbors:
+    local = normalize_interface_short(entry.local_interface, lowercase=True)
+    remote = normalize_interface_short(entry.remote_port, lowercase=True)
+    endpoints = tuple(sorted([
+        f"{hostname}:{local}",
+        f"{remote_hostname}:{remote}",
+    ]))
+    valid_endpoints.add(endpoints)
+
+# 2. Для каждого кабеля в NetBox — нормализуем endpoints (тоже short form)
+cable_endpoints = tuple(sorted(
+    f"{hostname}:{normalize_interface_short(intf_name, lowercase=True)}"
+    for ...
+))
+
+# 3. Если кабеля нет в valid_endpoints — удаляем
+if cable_endpoints not in valid_endpoints:
+    cable.delete()
+```
+
+Без нормализации short form: LLDP `"Gi1/0/4"` != NetBox `"GigabitEthernet1/0/4"`,
+и кабель был бы ложно удалён, а затем создан заново. С short form: оба → `"gi1/0/4"`.
+
+### 5.6 Полная цепочка синхронизации кабелей (каждый вызов)
+
+Ниже — **полный trace** от SSH до NetBox API. Для каждого шага указан файл, строка,
+функция, и что именно она делает. Пример данных: QTech свитч `SU-316-QSW` с 100G аплинком
+к Cisco 9500 `SU-CORE`.
+
+---
+
+#### Шаг 1: SSH → TextFSM → сырые данные
+
+**Файл:** `collectors/lldp.py` → `templates/qtech_show_lldp_neighbors_detail.textfsm`
+
+```
+# Устройство QTech QSW-6900-56F, CLI:
+show lldp neighbors detail
+
+# Вывод:
+  System Name    : SU-CORE.domain.local
+  Port ID        : HundredGigE2/0/52
+  Port Description: peer-keepalive
+
+# TextFSM шаблон парсит это в dict:
+{
+    "LOCAL_INTERFACE": "HundredGigabitEthernet 0/51",   # ← Filldown от первого блока
+    "NEIGHBOR": "SU-CORE.domain.local",
+    "NEIGHBOR_PORT_ID": "HundredGigE2/0/52",           # ← Port ID = реальный порт
+    "PORT_DESCRIPTION": "peer-keepalive",               # ← описание, НЕ порт
+    "MGMT_IP": "10.177.30.54",
+    "CHASSIS_ID": "aa:bb:cc:dd:ee:ff",
+}
+```
+
+> **ВАЖНО:** поле называется `NEIGHBOR_PORT_ID` (не `NEIGHBOR_INTERFACE`!).
+> Если назвать `NEIGHBOR_INTERFACE` — нормализатор маппит его в `port_description`
+> через KEY_MAPPING, и реальный Port Description перезапишет Port ID → данные потеряются.
+
+---
+
+#### Шаг 2: LLDPNormalizer._normalize_row() → маппинг ключей
+
+**Файл:** `core/domain/lldp.py`, метод `_normalize_row()` (строка 118)
+
+```python
+# Входные данные (из TextFSM, ключи уже lowercase):
+row = {
+    "local_interface": "HundredGigabitEthernet 0/51",
+    "neighbor": "SU-CORE.domain.local",
+    "neighbor_port_id": "HundredGigE2/0/52",
+    "port_description": "peer-keepalive",
+    "mgmt_ip": "10.177.30.54",
+    "chassis_id": "aa:bb:cc:dd:ee:ff",
+}
+
+# Цикл по ключам (строка 132):
+for key, value in row.items():
+    key_lower = key.lower()
+
+    # "neighbor_port_id" попадает сюда (строка 136):
+    if key_lower in ("port_id", "neighbor_port_id"):
+        port_id_value = "HundredGigE2/0/52"  # сохранили отдельно!
+        continue  # НЕ кладём в result через KEY_MAPPING
+
+    # "neighbor" → KEY_MAPPING → "remote_hostname" (строка 139):
+    new_key = KEY_MAPPING.get(key_lower, key_lower)
+    result[new_key] = value
+    # "neighbor" → result["remote_hostname"] = "SU-CORE.domain.local"
+    # "port_description" → result["port_description"] = "peer-keepalive"
+    # "mgmt_ip" → result["remote_ip"] = "10.177.30.54"
+    # "chassis_id" → result["remote_mac"] = "aa:bb:cc:dd:ee:ff"
+```
+
+---
+
+#### Шаг 3: Определение remote_port
+
+**Файл:** `core/domain/lldp.py`, строки 149-182
+
+```python
+# port_id_value = "HundredGigE2/0/52"
+# result пока НЕ содержит "remote_port"
+
+if not result.get("remote_port"):          # True — remote_port пуст
+    if port_id_value:                       # True — "HundredGigE2/0/52"
+        port_id_str = "HundredGigE2/0/52"
+
+        # Проверяем: это имя интерфейса? (строка 156)
+        if self._is_interface_name(port_id_str):  # True!
+            result["remote_port"] = "HundredGigE2/0/52"  # ← УСПЕХ
+```
+
+`_is_interface_name("HundredGigE2/0/52")` → проверяет по префиксам `("gi", "te", "hu", "fo", ...)` → `"hundredgige"` начинается с `"hu"` → **True**.
+
+---
+
+#### Шаг 4: Дедупликация LLDP TLV
+
+**Файл:** `core/domain/lldp.py`, метод `_deduplicate_neighbors()` (строка 198)
+
+Вызывается из `normalize_dicts()` (строка 115) после нормализации всех строк:
+
+```python
+# Допустим, от одного соседа пришли ДВА объявления:
+# entry_1: chassis_id_type="MAC address", NEIGHBOR_PORT_ID="Hu2/0/52", IP=10.177.30.54
+# entry_2: chassis_id_type="Locally assigned", NEIGHBOR_PORT_ID="HundredGigE2/0/52", IP=10.195.227.1
+
+# Ключ дедупликации (строки 214-217):
+local = normalize_interface_short("HundredGigabitEthernet 0/51", lowercase=True)
+# → "hu0/51"
+remote = "SU-CORE.domain.local".lower().split(".")[0]
+# → "su-core"
+key = ("hu0/51", "su-core")
+
+# Первая запись: seen[key] = entry_1 (remote_port = "Hu2/0/52")
+# Вторая запись: key уже в seen
+#   existing.remote_port = "Hu2/0/52" (заполнен)
+#   → оставляем existing, дополняем remote_ip из entry_2
+```
+
+**Результат после дедупликации:** одна запись вместо двух.
+
+---
+
+#### Шаг 5: sync_cables_from_lldp() — основной цикл
+
+**Файл:** `netbox/sync/cables.py`, метод `sync_cables_from_lldp()` (строка 22)
+
+```python
+# Входные данные — List[LLDPNeighbor]:
+entry = LLDPNeighbor(
+    hostname="SU-316-QSW",
+    local_interface="HundredGigabitEthernet 0/51",
+    remote_hostname="SU-CORE",
+    remote_port="HundredGigE2/0/52",
+    neighbor_type="hostname",
+    remote_ip="10.177.30.54",
+    remote_mac="aa:bb:cc:dd:ee:ff",
+)
+```
+
+##### 5a. Поиск локального устройства (строка 63)
+
+```python
+local_device_obj = self._find_device("SU-316-QSW")
+# base.py, строка 130: _find_device()
+#   → self.client.get_device_by_name("SU-316-QSW")
+#   → pynetbox API: GET /dcim/devices/?name=SU-316-QSW
+#   → Возвращает: Device(id=10, name="SU-316-QSW")
+```
+
+##### 5b. Поиск локального интерфейса (строка 69)
+
+```python
+local_intf_obj = self._find_interface(device_id=10, interface_name="HundredGigabitEthernet 0/51")
+```
+
+**Файл:** `netbox/sync/base.py`, метод `_find_interface()` (строка 152)
+
+```python
+# 1. Загрузка интерфейсов в кэш (строка 166-168):
+if device_id not in self._interface_cache:
+    interfaces = self.client.get_interfaces(device_id=10)
+    # → pynetbox API: GET /dcim/interfaces/?device_id=10
+    # → [Interface(name="HundredGigabitEthernet0/51"), Interface(name="TFGigabitEthernet0/1"), ...]
+    self._interface_cache[10] = {"HundredGigabitEthernet0/51": obj, "TFGigabitEthernet0/1": obj, ...}
+
+# 2. Точное совпадение (строка 173):
+cache = {"HundredGigabitEthernet0/51": obj, ...}
+if "HundredGigabitEthernet 0/51" in cache:  # НЕТУ! (пробел в LLDP, без пробела в NetBox)
+
+# 3. Нормализованное сравнение (строки 177-180):
+normalized = self._normalize_interface_name("HundredGigabitEthernet 0/51")
+# → normalize_interface_short("HundredGigabitEthernet 0/51".strip(), lowercase=True)
+#   → replace(" ", "") → "HundredGigabitEthernet0/51"
+#   → .lower() → "hundredgigabitethernet0/51"
+#   → startswith("hundredgigabitethernet") → True! → short = "Hu" + "0/51"
+#   → lowercase=True → "hu0/51"
+
+for name, intf in cache.items():
+    # name = "HundredGigabitEthernet0/51"
+    self._normalize_interface_name("HundredGigabitEthernet0/51")
+    # → "hu0/51"
+    # "hu0/51" == "hu0/51" → СОВПАДЕНИЕ!
+    return intf  # → Interface(id=42, name="HundredGigabitEthernet0/51")
+```
+
+##### 5c. Поиск удалённого устройства (строка 75)
+
+```python
+remote_device_obj = self._find_neighbor_device(entry)
+# cables.py, строка 260: _find_neighbor_device()
+#   neighbor_type = "hostname"
+#   → clean_hostname = "SU-CORE" (без домена)
+#   → self._find_device("SU-CORE")
+#   → Device(id=11, name="SU-CORE")
+```
+
+##### 5d. Поиск удалённого интерфейса (строка 84)
+
+```python
+remote_intf_obj = self._find_interface(device_id=11, interface_name="HundredGigE2/0/52")
+# base.py, _find_interface():
+#   cache = {"HundredGigE2/0/52": obj, ...}  # Cisco — NetBox хранит как HundredGigE
+#   Точное совпадение: "HundredGigE2/0/52" in cache → True!
+#   → Interface(id=78, name="HundredGigE2/0/52")
+```
+
+##### 5e. Проверка типа (строки 94-108)
+
+```python
+local_intf_type = getattr(local_intf_obj.type, 'value', None)
+# → "100gbase-x-qsfp28" (не "lag") → OK, не пропускаем
+```
+
+##### 5f. Создание кабеля (строка 110)
+
+```python
+result = self._create_cable(local_intf_obj, remote_intf_obj)
+# cables.py, строка 324: _create_cable()
+
+# 1. Проверяем: кабель уже есть? (строка 335)
+if interface_a.cable or interface_b.cable:
+    return "exists"  # ← если уже подключены
+
+# 2. Если dry_run (строка 341):
+if self.dry_run:
+    return "created"  # ← только считаем, без API
+
+# 3. Реальное создание (строка 347):
+self.client.api.dcim.cables.create({
+    "a_terminations": [{
+        "object_type": "dcim.interface",
+        "object_id": 42,                    # ← ID, не имя!
+    }],
+    "b_terminations": [{
+        "object_type": "dcim.interface",
+        "object_id": 78,                    # ← ID, не имя!
+    }],
+    "status": "connected",
+})
+# → POST /dcim/cables/ → кабель создан в NetBox
+```
+
+> **Ключевой момент:** кабель создаётся по **числовым ID** интерфейсов (42, 78).
+> Имена нужны только для поиска объектов. В NetBox кабель хранит ссылки на ID.
+
+##### 5g. Дедупликация кабелей A↔B / B↔A (строки 112-134)
+
+```python
+# LLDP видит кабель с ОБЕИХ сторон:
+# SU-316-QSW: "Hu0/51 → SU-CORE:Hu2/0/52"
+# SU-CORE:    "Hu2/0/52 → SU-316-QSW:Hu0/51"
+
+# cable_key — сортированный tuple (строки 119-122):
+cable_key = tuple(sorted([
+    "SU-316-QSW:HundredGigabitEthernet0/51",   # из local_intf_obj.name
+    "SU-CORE:HundredGigE2/0/52",                # из remote_intf_obj.name
+]))
+# → ("SU-316-QSW:HundredGigabitEthernet0/51", "SU-CORE:HundredGigE2/0/52")
+
+# С другой стороны:
+cable_key = tuple(sorted([
+    "SU-CORE:HundredGigE2/0/52",                # local
+    "SU-316-QSW:HundredGigabitEthernet0/51",     # remote
+]))
+# → ("SU-316-QSW:HundredGigabitEthernet0/51", "SU-CORE:HundredGigE2/0/52")
+# ОДИНАКОВЫЙ tuple! sorted() гарантирует порядок.
+
+# seen_cables — set (строка 42):
+if cable_key not in seen_cables:  # первый раз — True
+    seen_cables.add(cable_key)
+    stats["created"] += 1         # считаем один раз
+# второй раз — cable_key IN seen_cables → пропускаем
+```
+
+> **Здесь используются имена из NetBox объектов** (не raw LLDP).
+> Имена из NetBox уже без пробелов. cable_key нужен только для подсчёта в preview,
+> реальная дедупликация — через `interface_a.cable` (если кабель уже создан,
+> _create_cable вернёт "exists").
+
+---
+
+#### Шаг 6: _cleanup_cables() — удаление лишних
+
+**Файл:** `netbox/sync/cables.py`, метод `_cleanup_cables()` (строка 160)
+
+Вызывается если `cleanup=True` (строка 140).
+
+##### 6a. Построение valid_endpoints из LLDP (строки 181-190)
+
+```python
+valid_endpoints = set()
+for entry in lldp_neighbors:
+    # entry.local_interface = "HundredGigabitEthernet 0/51"
+    # entry.remote_port = "HundredGigE2/0/52"
+
+    local_intf_norm = normalize_interface_short(
+        "HundredGigabitEthernet 0/51", lowercase=True
+    )
+    # → replace(" ","") → "HundredGigabitEthernet0/51"
+    # → lower → "hundredgigabitethernet0/51"
+    # → INTERFACE_SHORT_MAP: startswith("hundredgigabitethernet") → "Hu" + "0/51"
+    # → lowercase=True → "hu0/51"
+
+    remote_port_norm = normalize_interface_short(
+        "HundredGigE2/0/52", lowercase=True
+    )
+    # → "hundredgige2/0/52"
+    # → startswith("hundredgige") → "Hu" + "2/0/52"
+    # → "hu2/0/52"
+
+    endpoints = tuple(sorted([
+        "su-316-qsw:hu0/51",     # normalize_hostname + local_intf_norm
+        "su-core:hu2/0/52",       # normalize_hostname + remote_port_norm
+    ]))
+    # → ("su-316-qsw:hu0/51", "su-core:hu2/0/52")
+    valid_endpoints.add(endpoints)
+```
+
+##### 6b. Получение кабелей из NetBox (строки 201-206)
+
+```python
+cables = self.client.get_cables(device_id=device.id)
+# → pynetbox API: GET /dcim/cables/?device_id=10
+# → [Cable(a_terminations=[Interface(name="HundredGigabitEthernet0/51", device="SU-316-QSW")],
+#          b_terminations=[Interface(name="HundredGigE2/0/52", device="SU-CORE")])]
+```
+
+##### 6c. Нормализация endpoints кабеля из NetBox (строки 208-218)
+
+```python
+for cable in cables:
+    raw_endpoints = get_cable_endpoints(cable)
+    # core/domain/sync.py, строка 29: get_cable_endpoints()
+    # → a_term.device.name = "SU-316-QSW", a_term.name = "HundredGigabitEthernet0/51"
+    # → b_term.device.name = "SU-CORE",    b_term.name = "HundredGigE2/0/52"
+    # → tuple(sorted(["SU-316-QSW:HundredGigabitEthernet0/51", "SU-CORE:HundredGigE2/0/52"]))
+
+    # Нормализуем в short form (строки 215-218):
+    cable_endpoints = tuple(sorted(
+        f"{normalize_hostname(ep.split(':')[0])}:{normalize_interface_short(':'.join(ep.split(':')[1:]), lowercase=True)}"
+        for ep in raw_endpoints
+    ))
+    # ep = "SU-316-QSW:HundredGigabitEthernet0/51"
+    #   → hostname = normalize_hostname("SU-316-QSW") → "SU-316-QSW" (нет домена)
+    #   → intf = normalize_interface_short("HundredGigabitEthernet0/51", lowercase=True) → "hu0/51"
+    #   → "SU-316-QSW:hu0/51"
+    # ep = "SU-CORE:HundredGigE2/0/52"
+    #   → "SU-CORE:hu2/0/52"
+    # → cable_endpoints = ("SU-316-QSW:hu0/51", "SU-CORE:hu2/0/52")  # sorted
+```
+
+> **Тот же hostname** (не lowercase!). Но LLDP сторона прошла через `normalize_hostname(entry.hostname)`
+> который тоже НЕ делает lowercase для hostname — только strip domain.
+> TODO: потенциальная проблема если hostname в LLDP и NetBox различается по регистру.
+
+##### 6d. Сравнение (строка 219)
+
+```python
+if cable_endpoints not in valid_endpoints:
+    # ("SU-316-QSW:hu0/51", "SU-CORE:hu2/0/52") in valid_endpoints?
+    # → ДА, совпадает → кабель НЕ удаляется
+
+    # Если бы НЕ совпадал (кабель в NetBox есть, но в LLDP нет):
+    # → Проверяем: оба устройства из LLDP? (строка 225)
+    if endpoint_devices.issubset(normalized_lldp_devices):
+        # → Удаляем только если ОБА конца в нашем LLDP dataset
+        # Это защита: не удалять кабели к устройствам которые мы не сканировали
+        self._delete_cable(cable)
+```
+
+---
+
+#### Шаг 7: compare_cables() — предварительный diff
+
+**Файл:** `core/domain/sync.py`, метод `compare_cables()` (строка 456)
+
+Вызывается из Pipeline для предварительного сравнения (до sync_cables_from_lldp).
+
+##### 7a. Нормализация LLDP стороны (строки 485-501)
+
+```python
+for item in local:  # local = List[Dict] из LLDP
+    # item = {"hostname": "SU-316-QSW", "local_interface": "HundredGigabitEthernet 0/51",
+    #         "remote_hostname": "SU-CORE.domain.local", "remote_port": "HundredGigE2/0/52"}
+
+    local_dev = normalize_hostname("SU-CORE.domain.local")
+    # → "SU-CORE" (strip domain)
+
+    local_port = normalize_interface_short("HundredGigabitEthernet 0/51", lowercase=True)
+    # → "hu0/51"
+
+    remote_dev = normalize_hostname("SU-CORE.domain.local")
+    # → "SU-CORE"
+
+    remote_port = normalize_interface_short("HundredGigE2/0/52", lowercase=True)
+    # → "hu2/0/52"
+
+    endpoints = tuple(sorted([
+        "su-316-qsw:hu0/51",
+        "su-core:hu2/0/52",
+    ]))
+    local_set.add(endpoints)
+```
+
+##### 7b. Нормализация NetBox стороны (строки 504-514)
+
+```python
+for cable in remote:  # remote = List[Cable] из NetBox
+    raw_endpoints = get_cable_endpoints(cable)
+    # → ("SU-316-QSW:HundredGigabitEthernet0/51", "SU-CORE:HundredGigE2/0/52")
+
+    endpoints = tuple(sorted(
+        f"{normalize_hostname(ep.split(':')[0])}:{normalize_interface_short(':'.join(ep.split(':')[1:]), lowercase=True)}"
+        for ep in raw_endpoints
+    ))
+    # → ("su-316-qsw:hu0/51", "su-core:hu2/0/52")
+    remote_set.add(endpoints)
+```
+
+##### 7c. Вычисление diff (строки 517-541)
+
+```python
+# Новые кабели (в LLDP, но не в NetBox):
+to_create = local_set - remote_set
+
+# Существующие (в обоих):
+to_skip = local_set & remote_set
+
+# Лишние (в NetBox, но не в LLDP):
+to_delete = remote_set - local_set  # только если cleanup=True
+```
+
+---
+
+#### Полная диаграмма вызовов
+
+```
+CLI: python -m network_collector sync-netbox --cables
+  │
+  ▼
+collectors/lldp.py: LLDPCollector.collect()
+  │ SSH: show lldp neighbors detail
+  │ TextFSM: NEIGHBOR_PORT_ID = "HundredGigE2/0/52"
+  ▼
+core/domain/lldp.py: LLDPNormalizer.normalize_dicts()
+  │ _normalize_row():
+  │   KEY_MAPPING: neighbor → remote_hostname
+  │   port_id_value = "HundredGigE2/0/52" (отдельно от KEY_MAPPING!)
+  │   _is_interface_name("HundredGigE2/0/52") → True
+  │   result["remote_port"] = "HundredGigE2/0/52"
+  │ _deduplicate_neighbors():
+  │   key = (normalize_interface_short(local, lc=True), hostname.split(".")[0])
+  │   key = ("hu0/51", "su-core")
+  │   дубликаты → одна запись
+  ▼
+List[LLDPNeighbor]:
+  hostname="SU-316-QSW", local_interface="HundredGigabitEthernet 0/51"
+  remote_hostname="SU-CORE", remote_port="HundredGigE2/0/52"
+  │
+  ▼
+netbox/sync/cables.py: sync_cables_from_lldp()
+  │
+  ├─► _find_device("SU-316-QSW") → Device(id=10)
+  │     base.py:130 → client.get_device_by_name() → pynetbox GET
+  │
+  ├─► _find_interface(10, "HundredGigabitEthernet 0/51")
+  │     base.py:152 → загрузка кэша: GET /dcim/interfaces/?device_id=10
+  │     base.py:173 → точное совпадение? НЕТ (пробел!)
+  │     base.py:177 → _normalize_interface_name("HundredGigabitEthernet 0/51")
+  │       base.py:200 → normalize_interface_short(name, lowercase=True)
+  │         interfaces.py:112 → replace(" ","") → lower → startswith map
+  │         "hundredgigabitethernet0/51" → "Hu" + "0/51" → "hu0/51"
+  │     base.py:179 → перебор кэша, каждый → _normalize_interface_name()
+  │       "HundredGigabitEthernet0/51" → "hu0/51" == "hu0/51" ✓
+  │     → Interface(id=42, name="HundredGigabitEthernet0/51")
+  │
+  ├─► _find_neighbor_device(entry)
+  │     cables.py:260 → neighbor_type="hostname"
+  │       hostname.split(".")[0] → "SU-CORE"
+  │       _find_device("SU-CORE") → Device(id=11)
+  │
+  ├─► _find_interface(11, "HundredGigE2/0/52")
+  │     base.py:152 → кэш Cisco: {"HundredGigE2/0/52": obj, ...}
+  │     base.py:173 → точное совпадение? ДА!
+  │     → Interface(id=78, name="HundredGigE2/0/52")
+  │
+  ├─► Проверка типа (строка 94):
+  │     local_intf_type = "100gbase-x-qsfp28" (не "lag") → OK
+  │
+  ├─► _create_cable(Interface(42), Interface(78))
+  │     cables.py:324
+  │     interface_a.cable? → None (не подключен) → продолжаем
+  │     dry_run? → если да: return "created" (без API)
+  │     POST /dcim/cables/ {a: id=42, b: id=78, status: "connected"}
+  │     → return "created"
+  │
+  └─► Дедупликация (строка 119):
+        cable_key = sorted(["SU-316-QSW:HundredGigabitEthernet0/51",
+                            "SU-CORE:HundredGigE2/0/52"])
+        seen_cables.add(cable_key)
+        stats["created"] += 1
+```
+
+---
+
+#### Диаграмма маппингов: какой где используется
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  core/constants/interfaces.py — ЕДИНЫЙ ИСТОЧНИК МАППИНГОВ        │
+│                                                                   │
+│  INTERFACE_SHORT_MAP (List[tuple]):                               │
+│    ("hundredgigabitethernet", "Hu")  ← QTech 100G                │
+│    ("hundredgige", "Hu")             ← Cisco 100G                │
+│    ("tfgigabitethernet", "TF")       ← QTech 10G                 │
+│    ("tengigabitethernet", "Te")      ← Cisco 10G                 │
+│    ("gigabitethernet", "Gi")         ← все вендоры               │
+│    ("fastethernet", "Fa")            ← все вендоры               │
+│    Используется в: normalize_interface_short()                    │
+│                                                                   │
+│  INTERFACE_FULL_MAP (Dict[str, str]):                             │
+│    "Hu" → "HundredGigE"             ← всегда Cisco-стиль!       │
+│    "TF" → "TFGigabitEthernet"       ← QTech                     │
+│    Используется в: normalize_interface_full()                     │
+│    ⚠ НЕ используется для сравнения кабелей!                      │
+│                                                                   │
+│  INTERFACE_NAME_PORT_TYPE_MAP (Dict[str, str]):                   │
+│    "hundredgig" → "100g-qsfp28"                                  │
+│    "hu" → "100g-qsfp28"                                          │
+│    "tengig" → "10g-sfp+"                                         │
+│    "gi" → "1g-rj45"                                              │
+│    Используется в: domain/interface.py _detect_from_interface_name()│
+│                    + netbox.py _detect_type_by_name_prefix()      │
+└──────────────────────────────────────────────────────────────────┘
+                                    │
+                    ┌───────────────┼──────────────────┐
+                    ▼               ▼                  ▼
+         ┌──────────────┐  ┌──────────────┐   ┌──────────────────┐
+         │  СРАВНЕНИЕ    │  │  ТИП ПОРТА   │   │  ТИП ДЛЯ NETBOX  │
+         │  (кабели)     │  │  (domain)    │   │  (api)           │
+         │               │  │              │   │                  │
+         │ SHORT_MAP     │  │ PORT_TYPE    │   │ PORT_TYPE_MAP    │
+         │ ↓             │  │ MAP          │   │ ↓               │
+         │ "hu0/51"      │  │ ↓            │   │ "100g-qsfp28"   │
+         │               │  │ "100g-qsfp28"│   │ → "100gbase-x-  │
+         │ Файлы:        │  │              │   │    qsfp28"       │
+         │ base.py       │  │ Файл:        │   │                  │
+         │ cables.py     │  │ interface.py │   │ Файл:            │
+         │ sync.py       │  │              │   │ netbox.py        │
+         └──────────────┘  └──────────────┘   └──────────────────┘
+```
+
+#### Где какой маппинг используется (полная таблица)
+
+| Задача | Метод | Вызов | Маппинг | Файл |
+|--------|-------|-------|---------|------|
+| Сокращение имени | `normalize_interface_short()` | `interfaces.py:116` | `INTERFACE_SHORT_MAP` | interfaces.py |
+| Расширение имени | `normalize_interface_full()` | `interfaces.py:139` | `INTERFACE_FULL_MAP` | interfaces.py |
+| Поиск интерфейса | `_find_interface()` | `base.py:177` → `_normalize_interface_name()` → `normalize_interface_short(lc=True)` | SHORT_MAP | base.py |
+| Дедупликация LLDP | `_deduplicate_neighbors()` | `lldp.py:214` → `normalize_interface_short(lc=True)` | SHORT_MAP | lldp.py |
+| cable_key (preview) | `sync_cables_from_lldp()` | `cables.py:119` | Имена из NetBox объектов (as-is) | cables.py |
+| valid_endpoints | `_cleanup_cables()` | `cables.py:184-185` → `normalize_interface_short(lc=True)` | SHORT_MAP | cables.py |
+| cable_endpoints | `_cleanup_cables()` | `cables.py:215-217` → `normalize_interface_short(lc=True)` | SHORT_MAP | cables.py |
+| Diff LLDP сторона | `compare_cables()` | `sync.py:490,492` → `normalize_interface_short(lc=True)` | SHORT_MAP | sync.py |
+| Diff NetBox сторона | `compare_cables()` | `sync.py:509-511` → `normalize_interface_short(lc=True)` | SHORT_MAP | sync.py |
+| Определение port_type | `detect_port_type()` | `interface.py:234` → `_detect_from_interface_name()` | `INTERFACE_NAME_PORT_TYPE_MAP` | interface.py |
+| Определение NetBox типа | `get_netbox_interface_type()` | `netbox.py:396` → `_detect_type_by_name_prefix()` | `INTERFACE_NAME_PORT_TYPE_MAP` + `PORT_TYPE_MAP` | netbox.py |
+
+> **Ключевой принцип:**
+> - Для **сравнения** (найти интерфейс, сравнить кабели, дедупликация) — `normalize_interface_short(lowercase=True)`. Все варианты → одна форма: `"hu0/51"`.
+> - Для **определения типа** (какой тип записать в NetBox) — `INTERFACE_NAME_PORT_TYPE_MAP` → `PORT_TYPE_MAP`.
+> - Для **создания кабеля** — числовые ID объектов из NetBox API (не имена!).
+> - Имена интерфейсов в NetBox **остаются как были** — short form нигде не записывается в NetBox.
 
 ---
 

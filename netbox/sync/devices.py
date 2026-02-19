@@ -136,8 +136,8 @@ class DevicesSyncMixin:
     def sync_devices_from_inventory(
         self: SyncBase,
         inventory_data: List[DeviceInfo],
-        site: str = "Main",
-        role: str = "switch",
+        site: Optional[str] = None,
+        role: Optional[str] = None,
         update_existing: bool = True,
         cleanup: bool = False,
         tenant: Optional[str] = None,
@@ -158,6 +158,13 @@ class DevicesSyncMixin:
         Returns:
             Dict: Статистика {created, updated, skipped, deleted, failed, details}
         """
+        # Читаем defaults из конфига (fields.yaml sync.devices.defaults)
+        sync_cfg = get_sync_config("devices")
+        if site is None:
+            site = sync_cfg.get_default("site", "Main")
+        if role is None:
+            role = sync_cfg.get_default("role", "switch")
+
         ss = SyncStats("created", "updated", "skipped", "deleted", "failed")
         stats, details = ss.stats, ss.details
 
@@ -171,7 +178,7 @@ class DevicesSyncMixin:
             manufacturer = entry.manufacturer or "Cisco"
             ip_address = entry.ip_address or ""
             platform = entry.platform or ""
-            # Per-device site: берём из устройства, fallback на default
+            # Per-device site: берём из устройства, fallback на default из конфига
             device_site = entry.site or site
 
             if not name:

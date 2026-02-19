@@ -5,6 +5,8 @@ Mixin для работы с интерфейсами NetBox.
 import logging
 from typing import List, Any, Optional
 
+from ...core.constants.interfaces import is_lag_name
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,7 +79,7 @@ class InterfacesMixin:
                 return interfaces[0]
 
         # Для LAG попробуем регистронезависимый поиск
-        if interface_name.lower().startswith(("po", "port-channel", "ag", "aggregateport")):
+        if is_lag_name(interface_name):
             all_interfaces = list(self.api.dcim.interfaces.filter(device_id=device_id))
             name_lower = normalized_name.lower()
             for intf in all_interfaces:

@@ -10,8 +10,12 @@ from typing import Dict, List
 # LAG-ИНТЕРФЕЙСЫ
 # =============================================================================
 
-# Префиксы LAG-интерфейсов (все варианты написания, lowercase)
-LAG_PREFIXES = ("port-channel", "po", "aggregateport", "ag")
+# Длинные LAG-префиксы (startswith достаточно)
+_LAG_LONG_PREFIXES = ("port-channel", "aggregateport")
+# Короткие LAG-префиксы (после них нужна цифра)
+_LAG_SHORT_PREFIXES = ("po", "ag")
+# Все LAG-префиксы (для документации и реэкспорта)
+LAG_PREFIXES = _LAG_LONG_PREFIXES + _LAG_SHORT_PREFIXES
 
 
 def is_lag_name(interface: str) -> bool:
@@ -19,6 +23,7 @@ def is_lag_name(interface: str) -> bool:
     Проверяет, является ли интерфейс LAG по имени.
 
     Поддерживает все форматы: Port-channel1, Po1, AggregatePort 1, Ag1.
+    Использует LAG_PREFIXES как единый источник.
 
     Args:
         interface: Имя интерфейса в любом регистре
@@ -30,10 +35,10 @@ def is_lag_name(interface: str) -> bool:
         return False
     iface_lower = interface.lower().replace(" ", "")
     # Длинные префиксы — простой startswith
-    if iface_lower.startswith(("port-channel", "aggregateport")):
+    if iface_lower.startswith(_LAG_LONG_PREFIXES):
         return True
     # Короткие (po, ag) — после них должна быть цифра
-    for prefix in ("po", "ag"):
+    for prefix in _LAG_SHORT_PREFIXES:
         if (iface_lower.startswith(prefix)
                 and len(iface_lower) > len(prefix)
                 and iface_lower[len(prefix)].isdigit()):
@@ -261,10 +266,13 @@ HARDWARE_TYPE_PORT_TYPE_MAP: Dict[str, str] = {
     "25000": "25g-sfp28",
     "25g": "25g-sfp28",
     "twenty five": "25g-sfp28",
+    "twentyfive": "25g-sfp28",  # без пробела
+    "twenty-five": "25g-sfp28",  # через дефис
     # 10G
     "10000": "10g-sfp+",
     "10g": "10g-sfp+",
     "ten gig": "10g-sfp+",
+    "tengig": "10g-sfp+",  # без пробела (NX-OS, Arista)
     "tfgigabitethernet": "10g-sfp+",  # QTech 10G
     # 1G (после 10G, чтобы "10000" не матчил "1000")
     "1000": "1g-rj45",

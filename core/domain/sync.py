@@ -21,7 +21,7 @@ from enum import Enum
 import logging
 import re
 
-from ..constants import mask_to_prefix
+from ..constants import mask_to_prefix, normalize_interface_short, normalize_hostname
 
 logger = logging.getLogger(__name__)
 
@@ -472,17 +472,22 @@ class SyncComparator:
         """
         diff = SyncDiff(object_type="cables")
 
+        # normalize_hostname из core/constants/utils.py (strip domain)
+
         # Нормализуем local: создаём ключ из endpoints
+        # ВАЖНО: используем SHORT form (Hu, Gi, Te) для interface names потому что
+        # разные вендоры имеют разные полные имена для одного типа:
+        # Cisco: HundredGigE, QTech: HundredGigabitEthernet → оба → Hu (short)
         local_set = set()
         local_dict = {}
         for item in local:
             if hasattr(item, "to_dict"):
                 item = item.to_dict()
             # Ключ: (local_device:local_port, remote_device:remote_port) - sorted
-            local_dev = item.get("hostname", "")
-            local_port = item.get("local_interface", "")
-            remote_dev = item.get("remote_hostname", "")
-            remote_port = item.get("remote_port", "")
+            local_dev = normalize_hostname(item.get("hostname", ""))
+            local_port = normalize_interface_short(item.get("local_interface", ""), lowercase=True)
+            remote_dev = normalize_hostname(item.get("remote_hostname", ""))
+            remote_port = normalize_interface_short(item.get("remote_port", ""), lowercase=True)
 
             if local_dev and local_port and remote_dev and remote_port:
                 # Сортируем endpoints для уникальности (A-B = B-A)
@@ -493,12 +498,16 @@ class SyncComparator:
                 local_set.add(endpoints)
                 local_dict[endpoints] = item
 
-        # Нормализуем remote кабели
+        # Нормализуем remote кабели (hostname + interface → short form)
         remote_set = set()
         remote_dict = {}
         for cable in remote:
-            endpoints = get_cable_endpoints(cable)
-            if endpoints:
+            raw_endpoints = get_cable_endpoints(cable)
+            if raw_endpoints:
+                endpoints = tuple(sorted(
+                    f"{normalize_hostname(ep.split(':')[0])}:{normalize_interface_short(':'.join(ep.split(':')[1:]), lowercase=True)}"
+                    for ep in raw_endpoints
+                ))
                 remote_set.add(endpoints)
                 remote_dict[endpoints] = cable
 

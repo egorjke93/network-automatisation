@@ -3092,9 +3092,11 @@ class PortType(str, Enum):
     def from_name(cls, interface_name):
         name_lower = interface_name.lower()
         physical = ("gi", "fa", "te", "eth", "twentyfive", "hundred")
+        # В реальном коде используются константы из core/constants/:
+        # LAG_PREFIXES, VIRTUAL_INTERFACE_PREFIXES, MGMT_INTERFACE_PATTERNS
         lag = ("po", "port-channel", "aggregateport", "ag")
-        virtual = ("vlan", "loopback", "lo", "tunnel", "nve")
-        mgmt = ("mgmt", "management")
+        virtual = ("vlan", "loopback", "lo", "null", "tunnel", "nve")
+        mgmt = ("mgmt", "management", "oob", "fxp")
 
         for prefix in lag:
             if name_lower.startswith(prefix):

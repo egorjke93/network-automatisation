@@ -869,12 +869,14 @@ def detect_port_type(self, row: Dict[str, Any], iface_lower: str) -> str:
     if is_lag_name(iface_lower):
         return "lag"
 
-    # Виртуальные интерфейсы
-    if iface_lower.startswith(("vlan", "loopback", "null", "tunnel", "nve")):
+    # Виртуальные интерфейсы (VIRTUAL_INTERFACE_PREFIXES из core/constants/netbox.py)
+    # Включает: vlan, loopback, lo, null, tunnel, nve
+    if iface_lower.startswith(VIRTUAL_INTERFACE_PREFIXES):
         return "virtual"
 
-    # Management - обычно copper
-    if iface_lower.startswith(("mgmt", "management")):
+    # Management - обычно copper (MGMT_INTERFACE_PATTERNS из core/constants/netbox.py)
+    # Включает: mgmt, management, oob, fxp
+    if iface_lower.startswith(MGMT_INTERFACE_PATTERNS):
         return "1g-rj45"
 
     # 1. По media_type (наиболее точный)

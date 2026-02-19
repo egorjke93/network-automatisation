@@ -18,6 +18,7 @@
 12. [Добавление нового вендора: полное руководство](#12-добавление-нового-вендора-полное-руководство)
 13. [Inventory: show inventory vs transceiver](#1215-inventory-show-inventory-vs-show-interface-transceiver)
 14. [QTech SVI: проверка VLAN интерфейсов](#1216-qtech-svi-добавление-vlan-интерфейсов)
+15. [LLDP шаблоны и кабельная синхронизация](#1217-lldp-шаблоны-и-кабельная-синхронизация)
 
 ---
 
@@ -1773,8 +1774,9 @@ def detect_port_type(self, row, iface_lower):
         return "lag"
     # Для нового LAG формата: добавить в is_lag_name()
 
-    # Виртуальные интерфейсы
-    if iface_lower.startswith(("vlan", "loopback", "null", "tunnel", "nve")):
+    # Виртуальные интерфейсы (VIRTUAL_INTERFACE_PREFIXES из core/constants/netbox.py)
+    # Включает: vlan, loopback, lo, null, tunnel, nve
+    if iface_lower.startswith(VIRTUAL_INTERFACE_PREFIXES):
         return "virtual"
 
     # По media_type, hardware_type (data-driven маппинги)
@@ -1802,7 +1804,8 @@ def get_netbox_interface_type(interface_name, media_type, hardware_type, port_ty
     # media_type → NETBOX_INTERFACE_TYPE_MAP (точный тип трансивера)
     # port_type → PORT_TYPE_MAP (нормализованный из коллектора)
     # Для нового вендора: если стандартные имена — ничего добавлять не нужно
-    # Если уникальные имена — добавить в INTERFACE_NAME_PREFIX_MAP (core/constants/netbox.py)
+    # Если уникальные имена — добавить в INTERFACE_NAME_PORT_TYPE_MAP (core/constants/interfaces.py)
+    # и PORT_TYPE_MAP (core/constants/netbox.py) для конвертации в NetBox тип
 ```
 
 **Если Eltex использует стандартные имена** — ничего добавлять не нужно.
@@ -2142,7 +2145,7 @@ python -m network_collector sync-netbox --interfaces --dry-run 2>&1 | grep -i vl
 - [ ] `core/constants/interfaces.py` — добавить в `INTERFACE_SHORT_MAP` / `INTERFACE_FULL_MAP` [§12.6]
 - [ ] `core/constants/interfaces.py` — добавить в `SHORT_TO_EXTRA` (алиасы для LAG matching) [§12.8]
 - [ ] `core/constants/interfaces.py` — добавить в `INTERFACE_NAME_PORT_TYPE_MAP` (data-driven detect_port_type) [§12.7]
-- [ ] `core/constants/netbox.py` — добавить в `INTERFACE_NAME_PREFIX_MAP` или `get_netbox_interface_type()` [§12.7]
+- [ ] `core/constants/netbox.py` — добавить в `PORT_TYPE_MAP` маппинг port_type → NetBox тип [§12.7]
 
 ### Если LAG/switchport формат уникальный
 
@@ -2154,6 +2157,487 @@ python -m network_collector sync-netbox --interfaces --dry-run 2>&1 | grep -i vl
 
 - [ ] `core/constants/commands.py` — добавить в `SECONDARY_COMMANDS["media_type"]` (для определения SFP) [§12.5]
 - [ ] `core/domain/inventory.py` — добавить manufacturer patterns [§12.10]
+
+### LLDP и кабели
+
+- [ ] TextFSM шаблон LLDP: поле Port ID → `NEIGHBOR_PORT_ID` (НЕ `NEIGHBOR_INTERFACE`!) [§12.17]
+- [ ] Если несколько LLDP neighbors на одном порту — `Filldown` на `LOCAL_INTERFACE` [§12.17]
+- [ ] Проверить нормализацию имён интерфейсов: `INTERFACE_SHORT_MAP` содержит полное имя [§12.6]
+- [ ] Проверить кабели с `--dry-run`: нет ложных удалений/созданий [§12.17]
+
+---
+
+## 12.17 LLDP шаблоны и кабельная синхронизация
+
+При добавлении нового вендора с поддержкой LLDP/CDP нужно проверить несколько вещей.
+
+### 17a. Именование полей в TextFSM LLDP шаблоне
+
+**Критично:** поле Port ID соседа должно называться `NEIGHBOR_PORT_ID`, а **не** `NEIGHBOR_INTERFACE`.
+
+Почему: нормализатор LLDP (`core/domain/lldp.py`) использует `KEY_MAPPING`:
+```python
+KEY_MAPPING = {
+    "neighbor_interface": "port_description",   # ← НЕ port ID!
+    "neighbor_port_id": "port_id",              # ← правильно
+    ...
+}
+```
+
+Если назвать поле `NEIGHBOR_INTERFACE`, оно попадёт в `port_description`, а затем
+будет перезаписано реальным полем `PORT_DESCRIPTION`. Результат: `remote_port = ""`.
+
+**Пример правильного шаблона:**
+```
+Value NEIGHBOR_PORT_ID (.+)         # ← Port ID соседа
+Value PORT_DESCRIPTION (.+)         # ← описание порта (отдельное поле)
+
+  ^\s+Port ID\s+:\s+${NEIGHBOR_PORT_ID}
+  ^\s+Port description\s+:\s+${PORT_DESCRIPTION}
+```
+
+### 17b. Несколько соседей на одном порту
+
+Некоторые устройства (например, Cisco 9500) отправляют **два LLDP TLV** с разными
+`chassis_id_type` (MAC address и Locally assigned). Нормализатор автоматически
+дедуплицирует записи по ключу `(local_interface, remote_hostname)`.
+
+Для поддержки в TextFSM: если один `LLDP neighbor-information of port` блок содержит
+несколько `Neighbor index`, нужно:
+1. Добавить `Filldown` к `LOCAL_INTERFACE` (наследуется от первого блока)
+2. Добавить переход по `Neighbor index` в `Start` state
+
+**Пример:**
+```
+Value Filldown,Required LOCAL_INTERFACE (\S+\s+\d+(?:/\d+)?)
+
+Start
+  ^LLDP neighbor-information of port \[${LOCAL_INTERFACE}\] -> NeighborBlock
+  ^\s+Neighbor index -> NeighborBlock
+
+NeighborBlock
+  ...
+  ^\s+802\.1 organizationally -> Record Start
+  ^LLDP neighbor-information of port \[${LOCAL_INTERFACE}\] -> Record Start
+```
+
+### 17c. Сопоставление имён интерфейсов в кабелях
+
+При кабельной синхронизации LLDP имена сравниваются с NetBox именами.
+Разные вендоры используют **разные полные имена** для одного типа порта:
+
+| Тип | Cisco | QTech | Короткое |
+|-----|-------|-------|----------|
+| 100G | `HundredGigE` | `HundredGigabitEthernet` | `Hu` |
+| 10G | `TenGigabitEthernet` | `TFGigabitEthernet` | `Te` / `TF` |
+| 1G | `GigabitEthernet` | `GigabitEthernet` | `Gi` |
+
+**Как система сопоставляет:**
+
+1. **Поиск интерфейса** (`_find_interface()`): нормализует ОБА имени (LLDP и NetBox)
+   через `normalize_interface_short(name, lowercase=True)` и сравнивает.
+   Так `HundredGigE0/51` и `HundredGigabitEthernet0/51` оба → `hu0/51` — совпадение.
+
+2. **Кабельный ключ**: при создании кабеля использует имена из NetBox объектов
+   (уже нормализованные самим NetBox).
+
+3. **Cleanup кабелей**: нормализует через short form для сравнения LLDP endpoints
+   с NetBox endpoints.
+
+**Что проверить для нового вендора:**
+
+1. Полное имя интерфейса добавлено в `INTERFACE_SHORT_MAP` (lowercase → short):
+   ```python
+   ("новоеимя", "XX"),  # НовоеИмя0/1 → XX0/1
+   ```
+
+2. Короткое имя добавлено в `INTERFACE_FULL_MAP` (short → full):
+   ```python
+   "XX": "НовоеИмя",  # XX0/1 → НовоеИмя0/1
+   ```
+
+3. Запустить кабельную синхронизацию с `--dry-run` и проверить что:
+   - Кабели создаются (а не пропускаются из-за "interface not found")
+   - Кабели не удаляются ложно при повторном sync
+
+### 17d. Пробелы в именах интерфейсов
+
+QTech и некоторые другие платформы возвращают имена с пробелом:
+`"TFGigabitEthernet 0/48"`, `"Mgmt 0"`.
+
+Обе функции нормализации (`normalize_interface_short()` и `normalize_interface_full()`)
+автоматически убирают пробелы. Но важно проверить что:
+- TextFSM шаблон правильно захватывает имя с пробелом
+- Value regex включает пробел: `(\S+\s+\d+(?:/\d+)?)` — пробел между типом и номером
+
+---
+
+## 12.18 Сводная таблица маппингов: что, где, зачем
+
+Все маппинги собраны в двух файлах — `core/constants/interfaces.py` и `core/constants/netbox.py`.
+Ниже — полная карта: какой маппинг для чего нужен, где используется, и что добавлять
+при появлении нового вендора.
+
+### Два потока данных
+
+В проекте есть **два независимых потока**, использующих разные маппинги:
+
+```
+Поток 1: СРАВНЕНИЕ (поиск интерфейса, кабели)
+  normalize_interface_short() → INTERFACE_SHORT_MAP
+  "HundredGigabitEthernet 0/51" → "hu0/51"
+  Цель: привести к одной форме для сравнения
+
+Поток 2: ОПРЕДЕЛЕНИЕ ТИПА (какой тип записать в NetBox)
+  detect_port_type() → INTERFACE_NAME_PORT_TYPE_MAP → PORT_TYPE_MAP
+  "hu0/51" → port_type="100g-qsfp28" → netbox_type="100gbase-x-qsfp28"
+  Цель: определить тип интерфейса для NetBox API
+```
+
+### Все маппинги на одной странице
+
+#### 1. `INTERFACE_SHORT_MAP` — нормализация имён (полное → короткое)
+
+**Файл:** `core/constants/interfaces.py`
+**Тип:** `List[tuple]` (порядок важен! длинные префиксы первыми)
+
+```python
+INTERFACE_SHORT_MAP = [
+    ("twentyfivegigabitethernet", "Twe"),   # 25G
+    ("hundredgigabitethernet", "Hu"),        # QTech 100G
+    ("hundredgige", "Hu"),                   # Cisco 100G  ← ОБА → "Hu"
+    ("fortygigabitethernet", "Fo"),          # 40G
+    ("tfgigabitethernet", "TF"),             # QTech 10G
+    ("tengigabitethernet", "Te"),            # Cisco 10G
+    ("gigabitethernet", "Gi"),               # 1G
+    ("fastethernet", "Fa"),                  # 100M
+    ("aggregateport", "Ag"),                 # QTech LAG
+    ("ethernet", "Eth"),                     # NX-OS
+    ("port-channel", "Po"),                  # Cisco LAG
+]
+```
+
+**Используется в:** `normalize_interface_short(name, lowercase=True)`
+
+**Кто вызывает:**
+
+| Вызывающий | Файл | Зачем |
+|------------|------|-------|
+| `_normalize_interface_name()` | `netbox/sync/base.py:200` | Поиск интерфейса в NetBox по LLDP имени |
+| `_cleanup_cables()` | `netbox/sync/cables.py:184-185` | Сравнение LLDP endpoints с кабелями NetBox |
+| `compare_cables()` | `core/domain/sync.py:490-511` | Diff: какие кабели создать/удалить |
+| `_deduplicate_neighbors()` | `core/domain/lldp.py:214` | Ключ дедупликации LLDP TLV |
+
+**При добавлении нового вендора:** если у него уникальные полные имена интерфейсов
+(как QTech `TFGigabitEthernet`) — добавить запись `("новоеимя", "XX")`.
+Если имена стандартные (как у Cisco) — ничего добавлять не нужно.
+
+---
+
+#### 2. `INTERFACE_FULL_MAP` — обратная нормализация (короткое → полное)
+
+**Файл:** `core/constants/interfaces.py`
+**Тип:** `Dict[str, str]`
+
+```python
+INTERFACE_FULL_MAP = {
+    "Gi": "GigabitEthernet",
+    "Te": "TenGigabitEthernet",
+    "TF": "TFGigabitEthernet",     # QTech 10G
+    "Hu": "HundredGigE",           # ← всегда Cisco-стиль!
+    "Fo": "FortyGigabitEthernet",
+    "Ag": "AggregatePort",         # QTech LAG
+    "Po": "Port-channel",
+}
+```
+
+**Используется в:** `normalize_interface_full(name)`
+
+**Кто вызывает:** отображение имён в UI/Excel/логах. **НЕ используется** для сравнения кабелей!
+
+> **Важно:** `INTERFACE_FULL_MAP` расширяет `Hu` → `HundredGigE` (Cisco-стиль).
+> Если NetBox хранит QTech-стиль `HundredGigabitEthernet` — имена **не совпадут**.
+> Поэтому для сравнения используется `INTERFACE_SHORT_MAP` (→ short form), а не full.
+
+**При добавлении нового вендора:** добавить `"XX": "НовоеИмя"` для обратного
+раскрытия сокращений.
+
+---
+
+#### 3. `INTERFACE_NAME_PORT_TYPE_MAP` — определение типа порта по имени
+
+**Файл:** `core/constants/interfaces.py`
+**Тип:** `Dict[str, str]`
+
+```python
+INTERFACE_NAME_PORT_TYPE_MAP = {
+    "hundredgig": "100g-qsfp28",       # 100G (Cisco + QTech)
+    "hu": "100g-qsfp28",               # 100G (короткий)
+    "fortygig": "40g-qsfp",            # 40G
+    "fo": "40g-qsfp",                  # 40G (короткий)
+    "twentyfivegig": "25g-sfp28",      # 25G
+    "twe": "25g-sfp28",                # 25G (короткий)
+    "tfgigabitethernet": "10g-sfp+",   # QTech 10G
+    "tf": "10g-sfp+",                  # QTech 10G (короткий)
+    "tengig": "10g-sfp+",              # Cisco 10G
+    "te": "10g-sfp+",                  # Cisco 10G (короткий)
+    "gigabit": "1g-rj45",              # 1G
+    "gi": "1g-rj45",                   # 1G (короткий)
+    "fastethernet": "100m-rj45",       # 100M
+    "fa": "100m-rj45",                 # 100M (короткий)
+}
+```
+
+**Значения** — domain-level port_type (платформонезависимая категория скорости).
+
+**Используется в:**
+
+| Вызывающий | Файл | Зачем |
+|------------|------|-------|
+| `_detect_from_interface_name()` | `core/domain/interface.py:232` | Domain: определить port_type по имени |
+| `_detect_type_by_name_prefix()` | `core/constants/netbox.py:203` | NetBox: определить NetBox тип (через PORT_TYPE_MAP) |
+
+**При добавлении нового вендора:** если у вендора уникальное имя → новая скорость
+(например `FourHundredGigE` = 400G), добавить:
+```python
+"fourhundredgig": "400g-qsfp-dd",
+"fh": "400g-qsfp-dd",
+```
+И добавить `"fh"` в `_SHORT_PORT_TYPE_PREFIXES`.
+
+---
+
+#### 4. `PORT_TYPE_MAP` — конвертация port_type → NetBox тип
+
+**Файл:** `core/constants/netbox.py`
+**Тип:** `Dict[str, str]`
+
+```python
+PORT_TYPE_MAP = {
+    "100g-qsfp28": "100gbase-x-qsfp28",
+    "40g-qsfp":    "40gbase-x-qsfpp",
+    "25g-sfp28":   "25gbase-x-sfp28",
+    "10g-sfp+":    "10gbase-x-sfpp",
+    "1g-sfp":      "1000base-x-sfp",
+    "1g-rj45":     "1000base-t",
+    "100m-rj45":   "100base-tx",
+    "lag":         "lag",
+    "virtual":     "virtual",
+}
+```
+
+**Мост** между domain-level port_type и NetBox API type.
+
+**Используется в:**
+
+| Вызывающий | Файл | Зачем |
+|------------|------|-------|
+| `get_netbox_interface_type()` приоритет 5 | `netbox.py:380` | Прямая конвертация port_type → NetBox |
+| `_detect_type_by_name_prefix()` | `netbox.py:236` | Fallback: имя → port_type → NetBox |
+
+**При добавлении нового типа порта:** добавить маппинг, например:
+```python
+"400g-qsfp-dd": "400gbase-x-qsfp-dd",
+```
+
+---
+
+#### 5. `NETBOX_INTERFACE_TYPE_MAP` — media_type → NetBox тип (точный)
+
+**Файл:** `core/constants/netbox.py`
+**Тип:** `Dict[str, str]` (~80 записей)
+
+```python
+NETBOX_INTERFACE_TYPE_MAP = {
+    "qsfp 100g lr4": "100gbase-lr4",
+    "100gbase-sr4":  "100gbase-sr4",
+    "sfp-10gbase-lr": "10gbase-lr",
+    "sfp-10gbase-sr": "10gbase-sr",
+    "1000basesx":     "1000base-sx",
+    "sfp+":           "10gbase-x-sfpp",
+    ...
+}
+```
+
+**Самый точный маппинг** — определяет конкретный тип трансивера (не generic "10G SFP+",
+а именно "10GBASE-SR").
+
+**Используется в:** `get_netbox_interface_type()` приоритет 4 (строка 370)
+
+**При добавлении нового трансивера:** добавить паттерн media_type в lowercase:
+```python
+"sfp-25gbase-aoc": "25gbase-sr",  # Active Optical Cable 25G
+```
+
+---
+
+#### 6. `NETBOX_HARDWARE_TYPE_MAP` — hardware_type → NetBox тип
+
+**Файл:** `core/constants/netbox.py`
+**Тип:** `Dict[str, str]`
+
+```python
+NETBOX_HARDWARE_TYPE_MAP = {
+    "hundred gig": "100gbase-x-qsfp28",
+    "ten gig":     "10gbase-x-sfpp",
+    "gigabit":     "1000base-t",
+    "fast ethernet": "100base-tx",
+    ...
+}
+```
+
+**Используется в:** `get_netbox_interface_type()` приоритет 6 (строка 384)
+
+**При добавлении нового вендора:** если hardware_type содержит нестандартные строки,
+добавить паттерн в lowercase.
+
+---
+
+#### 7. `_SHORT_PORT_TYPE_PREFIXES` — короткие префиксы для port_type detection
+
+**Файл:** `core/constants/interfaces.py`
+**Тип:** `set`
+
+```python
+_SHORT_PORT_TYPE_PREFIXES = {"hu", "fo", "twe", "tf", "te", "gi", "fa"}
+```
+
+Защита от ложных совпадений: `"te"` не должен совпасть с `"test_interface"`.
+Для коротких префиксов проверяется, что **после** них стоит цифра.
+
+**При добавлении нового вендора:** если добавили короткий prefix (2-3 символа)
+в `INTERFACE_NAME_PORT_TYPE_MAP` — добавить его сюда.
+
+---
+
+### Цепочка определения типа интерфейса для NetBox
+
+`get_netbox_interface_type()` проверяет источники **по приоритету**:
+
+```
+Приоритет 1: LAG/Virtual                → по имени (is_lag_name) или port_type
+Приоритет 2: Management                 → всегда "1000base-t"
+Приоритет 3: media_type                 → NETBOX_INTERFACE_TYPE_MAP (самый точный!)
+Приоритет 4: port_type                  → PORT_TYPE_MAP (из коллектора)
+Приоритет 5: hardware_type              → NETBOX_HARDWARE_TYPE_MAP
+Приоритет 6: interface_name             → INTERFACE_NAME_PORT_TYPE_MAP + PORT_TYPE_MAP
+Приоритет 7: speed (fallback)           → по скорости в Mbps
+```
+
+**Пример для QTech TFGigabitEthernet с трансивером 10GBASE-SR:**
+
+```
+1. LAG? Нет
+2. Management? Нет
+3. media_type = "10GBASE-SR-SFP+"
+   → NETBOX_INTERFACE_TYPE_MAP: паттерн "10gbase-sr" найден!
+   → return "10gbase-sr"                                         ← ТОЧНЫЙ тип
+```
+
+**Пример для QTech TFGigabitEthernet БЕЗ трансивера:**
+
+```
+1. LAG? Нет
+2. Management? Нет
+3. media_type = "" (пусто)           → пропуск
+4. port_type = "10g-sfp+"            → PORT_TYPE_MAP → "10gbase-x-sfpp"
+   → return "10gbase-x-sfpp"                                     ← generic тип
+```
+
+**Пример когда ничего не задано (только имя):**
+
+```
+1-5. Все пусто                       → пропуск
+6. interface_name = "tfgigabitethernet0/1"
+   → INTERFACE_NAME_PORT_TYPE_MAP: "tfgigabitethernet" → "10g-sfp+"
+   → PORT_TYPE_MAP: "10g-sfp+" → "10gbase-x-sfpp"
+   → return "10gbase-x-sfpp"                                     ← fallback
+```
+
+---
+
+### Цепочка сравнения кабелей
+
+Кабельная синхронизация сравнивает имена из LLDP с именами из NetBox.
+Всё сравнение через **short form** (`normalize_interface_short(lowercase=True)`):
+
+```
+LLDP:   "HundredGigabitEthernet 0/51"  (QTech, с пробелом)
+NetBox: "HundredGigE0/51"              (Cisco-стиль, без пробела)
+
+Нормализация обеих сторон:
+  replace(" ","") → lower → INTERFACE_SHORT_MAP lookup
+  "hundredgigabitethernet0/51" → startswith("hundredgigabitethernet") → "Hu" → "hu0/51"
+  "hundredgige0/51"            → startswith("hundredgige")           → "Hu" → "hu0/51"
+                                                                        ↓
+                                                                  СОВПАДАЮТ
+```
+
+**Где происходит сравнение:**
+
+| Этап | Метод | Файл | Что сравнивает |
+|------|-------|------|----------------|
+| Поиск интерфейса | `_find_interface()` | `base.py:177` | LLDP имя ↔ имена в кэше NetBox |
+| Создание кабеля | `_create_cable()` | `cables.py:347` | Использует ID объектов (не имена!) |
+| Дедупликация A↔B | `cable_key` | `cables.py:119` | Имена из NetBox объектов (sorted tuple) |
+| Cleanup | `_cleanup_cables()` | `cables.py:184-219` | LLDP endpoints (short) ↔ NetBox endpoints (short) |
+| Diff | `compare_cables()` | `sync.py:490-511` | local_set (short) ↔ remote_set (short) |
+
+> **Кабель создаётся по числовым ID** (`object_id: 42, 78`), а не по именам.
+> Short form нужна только для **поиска** и **сравнения**. Имена в NetBox остаются как есть.
+
+---
+
+### Сводная таблица: что добавлять при новом вендоре
+
+| Ситуация | Файл | Маппинг | Что добавить |
+|----------|------|---------|--------------|
+| Уникальные имена (как QTech TF) | `interfaces.py` | `INTERFACE_SHORT_MAP` | `("новоеимя", "XX")` — порядок: длинные первыми! |
+| | `interfaces.py` | `INTERFACE_FULL_MAP` | `"XX": "НовоеИмя"` |
+| | `interfaces.py` | `SHORT_TO_EXTRA` в `get_interface_aliases()` | `"xx": ["НовоеИмя"]` — для switchport matching |
+| Новая скорость (400G, 800G) | `interfaces.py` | `INTERFACE_NAME_PORT_TYPE_MAP` | `"fourhundredgig": "400g-qsfp-dd"` |
+| | `interfaces.py` | `_SHORT_PORT_TYPE_PREFIXES` | `"fh"` (если добавлен короткий prefix) |
+| | `netbox.py` | `PORT_TYPE_MAP` | `"400g-qsfp-dd": "400gbase-x-qsfp-dd"` |
+| Новый трансивер/SFP | `netbox.py` | `NETBOX_INTERFACE_TYPE_MAP` | `"sfp-400g-dr4": "400gbase-dr4"` |
+| Нестандартный hardware_type | `netbox.py` | `NETBOX_HARDWARE_TYPE_MAP` | `"four hundred gig": "400gbase-x-qsfp-dd"` |
+| Новый тип LAG | `interfaces.py` | `is_lag_name()` → `LAG_PREFIXES` | Добавить prefix |
+| Стандартные Cisco имена | — | — | **Ничего** не нужно |
+
+### Пример: добавление Eltex MES с именем `ExtremeEthernet` (10G)
+
+```python
+# 1. core/constants/interfaces.py → INTERFACE_SHORT_MAP
+INTERFACE_SHORT_MAP = [
+    ...
+    ("extremeethernet", "Xe"),    # Eltex 10G ← ДОБАВИТЬ
+    ...
+]
+
+# 2. core/constants/interfaces.py → INTERFACE_FULL_MAP
+INTERFACE_FULL_MAP = {
+    ...
+    "Xe": "ExtremeEthernet",      # Eltex 10G ← ДОБАВИТЬ
+}
+
+# 3. core/constants/interfaces.py → INTERFACE_NAME_PORT_TYPE_MAP
+# НЕ нужно если ExtremeEthernet = 10G (уже покрыто "tengig"/"te")
+# Нужно ТОЛЬКО если префикс уникальный:
+INTERFACE_NAME_PORT_TYPE_MAP = {
+    ...
+    "extremeethernet": "10g-sfp+",   # ← ДОБАВИТЬ
+    "xe": "10g-sfp+",                # ← ДОБАВИТЬ
+}
+# + добавить "xe" в _SHORT_PORT_TYPE_PREFIXES
+
+# 4. core/constants/netbox.py → PORT_TYPE_MAP
+# НЕ нужно — "10g-sfp+" уже есть в PORT_TYPE_MAP
+
+# 5. Проверка:
+# normalize_interface_short("ExtremeEthernet0/1") → "Xe0/1" ✓
+# normalize_interface_short("ExtremeEthernet0/1", lowercase=True) → "xe0/1" ✓
+# detect_port_type({"interface": "ExtremeEthernet0/1"}, "extremeethernet0/1") → "10g-sfp+" ✓
+# get_netbox_interface_type("ExtremeEthernet0/1") → "10gbase-x-sfpp" ✓
+```
 
 ---
 

@@ -951,6 +951,299 @@ Value LINK_STATUS ((?:administratively\s+)?(?:UP|DOWN|up|down))
 
 ---
 
+## Баг 12: QTech LLDP — потеря remote_port (NEIGHBOR PORT = None)
+
+**Дата:** Февраль 2026
+**Симптом:** В Excel экспорте LLDP столбец NEIGHBOR PORT = None для всех QTech записей. В parsed JSON — заполнен. Кабели не создаются (1 из 10).
+
+### Причина: цепочка потери данных в TextFSM → нормализатор
+
+**Файл 1:** `templates/qtech_show_lldp_neighbors_detail.textfsm`
+
+TextFSM шаблон QTech называл поле Port ID как `NEIGHBOR_INTERFACE`. В нормализаторе `KEY_MAPPING` маппит `neighbor_interface` → `port_description` (так задумано для NTC Templates, где `neighbor_interface` = Port Description).
+
+**Файл 2:** `core/domain/lldp.py` — `KEY_MAPPING`
+
+```
+Цепочка потери:
+TextFSM: NEIGHBOR_INTERFACE = "TFGigabitEthernet 0/48"  (реальный Port ID)
+→ KEY_MAPPING: neighbor_interface → port_description = "TFGigabitEthernet 0/48"
+→ PORT_DESCRIPTION → port_description = "peer-keepalive" (ПЕРЕЗАПИСЫВАЕТ!)
+→ port_id_value = None (нет поля port_id/neighbor_port_id)
+→ remote_port = "" (пусто!)
+```
+
+### Исправление
+
+Переименование в TextFSM шаблоне:
+```
+# Было:
+Value NEIGHBOR_INTERFACE (.+)
+  ^\s+Port ID\s+:\s+${NEIGHBOR_INTERFACE}
+
+# Стало:
+Value NEIGHBOR_PORT_ID (.+)
+  ^\s+Port ID\s+:\s+${NEIGHBOR_PORT_ID}
+```
+
+`NEIGHBOR_PORT_ID` → lowercased → `neighbor_port_id` → попадает в обработку `port_id_value` в нормализаторе → `_is_interface_name()` → True → `remote_port = "TFGigabitEthernet 0/48"`.
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `templates/qtech_show_lldp_neighbors_detail.textfsm` | `NEIGHBOR_INTERFACE` → `NEIGHBOR_PORT_ID` (строки 8, 23) |
+
+---
+
+## Баг 13: QTech LLDP — два соседа на одном порту (двойные TLV)
+
+**Дата:** Февраль 2026
+**Симптом:** На порту HundredGigabitEthernet 0/51 QTech — два LLDP объявления от одного Cisco 9500. TextFSM парсил только первое (второе игнорировалось). После исправления бага 12 — оба парсятся, но создаются дубли.
+
+### Причина 1: TextFSM шаблон не поддерживал множественных соседей на порту
+
+Шаблон использовал `Required LOCAL_INTERFACE` без `Filldown`. При переходе `802.1 organizationally -> Record Start` значение LOCAL_INTERFACE очищалось, и в состоянии Start строка `Neighbor index : 2` не матчилась — второй сосед терялся.
+
+### Причина 2: Cisco 9500 отправляет два LLDP TLV
+
+Один и тот же сосед отправляет:
+- TLV 1: chassis_id_type="MAC address", Port ID="Hu2/0/52", IP=10.177.30.54
+- TLV 2: chassis_id_type="Locally assigned", Port ID="HundredGigE2/0/52", IP=10.195.227.1
+
+Это одно физическое соединение.
+
+### Исправление
+
+**TextFSM:** `Filldown` для LOCAL_INTERFACE + переход `Neighbor index -> NeighborBlock` в Start:
+```
+Value Filldown,Required LOCAL_INTERFACE (...)
+
+Start
+  ^LLDP neighbor-information of port \[${LOCAL_INTERFACE}\] -> NeighborBlock
+  ^\s+Neighbor index -> NeighborBlock
+```
+
+**Нормализатор:** Метод `_deduplicate_neighbors()` — дедупликация по ключу `(local_interface, remote_hostname_short)`. При дупликатах оставляет запись с remote_port, дополняет remote_mac из другой записи.
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `templates/qtech_show_lldp_neighbors_detail.textfsm` | `Filldown` + `Neighbor index` переход + фикс Record target |
+| `core/domain/lldp.py` | Метод `_deduplicate_neighbors()`, вызов в `normalize_dicts()` |
+
+---
+
+## Баг 14: Кабели — нормализация имён (удаление/пересоздание)
+
+**Дата:** Февраль 2026
+**Симптом:** Кабели ошибочно удаляются и пересоздаются при каждом sync. В логах: удаление `Mgmt0` кабеля → создание `Mgmt 0` кабеля (тот же физический кабель).
+
+### Причина: три места с несогласованными именами
+
+LLDP возвращает "сырые" имена из устройства, NetBox хранит нормализованные:
+
+| LLDP (сырой) | NetBox (нормализованный) |
+|---|---|
+| `Mgmt 0` | `Mgmt0` |
+| `Gi1/0/4` | `GigabitEthernet1/0/4` |
+| `HundredGigabitEthernet 0/51` | `HundredGigabitEthernet0/51` |
+
+**Место 1:** `sync_cables_from_lldp()` строка 115 — cable_key использовал сырые LLDP имена.
+**Место 2:** `_cleanup_cables()` строка 174 — valid_endpoints из сырых LLDP имён.
+**Место 3:** `compare_cables()` строка 482 — endpoint ключи из сырых LLDP данных.
+
+Все три сравнивались с `get_cable_endpoints()`, который возвращал нормализованные имена из NetBox → ключи не совпадали → кабели ошибочно помечались для удаления/создания.
+
+### Исправление
+
+**cables.py:**
+```python
+# cable_key — из NetBox объектов (нормализованные)
+cable_key = tuple(sorted([
+    f"{a_name}:{local_intf_obj.name}",
+    f"{b_name}:{remote_intf_obj.name}",
+]))
+
+# _cleanup_cables — нормализация интерфейсов через SHORT form
+local_intf_norm = normalize_interface_short(entry.local_interface, lowercase=True)
+remote_port_norm = normalize_interface_short(entry.remote_port, lowercase=True)
+```
+
+**sync.py (compare_cables):**
+```python
+local_dev = _normalize_hostname(item.get("hostname", ""))
+local_port = normalize_interface_short(item.get("local_interface", ""), lowercase=True)
+```
+
+**base.py (_normalize_interface_name):**
+```python
+# Было: normalize_interface_full(name.strip()).lower()
+# Стало:
+return normalize_interface_short(name.strip(), lowercase=True)
+```
+
+### Как сопоставляются имена интерфейсов
+
+#### Три формы имён интерфейсов
+
+Для каждого типа интерфейса существуют три формы записи:
+
+| Тип | Short (сокращённая) | Full Cisco | Full QTech |
+|-----|---------------------|------------|------------|
+| 100G | `Hu0/51` | `HundredGigE0/51` | `HundredGigabitEthernet0/51` |
+| 10G | `Te1/0/1` или `TF0/1` | `TenGigabitEthernet1/0/1` | `TFGigabitEthernet0/1` |
+| 1G | `Gi0/1` | `GigabitEthernet0/1` | `GigabitEthernet0/1` |
+| 25G | `Twe1/0/17` | `TwentyFiveGigE1/0/17` | — |
+
+**Ключевая проблема:** у 100G портов **два разных полных имени** (`HundredGigE` vs `HundredGigabitEthernet`), но **одна сокращённая форма** (`Hu`).
+
+#### Две функции нормализации
+
+| Функция | Направление | Пример |
+|---------|------------|--------|
+| `normalize_interface_short()` | Full → Short | `HundredGigabitEthernet0/51` → `Hu0/51` |
+| `normalize_interface_full()` | Short → Full | `Hu0/51` → `HundredGigE0/51` |
+
+- `normalize_interface_short()` **всегда** приводит к одной короткой форме (и Cisco и QTech):
+  - `HundredGigE0/51` → `Hu0/51`
+  - `HundredGigabitEthernet0/51` → `Hu0/51`
+  - `Hu0/51` → `Hu0/51`
+
+- `normalize_interface_full()` расширяет ТОЛЬКО сокращённые формы и **не знает** какой вендор:
+  - `Hu0/51` → `HundredGigE0/51` (всегда Cisco-стиль)
+  - `HundredGigabitEthernet0/51` → `HundredGigabitEthernet0/51` (не трогает)
+
+**Вывод:** Для **сравнения** всегда используем `normalize_interface_short(name, lowercase=True)`. Это единственный надёжный способ сопоставить интерфейсы разных вендоров.
+
+#### Где используется нормализация
+
+| Место | Функция | Зачем |
+|-------|---------|-------|
+| `_find_interface()` | `normalize_interface_short()` | Поиск интерфейса в NetBox по LLDP имени |
+| `_cleanup_cables()` | `normalize_interface_short()` | Сравнение LLDP endpoints с NetBox кабелями |
+| `compare_cables()` | `normalize_interface_short()` | Diff: какие кабели создать/удалить |
+| `cable_key` в sync | Имена из NetBox объектов | Дедупликация A-B = B-A |
+
+Обе функции также **убирают пробелы** (`"Mgmt 0"` → `"Mgmt0"`), что критично для QTech.
+
+### Что иметь в виду при добавлении нового устройства
+
+1. **Проверить TextFSM шаблон** — поле Port ID должно называться `NEIGHBOR_PORT_ID` (не `NEIGHBOR_INTERFACE`)
+2. **Проверить пробелы** — если платформа возвращает имена с пробелами, оба normalizer-а уберут их
+3. **Проверить INTERFACE_SHORT_MAP** — добавить полное имя → короткое сокращение (`core/constants/interfaces.py`). Это обеспечит правильную нормализацию для сравнений
+4. **Проверить INTERFACE_FULL_MAP** — добавить короткое → полное (`core/constants/interfaces.py`). Это обеспечит расширение для отображения
+5. **Проверить кабели** — запустить с `--dry-run` и убедиться что нет ложных удалений/созданий
+6. **Debug-лог** — `logger.warning` покажет если интерфейс не найден (с указанием raw LLDP имени)
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `netbox/sync/cables.py` | cable_key из NetBox объектов, normalize_interface_short в cleanup |
+| `core/domain/sync.py` | compare_cables: normalize hostname + interface names через short form |
+| `netbox/sync/base.py` | `_normalize_interface_name()`: short form вместо full form |
+
+---
+
+## Баг 15: Устройства создаются в площадке "Main" вместо "SU"
+
+**Дата:** Февраль 2026
+**Симптом:** При создании устройства через API оно попадает в сайт "Main", хотя в `fields.yaml` настроен default `site: "SU"`.
+
+### Причина: хардкод "Main" в сигнатурах методов
+
+Два метода имели хардкод `site="Main"` в параметрах по умолчанию:
+
+```python
+# netbox/sync/devices.py:139
+def sync_devices_from_inventory(self, ..., site: str = "Main"):
+
+# collectors/device.py:416
+def __init__(self, ..., site: str = "Main"):
+```
+
+Когда вызывающий код не передавал `site`, использовался хардкод "Main" вместо значения из конфига.
+
+### Исправление
+
+Сигнатуры изменены на `site: Optional[str] = None`, внутри метода — чтение из конфига:
+
+```python
+def sync_devices_from_inventory(self, ..., site: Optional[str] = None):
+    sync_cfg = get_sync_config("devices")
+    if site is None:
+        site = sync_cfg.get_default("site", "Main")
+```
+
+Цепочка приоритетов для site: `CLI --site` > `fields.yaml defaults.site` > `"Main"` (fallback).
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `netbox/sync/devices.py` | `sync_devices_from_inventory`: `site: str = "Main"` → `Optional[str] = None` + чтение из конфига |
+| `collectors/device.py` | `__init__`: `site: str = "Main"` → `Optional[str] = None` + чтение из конфига |
+
+---
+
+## Баг 16: Дублирование маппингов INTERFACE_NAME_PREFIX_MAP и INTERFACE_NAME_PORT_TYPE_MAP
+
+**Дата:** Февраль 2026
+**Симптом:** Два почти идентичных словаря в разных файлах — при добавлении нового типа порта нужно обновлять оба, иначе рассинхрон.
+
+### Дублирование
+
+В проекте было два маппинга с **одинаковыми ключами**, но разными форматами значений:
+
+| Файл | Маппинг | Значения | Пример |
+|------|---------|----------|--------|
+| `core/constants/interfaces.py` | `INTERFACE_NAME_PORT_TYPE_MAP` | port_type (domain) | `"hundredgig": "100g-qsfp28"` |
+| `core/constants/netbox.py` | `INTERFACE_NAME_PREFIX_MAP` | NetBox тип | `"hundredgig": "100gbase-x-qsfp28"` |
+
+А мост между ними — `PORT_TYPE_MAP`: `"100g-qsfp28"` → `"100gbase-x-qsfp28"`.
+
+Также дублировались наборы коротких префиксов:
+- `_SHORT_PORT_TYPE_PREFIXES` (interfaces.py) = `_SHORT_PREFIXES` (netbox.py) = `{"hu", "fo", "twe", "tf", "te", "gi", "fa"}`
+
+### Исправление
+
+Удалён `INTERFACE_NAME_PREFIX_MAP` и `_SHORT_PREFIXES` из `netbox.py`. Функция `_detect_type_by_name_prefix()` переписана: использует `INTERFACE_NAME_PORT_TYPE_MAP` (единый источник из interfaces.py) и конвертирует port_type → NetBox тип через `PORT_TYPE_MAP`.
+
+```python
+# БЫЛО (netbox.py): два отдельных маппинга
+INTERFACE_NAME_PREFIX_MAP = {"hundredgig": "100gbase-x-qsfp28", ...}  # дубль!
+for prefix, netbox_type in INTERFACE_NAME_PREFIX_MAP.items():
+    return netbox_type
+
+# СТАЛО: единый источник + конвертация
+from .interfaces import INTERFACE_NAME_PORT_TYPE_MAP, _SHORT_PORT_TYPE_PREFIXES
+for prefix, port_type in INTERFACE_NAME_PORT_TYPE_MAP.items():
+    return PORT_TYPE_MAP.get(port_type, port_type)  # port_type → NetBox тип
+```
+
+### При добавлении нового типа порта (например 400G)
+
+Теперь нужно обновить **2 места** вместо 3:
+
+1. `core/constants/interfaces.py` → `INTERFACE_NAME_PORT_TYPE_MAP`: `"fourhundredgig": "400g-qsfp-dd"`
+2. `core/constants/netbox.py` → `PORT_TYPE_MAP`: `"400g-qsfp-dd": "400gbase-x-qsfp-dd"`
+
+Функция `_detect_type_by_name_prefix()` автоматически подхватит через цепочку.
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `core/constants/netbox.py` | Удалён `INTERFACE_NAME_PREFIX_MAP`, `_SHORT_PREFIXES`; импорт из interfaces.py |
+| `core/constants/__init__.py` | Убран реэкспорт `INTERFACE_NAME_PREFIX_MAP` |
+| `docs/DEVELOPMENT.md` | Обновлены инструкции добавления нового типа |
+| `docs/PLATFORM_GUIDE.md` | Обновлен чеклист |
+| `docs/learning/12_INTERNALS_AND_TESTING.md` | Обновлены описания маппингов |
+
+---
+
 ## Общие уроки
 
 1. **При добавлении платформы — проверять ВСЕ места**, где есть хардкод имён (не только парсинг, но и сортировку, поиск, case-insensitive сравнение)
@@ -975,3 +1268,14 @@ Value LINK_STATUS ((?:administratively\s+)?(?:UP|DOWN|up|down))
 20. **Data-driven dispatch вместо if/elif** — LAG_PARSERS dict + getattr() заменяет if/elif dispatch по платформе. Добавление новой платформы = одна строка в dict вместо новой ветки
 21. **Shared маппинги между слоями** — detect_port_type() (domain) и get_netbox_interface_type() (constants) дублировали speed-паттерны. Решение: общие маппинги в constants/interfaces.py, domain итерирует по ним. constants/netbox.py сохраняет свои более специфичные маппинги (media_type → конкретный NetBox type)
 22. **Порядок ключей в dict — контракт** — HARDWARE_TYPE_PORT_TYPE_MAP: "10000" перед "1000", "100/1000/10000" первым. Нарушение порядка = ложное совпадение. Python 3.7+ гарантирует insertion order, но при редактировании dict порядок — не случайность, а архитектурное решение
+23. **TextFSM поля — именовать по конвенции NTC Templates** — `NEIGHBOR_PORT_ID` (не `NEIGHBOR_INTERFACE`). Нормализатор LLDP использует `KEY_MAPPING` где `neighbor_interface` → `port_description`. Если назвать поле Port ID как `NEIGHBOR_INTERFACE`, оно попадёт в `port_description` и будет перезаписано реальным Port Description
+24. **Дедупликация LLDP TLV** — один и тот же сосед может отправлять несколько LLDP объявлений (разные chassis_id_type: MAC address и Locally assigned). Дедупликация по ключу `(local_interface_short, remote_hostname_short)` гарантирует один сосед на один порт
+25. **Short form для сравнения интерфейсов** — `normalize_interface_short()` приводит ВСЕ варианты к одной форме (`HundredGigE`, `HundredGigabitEthernet`, `Hu` → `Hu`). `normalize_interface_full()` расширяет только в один вариант (Cisco) и НЕ подходит для сравнения кросс-вендорных имён
+26. **Конфиг вместо хардкода в сигнатурах** — `site: str = "Main"` в параметрах метода = хардкод, который игнорирует `fields.yaml`. Правильно: `site: Optional[str] = None` + `get_sync_config("devices").get_default("site", "Main")` внутри метода
+27. **TextFSM Filldown для multi-neighbor** — на одном порту может быть несколько соседей (разные Neighbor index). `Filldown` на `LOCAL_INTERFACE` гарантирует что имя порта наследуется от первого блока к последующим
+28. **Один маппинг — один источник** — `INTERFACE_NAME_PREFIX_MAP` (netbox.py) дублировал `INTERFACE_NAME_PORT_TYPE_MAP` (interfaces.py) с другим форматом значений. Решение: убрать дубль, конвертировать через `PORT_TYPE_MAP`. При добавлении нового типа — обновлять только `INTERFACE_NAME_PORT_TYPE_MAP` + `PORT_TYPE_MAP`
+29. **Централизация констант** — виртуальные/management/LAG префиксы были захардкожены в нескольких местах с расхождениями. Решение: единые источники `VIRTUAL_INTERFACE_PREFIXES`, `MGMT_INTERFACE_PATTERNS`, `LAG_PREFIXES` из constants, импорт в domain layer. `is_lag_name()` использует `_LAG_LONG_PREFIXES`/`_LAG_SHORT_PREFIXES` вместо хардкода
+30. **normalize_hostname — утилита, не локальная функция** — `normalize_hostname()` (strip domain) дублировалась в `cables.py` и inline в `_find_neighbor_device()`. Теперь в `core/constants/utils.py` как единый источник
+31. **_is_same_lag() через normalize_interface_short** — вместо 25 строк ручного сравнения `Port-channel1 == Po1 == po1`, одна строка через `normalize_interface_short(name, lowercase=True)`. Надёжнее и автоматически поддерживает новые платформы
+32. **HARDWARE_TYPE_PORT_TYPE_MAP неполный** — отсутствовали "tengig" (без пробела), "twentyfive", "twenty-five". NETBOX_HARDWARE_TYPE_MAP имел все варианты, а domain layer — нет. Порты с такими hardware_type получали неверный тип
+33. **exclude_interfaces без QTech LAG** — дефолтные `exclude_interfaces` не содержали `AggregatePort`/`Ag\d+`. При сборе MAC с QTech LAG-интерфейсы не фильтровались

@@ -7,7 +7,11 @@
 import re
 from typing import Any, Dict
 
-from .interfaces import is_lag_name
+from .interfaces import (
+    is_lag_name,
+    INTERFACE_NAME_PORT_TYPE_MAP,
+    _SHORT_PORT_TYPE_PREFIXES,
+)
 
 # =============================================================================
 # МАППИНГ ТИПОВ ИНТЕРФЕЙСОВ ДЛЯ NETBOX
@@ -173,6 +177,7 @@ VIRTUAL_INTERFACE_PREFIXES: tuple = (
     "lo",
     "null",
     "tunnel",
+    "nve",
 )
 
 # Management интерфейсы (всегда медь)
@@ -196,35 +201,6 @@ PORT_TYPE_MAP: Dict[str, str] = {
     "virtual": "virtual",
 }
 
-# Маппинг префикса имени интерфейса → NetBox interface type
-INTERFACE_NAME_PREFIX_MAP: Dict[str, str] = {
-    # 100G
-    "hundredgig": "100gbase-x-qsfp28",
-    "hu": "100gbase-x-qsfp28",
-    # 40G
-    "fortygig": "40gbase-x-qsfpp",
-    "fo": "40gbase-x-qsfpp",
-    # 25G
-    "twentyfive": "25gbase-x-sfp28",
-    "twe": "25gbase-x-sfp28",
-    # 10G
-    "tengig": "10gbase-x-sfpp",
-    "tfgigabitethernet": "10gbase-x-sfpp",  # QTech 10G
-    "tf": "10gbase-x-sfpp",  # QTech 10G короткий
-    "te": "10gbase-x-sfpp",  # Te1/1 короткий
-    # 1G
-    "gigabit": "1000base-t",
-    "gi": "1000base-t",
-    # 100M
-    "fastethernet": "100base-tx",
-    "fa": "100base-tx",
-}
-
-
-# Короткие префиксы, требующие проверки цифры после (чтобы "gi" не совпал с "gigabit...")
-_SHORT_PREFIXES = {"hu", "fo", "twe", "tf", "te", "gi", "fa"}
-
-
 def _detect_type_by_name_prefix(
     name_lower: str,
     media_lower: str = "",
@@ -233,7 +209,8 @@ def _detect_type_by_name_prefix(
     """
     Определяет тип интерфейса NetBox по префиксу имени.
 
-    Использует INTERFACE_NAME_PREFIX_MAP как единый источник маппинга.
+    Использует INTERFACE_NAME_PORT_TYPE_MAP (единый источник маппинга из interfaces.py)
+    и конвертирует port_type → NetBox тип через PORT_TYPE_MAP.
     Для GigabitEthernet учитывает SFP/медь на основе media_type/hardware_type.
 
     Args:
@@ -244,21 +221,22 @@ def _detect_type_by_name_prefix(
     Returns:
         str: Тип интерфейса для NetBox или пустая строка
     """
-    for prefix, netbox_type in INTERFACE_NAME_PREFIX_MAP.items():
+    for prefix, port_type in INTERFACE_NAME_PORT_TYPE_MAP.items():
         if not name_lower.startswith(prefix):
             continue
 
         # Короткие префиксы: после них должна быть цифра
-        if prefix in _SHORT_PREFIXES:
+        if prefix in _SHORT_PORT_TYPE_PREFIXES:
             if len(name_lower) <= len(prefix) or not name_lower[len(prefix)].isdigit():
                 continue
 
         # GigabitEthernet/Gi: SFP или медь
         if prefix in ("gigabit", "gi"):
             is_sfp = "sfp" in media_lower or "sfp" in hw_lower or "no transceiver" in media_lower
-            return "1000base-x-sfp" if is_sfp else netbox_type
+            if is_sfp:
+                return PORT_TYPE_MAP.get("1g-sfp", "1000base-x-sfp")
 
-        return netbox_type
+        return PORT_TYPE_MAP.get(port_type, port_type)
 
     return ""
 
@@ -357,7 +335,7 @@ def get_netbox_interface_type(
         return "virtual"
 
     # 3. Management интерфейсы - всегда медь
-    if any(x in name_lower for x in MGMT_INTERFACE_PATTERNS):
+    if name_lower.startswith(MGMT_INTERFACE_PATTERNS):
         return "1000base-t"
 
     # 4. media_type - ВЫСШИЙ ПРИОРИТЕТ
@@ -392,7 +370,7 @@ def get_netbox_interface_type(
                     return "1000base-x-sfp"
                 return netbox_type
 
-    # 7. По имени интерфейса (через INTERFACE_NAME_PREFIX_MAP)
+    # 7. По имени интерфейса (через INTERFACE_NAME_PORT_TYPE_MAP + PORT_TYPE_MAP)
     netbox_type = _detect_type_by_name_prefix(name_lower, media_lower, hw_lower)
     if netbox_type:
         return netbox_type

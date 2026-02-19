@@ -62,6 +62,7 @@ from .utils import (
     slugify,
     transliterate_to_slug,
     mask_to_prefix,
+    normalize_hostname,
 )
 
 # NetBox
@@ -71,7 +72,6 @@ from .netbox import (
     VIRTUAL_INTERFACE_PREFIXES,
     MGMT_INTERFACE_PATTERNS,
     PORT_TYPE_MAP,
-    INTERFACE_NAME_PREFIX_MAP,
     get_netbox_interface_type,
 )
 
@@ -87,6 +87,8 @@ from .commands import (
     COLLECTOR_COMMANDS,
     CUSTOM_TEXTFSM_TEMPLATES,
     get_collector_command,
+    SECONDARY_COMMANDS,
+    get_secondary_command,
 )
 
 __all__ = [
@@ -125,13 +127,13 @@ __all__ = [
     "slugify",
     "transliterate_to_slug",
     "mask_to_prefix",
+    "normalize_hostname",
     # NetBox
     "NETBOX_INTERFACE_TYPE_MAP",
     "NETBOX_HARDWARE_TYPE_MAP",
     "VIRTUAL_INTERFACE_PREFIXES",
     "MGMT_INTERFACE_PATTERNS",
     "PORT_TYPE_MAP",
-    "INTERFACE_NAME_PREFIX_MAP",
     "get_netbox_interface_type",
     # Устройства
     "CISCO_LICENSE_SUFFIXES",
@@ -141,4 +143,6 @@ __all__ = [
     "COLLECTOR_COMMANDS",
     "CUSTOM_TEXTFSM_TEMPLATES",
     "get_collector_command",
+    "SECONDARY_COMMANDS",
+    "get_secondary_command",
 ]

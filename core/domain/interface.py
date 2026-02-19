@@ -20,6 +20,10 @@ from ..constants.interfaces import (
     INTERFACE_NAME_PORT_TYPE_MAP,
     _SHORT_PORT_TYPE_PREFIXES,
 )
+from ..constants.netbox import (
+    VIRTUAL_INTERFACE_PREFIXES,
+    MGMT_INTERFACE_PATTERNS,
+)
 
 
 # Маппинг статусов из show interfaces в стандартные значения
@@ -189,12 +193,12 @@ class InterfaceNormalizer:
         if is_lag_name(iface_lower):
             return "lag"
 
-        # Виртуальные интерфейсы
-        if iface_lower.startswith(("vlan", "loopback", "null", "tunnel", "nve")):
+        # Виртуальные интерфейсы (VIRTUAL_INTERFACE_PREFIXES из netbox.py)
+        if iface_lower.startswith(VIRTUAL_INTERFACE_PREFIXES):
             return "virtual"
 
-        # Management - обычно copper
-        if iface_lower.startswith(("mgmt", "management")):
+        # Management - обычно copper (MGMT_INTERFACE_PATTERNS из netbox.py)
+        if iface_lower.startswith(MGMT_INTERFACE_PATTERNS):
             return "1g-rj45"
 
         # 1. По media_type (наиболее точный)
@@ -443,31 +447,14 @@ class InterfaceNormalizer:
         return interfaces
 
     def _is_same_lag(self, iface_lower: str, lag_lower: str) -> bool:
-        """Проверяет соответствие имён LAG (Cisco Port-channel, QTech AggregatePort)."""
-        if iface_lower == lag_lower:
-            return True
-        # Cisco: Po1 == Port-channel1
-        if f"po{lag_lower}" == iface_lower:
-            return True
-        if lag_lower.replace("po", "port-channel") == iface_lower:
-            return True
-        # QTech: AggregatePort 1 == Ag1 (с учётом пробела)
-        iface_nospace = iface_lower.replace(" ", "")
-        lag_nospace = lag_lower.replace(" ", "")
-        if iface_nospace == lag_nospace:
-            return True
-        if iface_nospace.startswith("aggregateport") and lag_nospace.startswith("ag"):
-            # aggregateport1 == ag1
-            iface_num = iface_nospace.replace("aggregateport", "")
-            lag_num = lag_nospace.replace("ag", "")
-            if iface_num == lag_num:
-                return True
-        if lag_nospace.startswith("aggregateport") and iface_nospace.startswith("ag"):
-            lag_num = lag_nospace.replace("aggregateport", "")
-            iface_num = iface_nospace.replace("ag", "")
-            if iface_num == lag_num:
-                return True
-        return False
+        """
+        Проверяет соответствие имён LAG через normalize_interface_short.
+
+        Port-channel1 == Po1 (оба → po1)
+        AggregatePort 1 == Ag1 (оба → ag1)
+        """
+        return (normalize_interface_short(iface_lower, lowercase=True) ==
+                normalize_interface_short(lag_lower, lowercase=True))
 
     def enrich_with_media_type(
         self,

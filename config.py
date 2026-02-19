@@ -125,6 +125,8 @@ class Config:
                     r"^Null\d+",
                     r"^Port-channel\d+",
                     r"^Po\d+",
+                    r"^AggregatePort",  # QTech LAG
+                    r"^Ag\d+",  # QTech LAG (короткая форма)
                     r"^mgmt\d*",
                     r"^CPU$",
                     r"^Switch$",

@@ -393,7 +393,8 @@ class TestSyncComparatorCables:
         diff = comparator.compare_cables(local=local, remote=[])
 
         assert len(diff.to_create) == 1
-        assert "switch1:Gi0/1" in diff.to_create[0].name
+        # После нормализации Gi0/1 → gi0/1 (short form, lowercase)
+        assert "switch1:gi0/1" in diff.to_create[0].name
 
     def test_existing_cable_skips(self, comparator):
         """Существующий кабель - skip."""
@@ -404,17 +405,17 @@ class TestSyncComparatorCables:
             "remote_port": "Gi0/2",
         }]
 
-        # Mock NetBox cable
+        # Mock NetBox cable — имена уже нормализованные (как в NetBox)
         remote_cable = Mock()
         a_term = Mock()
         a_term.device = Mock()
         a_term.device.name = "switch1"
-        a_term.name = "Gi0/1"
+        a_term.name = "GigabitEthernet0/1"
 
         b_term = Mock()
         b_term.device = Mock()
         b_term.device.name = "switch2"
-        b_term.name = "Gi0/2"
+        b_term.name = "GigabitEthernet0/2"
 
         remote_cable.a_terminations = [a_term]
         remote_cable.b_terminations = [b_term]
@@ -428,17 +429,17 @@ class TestSyncComparatorCables:
         """cleanup=True удаляет лишние кабели."""
         local = []  # Нет кабелей в LLDP
 
-        # Mock NetBox cable
+        # Mock NetBox cable — имена нормализованные как в NetBox
         remote_cable = Mock()
         a_term = Mock()
         a_term.device = Mock()
         a_term.device.name = "switch1"
-        a_term.name = "Gi0/1"
+        a_term.name = "GigabitEthernet0/1"
 
         b_term = Mock()
         b_term.device = Mock()
         b_term.device.name = "switch2"
-        b_term.name = "Gi0/2"
+        b_term.name = "GigabitEthernet0/2"
 
         remote_cable.a_terminations = [a_term]
         remote_cable.b_terminations = [b_term]
@@ -457,17 +458,17 @@ class TestSyncComparatorCables:
             "remote_port": "Gi0/2",
         }]
 
-        # Remote: switch2:Gi0/2 -> switch1:Gi0/1 (reversed)
+        # Remote: switch2:GigabitEthernet0/2 -> switch1:GigabitEthernet0/1 (reversed, full names)
         remote_cable = Mock()
         a_term = Mock()
         a_term.device = Mock()
         a_term.device.name = "switch2"
-        a_term.name = "Gi0/2"
+        a_term.name = "GigabitEthernet0/2"
 
         b_term = Mock()
         b_term.device = Mock()
         b_term.device.name = "switch1"
-        b_term.name = "Gi0/1"
+        b_term.name = "GigabitEthernet0/1"
 
         remote_cable.a_terminations = [a_term]
         remote_cable.b_terminations = [b_term]

@@ -264,7 +264,8 @@ def get_interface_by_name(self, device_id: int, interface_name: str) -> Optional
             return interfaces[0]
 
     # 3. Для LAG — регистронезависимый поиск по всем интерфейсам
-    if interface_name.lower().startswith(("po", "port-channel", "ag", "aggregateport")):
+    # Используем is_lag_name() из core/constants/interfaces.py (единый источник)
+    if is_lag_name(interface_name):
         all_interfaces = list(self.api.dcim.interfaces.filter(device_id=device_id))
         name_lower = normalized_name.lower()
         for intf in all_interfaces:

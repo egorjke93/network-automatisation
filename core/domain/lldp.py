@@ -6,10 +6,13 @@ Domain logic для LLDP/CDP соседей.
 """
 
 import re
+import logging
 from typing import List, Dict, Any
 
 from ..models import LLDPNeighbor
-from ..constants import normalize_interface_short
+from ..constants import normalize_interface_short, normalize_hostname
+
+logger = logging.getLogger(__name__)
 
 
 # Маппинг полей из NTC Templates к стандартным именам
@@ -108,6 +111,8 @@ class LLDPNormalizer:
             if device_ip:
                 normalized["device_ip"] = device_ip
             result.append(normalized)
+        # Дедупликация: два LLDP TLV от одного соседа на одном порту → одна запись
+        result = self._deduplicate_neighbors(result)
         return result
 
     def _normalize_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
@@ -189,6 +194,56 @@ class LLDPNormalizer:
                 result["remote_hostname"] = "[unknown]"
 
         return result
+
+    def _deduplicate_neighbors(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Дедупликация LLDP соседей на одном порту.
+
+        Один сосед (например Cisco 9500) может отправлять ДВА LLDP TLV
+        с разными chassis_id_type (MAC address и Locally assigned).
+        Это одно физическое соединение — оставляем одну запись.
+
+        Ключ дедупликации: (local_interface_normalized, remote_hostname_short).
+        При дупликатах оставляем запись с заполненным remote_port, дополняем remote_mac.
+        """
+        if not data:
+            return data
+
+        seen = {}
+        for row in data:
+            local = normalize_interface_short(
+                row.get("local_interface", ""), lowercase=True
+            )
+            remote = row.get("remote_hostname", "").lower().split(".")[0]
+            if not local or not remote:
+                # Без ключевых полей — не дедуплицируем
+                seen[id(row)] = row
+                continue
+
+            key = (local, remote)
+            if key in seen:
+                existing = seen[key]
+                # Оставляем запись с remote_port
+                if not existing.get("remote_port") and row.get("remote_port"):
+                    seen[key] = row
+                    # Переносим remote_mac из предыдущей записи
+                    if not row.get("remote_mac") and existing.get("remote_mac"):
+                        seen[key]["remote_mac"] = existing["remote_mac"]
+                else:
+                    # Дополняем remote_mac если отсутствует
+                    if not existing.get("remote_mac") and row.get("remote_mac"):
+                        existing["remote_mac"] = row["remote_mac"]
+                    # Дополняем remote_ip если отсутствует
+                    if not existing.get("remote_ip") and row.get("remote_ip"):
+                        existing["remote_ip"] = row["remote_ip"]
+                logger.debug(
+                    f"Дедупликация LLDP: {local} → {remote} "
+                    f"(оставлена запись с remote_port="
+                    f"{seen[key].get('remote_port', '')})"
+                )
+            else:
+                seen[key] = row
+        return list(seen.values())
 
     def determine_neighbor_type(self, neighbor: Dict[str, Any]) -> str:
         """
@@ -415,8 +470,8 @@ class LLDPNormalizer:
         if hostname1.startswith("[") or hostname2.startswith("["):
             return False
         # Сравниваем короткие имена (без домена)
-        h1 = hostname1.lower().split(".")[0]
-        h2 = hostname2.lower().split(".")[0]
+        h1 = normalize_hostname(hostname1).lower()
+        h2 = normalize_hostname(hostname2).lower()
         return h1 == h2
 
     def _merge_cdp_with_lldp(

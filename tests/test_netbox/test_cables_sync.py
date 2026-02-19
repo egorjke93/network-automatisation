@@ -422,3 +422,97 @@ class TestCablesCleanup:
 
         # Stale кабель должен быть удалён
         assert result["deleted"] >= 0  # Зависит от get_cable_endpoints
+
+
+class TestCablesCrossVendorNormalization:
+    """Тесты нормализации имён интерфейсов между вендорами."""
+
+    def test_compare_hundredgige_vs_hundredgigabitethernet(self):
+        """HundredGigE (Cisco) и HundredGigabitEthernet (QTech) совпадают."""
+        from network_collector.core.domain.sync import SyncComparator
+
+        comparator = SyncComparator()
+        local = [{
+            "hostname": "QSW-01", "local_interface": "HundredGigabitEthernet 0/51",
+            "remote_hostname": "C9500-01", "remote_port": "Hu2/0/52",
+        }]
+        # NetBox хранит разные полные формы
+        cable = Mock()
+        a = Mock(); a.device = Mock(); a.device.name = "QSW-01"
+        a.name = "HundredGigabitEthernet0/51"
+        b = Mock(); b.device = Mock(); b.device.name = "C9500-01"
+        b.name = "HundredGigE2/0/52"
+        cable.a_terminations = [a]
+        cable.b_terminations = [b]
+
+        diff = comparator.compare_cables(local=local, remote=[cable], cleanup=True)
+
+        assert len(diff.to_create) == 0
+        assert len(diff.to_delete) == 0
+        assert len(diff.to_skip) == 1
+
+    def test_compare_mgmt_space_vs_no_space(self):
+        """LLDP 'Mgmt 0' совпадает с NetBox 'Mgmt0'."""
+        from network_collector.core.domain.sync import SyncComparator
+
+        comparator = SyncComparator()
+        local = [{
+            "hostname": "QSW-01", "local_interface": "Mgmt 0",
+            "remote_hostname": "C2960", "remote_port": "Gi1/0/4",
+        }]
+        cable = Mock()
+        a = Mock(); a.device = Mock(); a.device.name = "QSW-01"
+        a.name = "Mgmt0"
+        b = Mock(); b.device = Mock(); b.device.name = "C2960"
+        b.name = "GigabitEthernet1/0/4"
+        cable.a_terminations = [a]
+        cable.b_terminations = [b]
+
+        diff = comparator.compare_cables(local=local, remote=[cable], cleanup=True)
+
+        assert len(diff.to_create) == 0
+        assert len(diff.to_delete) == 0
+
+    def test_compare_hu_vs_hundredgigabitethernet(self):
+        """Сокращённое Hu совпадает с полным HundredGigabitEthernet."""
+        from network_collector.core.domain.sync import SyncComparator
+
+        comparator = SyncComparator()
+        local = [{
+            "hostname": "sw1", "local_interface": "Hu0/51",
+            "remote_hostname": "sw2", "remote_port": "Hu0/51",
+        }]
+        cable = Mock()
+        a = Mock(); a.device = Mock(); a.device.name = "sw1"
+        a.name = "HundredGigabitEthernet0/51"
+        b = Mock(); b.device = Mock(); b.device.name = "sw2"
+        b.name = "HundredGigabitEthernet0/51"
+        cable.a_terminations = [a]
+        cable.b_terminations = [b]
+
+        diff = comparator.compare_cables(local=local, remote=[cable], cleanup=True)
+
+        assert len(diff.to_create) == 0
+        assert len(diff.to_delete) == 0
+
+    def test_qtech_tfgigabit_with_space(self):
+        """QTech TFGigabitEthernet с пробелом совпадает с NetBox без пробела."""
+        from network_collector.core.domain.sync import SyncComparator
+
+        comparator = SyncComparator()
+        local = [{
+            "hostname": "QSW-01", "local_interface": "TFGigabitEthernet 0/48",
+            "remote_hostname": "QSW-02", "remote_port": "TFGigabitEthernet 0/48",
+        }]
+        cable = Mock()
+        a = Mock(); a.device = Mock(); a.device.name = "QSW-01"
+        a.name = "TFGigabitEthernet0/48"
+        b = Mock(); b.device = Mock(); b.device.name = "QSW-02"
+        b.name = "TFGigabitEthernet0/48"
+        cable.a_terminations = [a]
+        cable.b_terminations = [b]
+
+        diff = comparator.compare_cables(local=local, remote=[cable], cleanup=True)
+
+        assert len(diff.to_create) == 0
+        assert len(diff.to_delete) == 0

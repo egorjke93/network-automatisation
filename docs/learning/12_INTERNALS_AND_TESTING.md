@@ -373,7 +373,6 @@ from .netbox import (
     NETBOX_HARDWARE_TYPE_MAP,
     VIRTUAL_INTERFACE_PREFIXES,
     PORT_TYPE_MAP,
-    INTERFACE_NAME_PREFIX_MAP,
     get_netbox_interface_type,
 )
 
@@ -628,7 +627,7 @@ def get_netbox_interface_type(
         return PORT_TYPE_MAP[port_type]
 
     # 6. hardware_type
-    # 7. По имени (через INTERFACE_NAME_PREFIX_MAP)
+    # 7. По имени (через INTERFACE_NAME_PORT_TYPE_MAP + PORT_TYPE_MAP)
     # 8. Fallback по скорости
 
     return "1000base-t"  # Default
@@ -644,7 +643,7 @@ def get_netbox_interface_type(
 Функция использует три словаря-маппинга:
 - `NETBOX_INTERFACE_TYPE_MAP` -- media_type -> тип NetBox (120+ записей)
 - `NETBOX_HARDWARE_TYPE_MAP` -- hardware_type -> тип NetBox
-- `INTERFACE_NAME_PREFIX_MAP` -- префикс имени -> тип NetBox
+- `INTERFACE_NAME_PORT_TYPE_MAP` (из interfaces.py) + `PORT_TYPE_MAP` -- префикс имени -> port_type -> тип NetBox
 
 ### 2.5 mac.py -- нормализация MAC-адресов
 

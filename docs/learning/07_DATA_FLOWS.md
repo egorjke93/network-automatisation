@@ -367,7 +367,69 @@ cable_key = tuple(sorted(["switch2:Gi0/2", "switch1:Gi0/1"]))
 # --> ("switch1:Gi0/1", "switch2:Gi0/2")   <-- тот же ключ!
 ```
 
-### 2.10 Полная диаграмма трансформации данных
+### 2.10 Дедупликация LLDP TLV: два объявления от одного соседа
+
+Есть ещё один вид дублирования -- на уровне одного устройства. Некоторые устройства
+(например, Cisco 9500) отправляют **два LLDP TLV** с одного порта:
+
+```
+Neighbor index 1:
+  Chassis ID type: MAC address        → 001a.3008.6c00
+  Port ID: Hu2/0/52                   → короткое имя
+  Management IP: 10.177.30.54
+
+Neighbor index 2:
+  Chassis ID type: Locally assigned   → switch2
+  Port ID: HundredGigE2/0/52         → полное имя
+  Management IP: 10.195.227.1
+```
+
+Это **одно и то же соединение**, но два LLDP-записи с разной информацией.
+Без дедупликации мы бы попытались создать два кабеля на один порт (ошибка).
+
+Решение -- `_deduplicate_neighbors()` в `LLDPNormalizer`:
+
+```python
+# Ключ дедупликации: (local_interface_short, remote_hostname_short)
+key = ("hu0/51", "switch2")
+
+# При дубликате -- оставляем запись с заполненным remote_port,
+# дополняем remote_mac и remote_ip из другой записи
+```
+
+Это отличается от дедупликации кабелей (§2.9) тем, что здесь дубли
+приходят с **одного** устройства (разные TLV), а в §2.9 -- с **двух** устройств
+(двусторонний LLDP).
+
+### 2.11 Нормализация имён интерфейсов для кабелей
+
+При кабельной синхронизации LLDP имена должны совпасть с именами из NetBox.
+Проблема: разные вендоры используют разные полные имена для одного типа порта.
+
+```
+100G:  Cisco → HundredGigE       QTech → HundredGigabitEthernet
+10G:   Cisco → TenGigabitEthernet  QTech → TFGigabitEthernet
+```
+
+Решение -- `normalize_interface_short()` приводит ВСЕ варианты к **одной короткой
+форме** (Hu, Te, TF, Gi):
+
+```
+HundredGigE0/51             → hu0/51
+HundredGigabitEthernet0/51  → hu0/51
+Hu0/51                      → hu0/51    ← все три совпадают!
+```
+
+Эта нормализация используется в трёх местах:
+1. `_find_interface()` -- поиск интерфейса в NetBox по LLDP имени
+2. `_cleanup_cables()` -- сравнение LLDP endpoints с NetBox кабелями
+3. `compare_cables()` -- diff: какие кабели создать/удалить
+
+> **Важно:** `normalize_interface_full()` расширяет `Hu` → `HundredGigE` (только
+> Cisco-вариант). Она **не подходит** для кросс-вендорного сравнения.
+> Для сравнения всегда используй `normalize_interface_short(name, lowercase=True)`.
+
+### 2.12 Полная диаграмма трансформации данных
 
 Вот как одна запись проходит через все слои:
 
