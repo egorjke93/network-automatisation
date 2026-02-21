@@ -122,6 +122,7 @@ connection:
 netbox:
   url: "http://localhost:8080/"
   token: ""                     # Лучше через NETBOX_TOKEN
+  timeout: 30                   # Таймаут HTTP-запросов к NetBox (сек)
   verify_ssl: true
 
 # Фильтры для MAC коллектора

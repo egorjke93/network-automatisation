@@ -1441,6 +1441,94 @@ QTech QSW-6900-56F: порты `TFGigabitEthernet 0/1-0/48` — это 25G SFP28
 
 ---
 
+## Улучшение 21: Timeout и retry 429 для pynetbox HTTP сессии
+
+**Дата:** Февраль 2026
+**Категория:** Надёжность, защита от зависаний
+
+### Проблема 1: Бесконечный timeout
+
+В `config.yaml` и `config_schema.py` есть параметр `netbox.timeout: 30`, но он **нигде не использовался**. pynetbox создавал стандартный `requests.Session`, который имеет `timeout=None` (бесконечное ожидание). Если NetBox зависает — наш скрипт зависает навечно.
+
+```python
+# БЫЛО:
+self.api = pynetbox.api(self.url, token=self._token)
+# requests.Session() внутри pynetbox — timeout=None!
+
+if not ssl_verify:
+    session = requests.Session()  # только для SSL
+    session.verify = False
+    self.api.http_session = session
+```
+
+### Проблема 2: Нет обработки HTTP 429
+
+При массовом sync (100+ устройств) или параллельных запусках NetBox может вернуть `429 Too Many Requests`. Без обработки — операция падает, пользователь видит непонятную ошибку.
+
+### Исправление
+
+Создан класс `NetBoxSession(requests.Session)` — кастомная HTTP сессия с двумя механизмами:
+
+```python
+class NetBoxSession(requests.Session):
+    """HTTP сессия с таймаутом и retry для 429."""
+
+    def __init__(self, timeout: int = 30, verify: bool = True):
+        super().__init__()
+        self.timeout = timeout
+        self.verify = verify
+
+    def request(self, method, url, **kwargs):
+        kwargs.setdefault("timeout", self.timeout)  # Таймаут на каждый запрос
+
+        for attempt in range(1, MAX_RETRIES_429 + 1):
+            response = super().request(method, url, **kwargs)
+            if response.status_code != 429:
+                return response
+
+            # Retry с Retry-After header или экспоненциальным backoff
+            retry_after = response.headers.get("Retry-After")
+            delay = int(retry_after) if retry_after else DEFAULT_RETRY_DELAY * attempt
+            time.sleep(delay)
+
+        return response  # 429 после исчерпания попыток
+```
+
+`NetBoxClientBase.__init__` теперь **всегда** создаёт `NetBoxSession`:
+
+```python
+# СТАЛО:
+# Таймаут: параметр > config.yaml > дефолт 30с
+if timeout is None:
+    timeout = config.netbox.timeout or 30
+
+session = NetBoxSession(timeout=timeout, verify=ssl_verify)
+self.api.http_session = session
+```
+
+### Приоритет timeout
+
+1. Явный параметр `NetBoxClient(timeout=60)` — наивысший
+2. `config.yaml` → `netbox.timeout` — из конфигурации
+3. `30` секунд — дефолт
+
+### Параметры retry 429
+
+| Параметр | Значение | Описание |
+|----------|----------|----------|
+| `MAX_RETRIES_429` | 3 | Максимум повторных попыток |
+| `DEFAULT_RETRY_DELAY` | 2с | Базовая задержка (× номер попытки) |
+| `Retry-After` header | приоритет | Если сервер указал — используем его значение |
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `netbox/client/base.py` | Класс `NetBoxSession`, обновлён `__init__` — всегда использует NetBoxSession |
+| `tests/test_netbox/test_netbox_session.py` | НОВЫЙ: 13 тестов (timeout, retry, backoff, config) |
+
+---
+
 ## Общие уроки
 
 1. **При добавлении платформы — проверять ВСЕ места**, где есть хардкод имён (не только парсинг, но и сортировку, поиск, case-insensitive сравнение)
@@ -1480,3 +1568,5 @@ QTech QSW-6900-56F: порты `TFGigabitEthernet 0/1-0/48` — это 25G SFP28
 35. **elif после if — недостижимые ветки** — `if target_vid:` (truthy для 1) → `elif current_vlan_id:` никогда не выполнится когда target_vid=1 и VLAN не найден. При написании if/elif — проверять что каждая ветка достижима для реальных данных
 36. **Маппинги из спецификации, не по аналогии** — TFGigabitEthernet скопировали из TenGigabitEthernet (10G), хотя TF это 25G по спецификации QTech QSW-6900. При добавлении нового типа порта — проверять datasheet, а не копировать похожее имя
 37. **INFO-лог для каждого изменения** — итоговые `stats["updated"] = N` недостаточно для диагностики. Каждое изменение (IP обновлён, VLAN назначен, MAC изменён) должно логироваться на INFO с деталями
+38. **Timeout в конфиге ≠ timeout в сессии** — `config.netbox.timeout` хранился и валидировался, но не передавался в `requests.Session`. pynetbox по умолчанию создаёт сессию с `timeout=None` (бесконечное ожидание). Решение: кастомный `NetBoxSession(requests.Session)` с timeout в каждом запросе
+39. **HTTP 429 Rate Limit** — при массовом sync NetBox может вернуть 429. Retry с `Retry-After` header и экспоненциальным backoff (2с, 4с, 6с) — стандартный паттерн. Максимум 3 попытки, затем возврат 429 как есть

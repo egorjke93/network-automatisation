@@ -1286,7 +1286,7 @@ Field Registry Statistics:
 | Файл | Описание |
 |------|----------|
 | `netbox/client/__init__.py` | Re-export NetBoxClient |
-| `netbox/client/base.py` | NetBoxClientBase — инициализация |
+| `netbox/client/base.py` | NetBoxClientBase — инициализация, NetBoxSession (timeout + retry 429) |
 | `netbox/client/main.py` | NetBoxClient — объединяет mixins |
 | `netbox/client/devices.py` | DevicesMixin (get_devices, get_device_by_*) |
 | `netbox/client/interfaces.py` | InterfacesMixin — get/create/update + **bulk_create/update/delete_interfaces** |

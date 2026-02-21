@@ -5,8 +5,11 @@
 """
 
 import os
+import time
 import logging
 from typing import Optional
+
+import requests
 
 from ...core.constants import slugify
 
@@ -22,6 +25,52 @@ except ImportError:
     logger.warning("pynetbox не установлен. pip install pynetbox")
 
 
+# Настройки retry для HTTP 429
+MAX_RETRIES_429 = 3
+DEFAULT_RETRY_DELAY = 2  # секунды
+
+
+class NetBoxSession(requests.Session):
+    """
+    HTTP сессия с таймаутом и retry для 429 (Rate Limit).
+
+    - timeout применяется ко всем запросам (config.netbox.timeout)
+    - При получении 429 — ждёт Retry-After и повторяет (до MAX_RETRIES_429 раз)
+    """
+
+    def __init__(self, timeout: int = 30, verify: bool = True):
+        super().__init__()
+        self.timeout = timeout
+        self.verify = verify
+
+    def request(self, method, url, **kwargs):
+        # Устанавливаем timeout если не задан явно
+        kwargs.setdefault("timeout", self.timeout)
+
+        for attempt in range(1, MAX_RETRIES_429 + 1):
+            response = super().request(method, url, **kwargs)
+
+            if response.status_code != 429:
+                return response
+
+            # HTTP 429 — rate limit
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                delay = int(retry_after)
+            else:
+                delay = DEFAULT_RETRY_DELAY * attempt  # экспоненциальный backoff
+
+            logger.warning(
+                f"NetBox 429 Rate Limit (попытка {attempt}/{MAX_RETRIES_429}), "
+                f"ожидание {delay}с: {method} {url}"
+            )
+            time.sleep(delay)
+
+        # Исчерпали попытки — возвращаем последний ответ (429)
+        logger.error(f"NetBox 429: исчерпаны попытки ({MAX_RETRIES_429}): {method} {url}")
+        return response
+
+
 class NetBoxClientBase:
     """
     Базовый класс для NetBox клиента.
@@ -34,6 +83,7 @@ class NetBoxClientBase:
         url: Optional[str] = None,
         token: Optional[str] = None,
         ssl_verify: bool = True,
+        timeout: Optional[int] = None,
     ):
         """
         Инициализация клиента NetBox.
@@ -46,6 +96,7 @@ class NetBoxClientBase:
             url: URL NetBox сервера (или env NETBOX_URL)
             token: API токен (опционально)
             ssl_verify: Проверять SSL сертификат
+            timeout: Таймаут запросов в секундах (или config.netbox.timeout)
 
         Raises:
             ImportError: pynetbox не установлен
@@ -74,18 +125,19 @@ class NetBoxClientBase:
                 "или установите NETBOX_TOKEN. См. документацию SECURITY.md"
             )
 
+        # Таймаут: параметр > config.yaml > дефолт 30с
+        if timeout is None:
+            from ...config import config as app_config
+            timeout = getattr(getattr(app_config, "netbox", None), "timeout", None) or 30
+
         # Инициализируем pynetbox API
         self.api = pynetbox.api(self.url, token=self._token)
 
-        # Настройка SSL
-        if not ssl_verify:
-            import requests
+        # Настройка HTTP сессии с таймаутом и retry 429
+        session = NetBoxSession(timeout=timeout, verify=ssl_verify)
+        self.api.http_session = session
 
-            session = requests.Session()
-            session.verify = False
-            self.api.http_session = session
-
-        logger.info(f"NetBox клиент инициализирован: {self.url}")
+        logger.info(f"NetBox клиент инициализирован: {self.url} (timeout={timeout}s)")
 
     def _resolve_site_slug(self, site_name_or_slug: str) -> Optional[str]:
         """Находит slug сайта по имени или slug."""

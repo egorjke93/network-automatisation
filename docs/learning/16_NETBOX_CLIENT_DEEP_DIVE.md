@@ -89,26 +89,58 @@ netbox/client/
 ```python
 # Файл: netbox/client/base.py
 class NetBoxClientBase:
-    def __init__(self, url=None, token=None, ssl_verify=True):
+    def __init__(self, url=None, token=None, ssl_verify=True, timeout=None):
         # 1. URL: из параметра или env NETBOX_URL
         self.url = url or os.environ.get("NETBOX_URL")
 
         # 2. Токен: из параметра → env NETBOX_TOKEN → Credential Manager → config.yaml
         self._token = get_netbox_token(config_token=token)
 
-        # 3. Инициализация pynetbox
+        # 3. Таймаут: параметр > config.yaml > 30с
+        if timeout is None:
+            timeout = config.netbox.timeout or 30
+
+        # 4. Инициализация pynetbox
         self.api = pynetbox.api(self.url, token=self._token)
 
-        # 4. Отключение SSL если нужно
-        if not ssl_verify:
-            session = requests.Session()
-            session.verify = False
-            self.api.http_session = session
+        # 5. HTTP сессия с таймаутом и retry 429
+        session = NetBoxSession(timeout=timeout, verify=ssl_verify)
+        self.api.http_session = session
 ```
 
 ### Что здесь происходит
 
 `pynetbox.api()` создаёт объект, который "знает" все эндпоинты NetBox. Через `self.api.dcim.devices` мы обращаемся к `/api/dcim/devices/` -- pynetbox сам формирует HTTP-запросы, парсит JSON и возвращает объекты `Record`.
+
+### NetBoxSession -- кастомная HTTP сессия
+
+Все HTTP-запросы pynetbox проходят через `NetBoxSession(requests.Session)`:
+
+```python
+class NetBoxSession(requests.Session):
+    """HTTP сессия с таймаутом и retry для 429 (Rate Limit)."""
+
+    def __init__(self, timeout=30, verify=True):
+        super().__init__()
+        self.timeout = timeout    # Таймаут на каждый запрос
+        self.verify = verify      # SSL проверка
+
+    def request(self, method, url, **kwargs):
+        kwargs.setdefault("timeout", self.timeout)  # Таймаут по умолчанию
+
+        for attempt in range(1, MAX_RETRIES_429 + 1):
+            response = super().request(method, url, **kwargs)
+            if response.status_code != 429:
+                return response
+            # 429 Rate Limit — ждём и повторяем
+            delay = int(response.headers.get("Retry-After", DEFAULT_RETRY_DELAY * attempt))
+            time.sleep(delay)
+        return response
+```
+
+**Зачем это нужно:**
+- **Timeout**: без него `requests.Session` ждёт ответ бесконечно (`timeout=None`). Если NetBox зависнет — скрипт зависнет навечно
+- **Retry 429**: при массовом sync NetBox может вернуть 429 Too Many Requests. Retry с backoff позволяет дождаться снятия лимита
 
 ### Helper-методы
 
