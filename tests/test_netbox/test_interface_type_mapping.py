@@ -356,10 +356,10 @@ class TestQtechInterfaceTypeMapping:
         ("AggregatePort 100", "lag"),
         ("Ag1", "lag"),
         ("Ag10", "lag"),
-        # TFGigabitEthernet → 10G SFP+
-        ("TFGigabitEthernet 0/1", "10gbase-x-sfpp"),
-        ("TF0/1", "10gbase-x-sfpp"),
-        ("TF0/48", "10gbase-x-sfpp"),
+        # TFGigabitEthernet → 25G SFP28
+        ("TFGigabitEthernet 0/1", "25gbase-x-sfp28"),
+        ("TF0/1", "25gbase-x-sfp28"),
+        ("TF0/48", "25gbase-x-sfp28"),
         # HundredGigabitEthernet → 100G
         ("HundredGigabitEthernet 0/55", "100gbase-x-qsfp28"),
         ("Hu0/55", "100gbase-x-qsfp28"),

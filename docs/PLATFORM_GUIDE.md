@@ -922,7 +922,7 @@ NetBox sync → mode, tagged_vlans, untagged_vlan
 
 | Полное имя | Сокращение | Скорость | NetBox type | Примечание |
 |------------|-----------|----------|-------------|-----------|
-| TFGigabitEthernet 0/1 | TF0/1 | 10G | 10gbase-x-sfpp | SFP+ порты |
+| TFGigabitEthernet 0/1 | TF0/1 | 25G | 25gbase-x-sfp28 | SFP28 порты |
 | HundredGigabitEthernet 0/55 | Hu0/55 | 100G | 100gbase-x-qsfp28 | QSFP28 аплинки |
 | AggregatePort 1 | Ag1 | — | lag | LAG (аналог Port-channel) |
 
@@ -934,7 +934,7 @@ NetBox sync → mode, tagged_vlans, untagged_vlan
 ```python
 # Сокращение → полное
 INTERFACE_SHORT_MAP = [
-    ("tfgigabitethernet", "TF"),   # QTech 10G
+    ("tfgigabitethernet", "TF"),   # QTech 25G
     ("aggregateport", "Ag"),       # QTech LAG
     ("hundredgigabitethernet", "Hu"),
     ...
@@ -1542,8 +1542,8 @@ Media_type используется на **двух уровнях**, и это 
 |---|---|---|
 | **Источник** | Имя интерфейса | `show interface transceiver` → TYPE |
 | **Данные** | `TFGigabitEthernet 0/1` | `10GBASE-SR-SFP+` |
-| **port_type** | `10g-sfp+` (по имени) | `10g-sfp+` (по media_type — то же) |
-| **NetBox type** | `10gbase-x-sfpp` (generic SFP+) | `10gbase-sr` (**ТОЧНЫЙ** 10GBASE-SR!) |
+| **port_type** | `25g-sfp28` (по имени) | `10g-sfp+` (по media_type — трансивер) |
+| **NetBox type** | `25gbase-x-sfp28` (generic SFP28) | `10gbase-sr` (**ТОЧНЫЙ** 10GBASE-SR!) |
 
 Разница: `get_netbox_interface_type()` проверяет media_type по `NETBOX_INTERFACE_TYPE_MAP`
 **до** проверки port_type. Паттерн `"10gbase-sr"` совпадает с `"10gbase-sr-sfp+"` и
@@ -1553,7 +1553,7 @@ Media_type используется на **двух уровнях**, и это 
 по имени интерфейса (fallback):
 - `GigabitEthernet` → `1000base-t`
 - `TenGigabitEthernet` → `10gbase-x-sfpp`
-- `TFGigabitEthernet` (QTech 10G) → `10gbase-x-sfpp`
+- `TFGigabitEthernet` (QTech 25G) → `25gbase-x-sfp28`
 
 **Как добавить media_type для новой платформы:**
 
@@ -1741,7 +1741,7 @@ Start
 # Порядок важен! Длинные имена ПЕРВЫМИ
 INTERFACE_SHORT_MAP = [
     ...
-    ("tfgigabitethernet", "TF"),  # QTech 10G: TFGigabitEthernet 0/1 → TF0/1
+    ("tfgigabitethernet", "TF"),  # QTech 25G: TFGigabitEthernet 0/1 → TF0/1
     ("aggregateport", "Ag"),      # QTech LAG: AggregatePort 1 → Ag1
     # Eltex пример (если есть уникальные имена):
     # ("extremeethernet", "Xe"),  # Eltex Extreme: ExtremeEthernet 0/1 → Xe0/1
@@ -2012,7 +2012,7 @@ SECONDARY_COMMANDS["switchport"]["eltex"] = "show interfaces switchport"
   core/constants/platforms.py     — 4 маппинга (SCRAPLI, NTC, NETMIKO, VENDOR)
   core/constants/commands.py      — 6 команд + 8 пар регистрации шаблонов
   core/constants/interfaces.py    — 2 записи SHORT_MAP + 2 записи FULL_MAP + SHORT_TO_EXTRA
-  core/constants/netbox.py        — AggregatePort→lag, TFGigabitEthernet→10G
+  core/constants/netbox.py        — AggregatePort→lag, TFGigabitEthernet→25G
   core/domain/interface.py        — detect_port_type() для Ag/TF
   core/constants/commands.py      — SECONDARY_COMMANDS["lag"] + SECONDARY_COMMANDS["switchport"]
   collectors/interfaces.py        — _parse_lag_membership_qtech()
@@ -2229,7 +2229,8 @@ NeighborBlock
 | Тип | Cisco | QTech | Короткое |
 |-----|-------|-------|----------|
 | 100G | `HundredGigE` | `HundredGigabitEthernet` | `Hu` |
-| 10G | `TenGigabitEthernet` | `TFGigabitEthernet` | `Te` / `TF` |
+| 25G | — | `TFGigabitEthernet` | `TF` |
+| 10G | `TenGigabitEthernet` | — | `Te` |
 | 1G | `GigabitEthernet` | `GigabitEthernet` | `Gi` |
 
 **Как система сопоставляет:**
@@ -2307,7 +2308,7 @@ INTERFACE_SHORT_MAP = [
     ("hundredgigabitethernet", "Hu"),        # QTech 100G
     ("hundredgige", "Hu"),                   # Cisco 100G  ← ОБА → "Hu"
     ("fortygigabitethernet", "Fo"),          # 40G
-    ("tfgigabitethernet", "TF"),             # QTech 10G
+    ("tfgigabitethernet", "TF"),             # QTech 25G
     ("tengigabitethernet", "Te"),            # Cisco 10G
     ("gigabitethernet", "Gi"),               # 1G
     ("fastethernet", "Fa"),                  # 100M
@@ -2343,7 +2344,7 @@ INTERFACE_SHORT_MAP = [
 INTERFACE_FULL_MAP = {
     "Gi": "GigabitEthernet",
     "Te": "TenGigabitEthernet",
-    "TF": "TFGigabitEthernet",     # QTech 10G
+    "TF": "TFGigabitEthernet",     # QTech 25G
     "Hu": "HundredGigE",           # ← всегда Cisco-стиль!
     "Fo": "FortyGigabitEthernet",
     "Ag": "AggregatePort",         # QTech LAG
@@ -2377,8 +2378,8 @@ INTERFACE_NAME_PORT_TYPE_MAP = {
     "fo": "40g-qsfp",                  # 40G (короткий)
     "twentyfivegig": "25g-sfp28",      # 25G
     "twe": "25g-sfp28",                # 25G (короткий)
-    "tfgigabitethernet": "10g-sfp+",   # QTech 10G
-    "tf": "10g-sfp+",                  # QTech 10G (короткий)
+    "tfgigabitethernet": "25g-sfp28",  # QTech 25G
+    "tf": "25g-sfp28",                 # QTech 25G (короткий)
     "tengig": "10g-sfp+",              # Cisco 10G
     "te": "10g-sfp+",                  # Cisco 10G (короткий)
     "gigabit": "1g-rj45",              # 1G
@@ -2549,9 +2550,9 @@ _SHORT_PORT_TYPE_PREFIXES = {"hu", "fo", "twe", "tf", "te", "gi", "fa"}
 ```
 1-5. Все пусто                       → пропуск
 6. interface_name = "tfgigabitethernet0/1"
-   → INTERFACE_NAME_PORT_TYPE_MAP: "tfgigabitethernet" → "10g-sfp+"
-   → PORT_TYPE_MAP: "10g-sfp+" → "10gbase-x-sfpp"
-   → return "10gbase-x-sfpp"                                     ← fallback
+   → INTERFACE_NAME_PORT_TYPE_MAP: "tfgigabitethernet" → "25g-sfp28"
+   → PORT_TYPE_MAP: "25g-sfp28" → "25gbase-x-sfp28"
+   → return "25gbase-x-sfp28"                                    ← fallback
 ```
 
 ---

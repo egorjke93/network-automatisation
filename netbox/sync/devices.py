@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 from .base import (
     SyncBase, SyncStats, DeviceInfo, get_sync_config, normalize_device_model,
     NetBoxError, NetBoxConnectionError, NetBoxValidationError, format_error_for_log, logger,
+    slugify,
 )
 
 logger = logging.getLogger(__name__)
@@ -372,8 +373,8 @@ class DevicesSyncMixin:
         deleted = 0
 
         try:
-            site_slug = site.lower().replace(" ", "-")
-            tenant_slug = tenant.lower().replace(" ", "-")
+            site_slug = slugify(site)
+            tenant_slug = slugify(tenant)
 
             netbox_devices = self.client.get_devices(site=site_slug, tenant=tenant_slug)
             logger.info(

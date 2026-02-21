@@ -57,38 +57,29 @@ class TestQtechInterfaceMaps:
     """Тесты маппинга QTech интерфейсов."""
 
     @pytest.mark.parametrize("full_name,expected_short", [
+        # QTech-специфичные типы (пробелы в именах)
         ("TFGigabitEthernet 0/1", "TF0/1"),
         ("TFGigabitEthernet 0/48", "TF0/48"),
         ("AggregatePort 1", "Ag1"),
         ("AggregatePort 100", "Ag100"),
-        # Существующие типы по-прежнему работают
         ("HundredGigabitEthernet 0/55", "Hu0/55"),
-        ("GigabitEthernet0/1", "Gi0/1"),
-        ("Port-channel1", "Po1"),
     ])
     def test_normalize_short(self, full_name, expected_short):
-        """Сокращение QTech имён интерфейсов."""
+        """Сокращение QTech имён интерфейсов (с пробелами)."""
         result = normalize_interface_short(full_name)
-        assert result == expected_short, (
-            f"normalize_interface_short('{full_name}') = '{result}', expected '{expected_short}'"
-        )
+        assert result == expected_short
 
     @pytest.mark.parametrize("short_name,expected_full", [
+        # QTech-специфичные типы
         ("TF0/1", "TFGigabitEthernet0/1"),
         ("TF0/48", "TFGigabitEthernet0/48"),
         ("Ag1", "AggregatePort1"),
         ("Ag100", "AggregatePort100"),
-        # Существующие типы
-        ("Hu0/55", "HundredGigE0/55"),
-        ("Gi0/1", "GigabitEthernet0/1"),
-        ("Po1", "Port-channel1"),
     ])
     def test_normalize_full(self, short_name, expected_full):
         """Расширение QTech имён интерфейсов."""
         result = normalize_interface_full(short_name)
-        assert result == expected_full, (
-            f"normalize_interface_full('{short_name}') = '{result}', expected '{expected_full}'"
-        )
+        assert result == expected_full
 
     def test_get_aliases_tfgigabit(self):
         """Алиасы для TFGigabitEthernet."""

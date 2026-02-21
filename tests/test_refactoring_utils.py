@@ -133,8 +133,8 @@ class TestDetectTypeByNamePrefix:
         ("twe1/0/27", "25gbase-x-sfp28"),
         ("tengigabitethernet1/1", "10gbase-x-sfpp"),
         ("te1/1", "10gbase-x-sfpp"),
-        ("tfgigabitethernet0/1", "10gbase-x-sfpp"),
-        ("tf0/1", "10gbase-x-sfpp"),
+        ("tfgigabitethernet0/1", "25gbase-x-sfp28"),
+        ("tf0/1", "25gbase-x-sfp28"),
         ("fastethernet0/1", "100base-tx"),
         ("fa0/1", "100base-tx"),
     ])

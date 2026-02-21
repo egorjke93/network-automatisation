@@ -5,6 +5,8 @@ Mixin для работы с VLAN в NetBox.
 import logging
 from typing import List, Any, Optional
 
+from ...core.constants import slugify
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,7 +31,7 @@ class VLANsMixin:
         params = {}
         if site:
             # NetBox API требует slug сайта, конвертируем
-            site_slug = site.lower().replace(" ", "-")
+            site_slug = slugify(site)
             params["site"] = site_slug
         params.update(filters)
 
@@ -50,7 +52,7 @@ class VLANsMixin:
         """
         params = {"vid": vid}
         if site:
-            site_slug = site.lower().replace(" ", "-")
+            site_slug = slugify(site)
             params["site"] = site_slug
         vlans = list(self.api.ipam.vlans.filter(**params))
         return vlans[0] if vlans else None

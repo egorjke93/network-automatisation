@@ -77,9 +77,27 @@ def normalize_mac_cisco(mac: str) -> str:
     return f"{clean[0:4]}.{clean[4:8]}.{clean[8:12]}"
 
 
+def normalize_mac_unix(mac: str) -> str:
+    """
+    Нормализует MAC-адрес в Unix формат (aa-bb-cc-dd-ee-ff).
+
+    Args:
+        mac: MAC-адрес в любом формате
+
+    Returns:
+        str: MAC в формате aa-bb-cc-dd-ee-ff (или пустая строка)
+    """
+    clean = normalize_mac_raw(mac)
+    if not clean:
+        return ""
+    return "-".join(clean[i : i + 2] for i in range(0, 12, 2))
+
+
 def normalize_mac(mac: str, format: str = "ieee") -> str:
     """
     Нормализует MAC-адрес в указанный формат.
+
+    Делегирует специализированным функциям.
 
     Args:
         mac: MAC-адрес в любом формате
@@ -93,17 +111,12 @@ def normalize_mac(mac: str, format: str = "ieee") -> str:
     Returns:
         str: MAC в указанном формате (или пустая строка)
     """
-    clean = normalize_mac_raw(mac)
-    if not clean:
-        return ""
-
-    if format == "raw":
-        return clean
-    elif format == "cisco":
-        return f"{clean[0:4]}.{clean[4:8]}.{clean[8:12]}"
-    elif format == "netbox":
-        return ":".join(clean[i : i + 2].upper() for i in range(0, 12, 2))
-    elif format == "unix":
-        return "-".join(clean[i : i + 2] for i in range(0, 12, 2))
-    else:  # ieee (default)
-        return ":".join(clean[i : i + 2] for i in range(0, 12, 2))
+    formatters = {
+        "raw": normalize_mac_raw,
+        "ieee": normalize_mac_ieee,
+        "netbox": normalize_mac_netbox,
+        "cisco": normalize_mac_cisco,
+        "unix": normalize_mac_unix,
+    }
+    fn = formatters.get(format, normalize_mac_ieee)
+    return fn(mac)

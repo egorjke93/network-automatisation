@@ -652,7 +652,7 @@ get_interface_aliases("Hu0/55")  # → ["Hu0/55", "HundredGigE0/55", "HundredGig
 
 # Нормализация интерфейсов (Cisco и QTech)
 normalize_interface_short("GigabitEthernet0/1")      # → "Gi0/1"
-normalize_interface_short("TFGigabitEthernet 0/1")   # → "TF0/1"    (QTech 10G)
+normalize_interface_short("TFGigabitEthernet 0/1")   # → "TF0/1"    (QTech 25G)
 normalize_interface_short("AggregatePort 1")          # → "Ag1"      (QTech LAG)
 normalize_interface_full("Gi0/1")                     # → "GigabitEthernet0/1"
 normalize_interface_full("TF0/1")                     # → "TFGigabitEthernet0/1"
@@ -1259,7 +1259,7 @@ Field Registry Statistics:
 
 | Файл | Описание |
 |------|----------|
-| `collectors/base.py` | BaseCollector, collect_models() |
+| `collectors/base.py` | BaseCollector, collect(), collect_dicts() |
 | `collectors/device.py` | DeviceCollector, DeviceInventoryCollector |
 | `collectors/mac.py` | MACCollector |
 | `collectors/lldp.py` | LLDPCollector |

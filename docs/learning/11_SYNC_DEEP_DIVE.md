@@ -1867,7 +1867,7 @@ LLDP возвращает "сырые" имена интерфейсов (`"Mgmt
 
 Проблема усложняется тем, что **разные вендоры используют разные полные имена**:
 - Cisco: `HundredGigE` (100G), `TenGigabitEthernet` (10G)
-- QTech: `HundredGigabitEthernet` (100G), `TFGigabitEthernet` (10G)
+- QTech: `HundredGigabitEthernet` (100G), `TFGigabitEthernet` (25G)
 
 **Решение:** для сравнения используется **короткая форма** (`normalize_interface_short`),
 которая одинакова для всех вендоров:
@@ -2445,7 +2445,7 @@ netbox/sync/cables.py: sync_cables_from_lldp()
 │  INTERFACE_SHORT_MAP (List[tuple]):                               │
 │    ("hundredgigabitethernet", "Hu")  ← QTech 100G                │
 │    ("hundredgige", "Hu")             ← Cisco 100G                │
-│    ("tfgigabitethernet", "TF")       ← QTech 10G                 │
+│    ("tfgigabitethernet", "TF")       ← QTech 25G                 │
 │    ("tengigabitethernet", "Te")      ← Cisco 10G                 │
 │    ("gigabitethernet", "Gi")         ← все вендоры               │
 │    ("fastethernet", "Fa")            ← все вендоры               │

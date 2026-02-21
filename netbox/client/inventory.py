@@ -40,23 +40,6 @@ class InventoryMixin:
         logger.debug(f"Получено inventory items: {len(items)}")
         return items
 
-    def get_inventory_item(
-        self,
-        device_id: int,
-        name: str,
-    ) -> Optional[Any]:
-        """
-        Находит inventory item по имени на устройстве.
-
-        Args:
-            device_id: ID устройства
-            name: Имя компонента
-
-        Returns:
-            InventoryItem или None
-        """
-        return self.api.dcim.inventory_items.get(device_id=device_id, name=name)
-
     def create_inventory_item(
         self,
         device_id: int,

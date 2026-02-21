@@ -362,50 +362,6 @@ class SyncBase:
             use_transliterate=True,
         )
 
-    # ==================== ОБРАБОТКА ОШИБОК ====================
-
-    def _safe_netbox_call(
-        self,
-        operation: str,
-        fn: Callable,
-        *args,
-        default: Any = None,
-        log_level: str = "error",
-        **kwargs,
-    ) -> Any:
-        """
-        Выполняет NetBox API вызов с обработкой ошибок.
-
-        Заменяет повторяющийся паттерн try/except в sync-методах.
-
-        Args:
-            operation: Описание операции (для лога)
-            fn: Функция для вызова
-            *args: Аргументы функции
-            default: Значение по умолчанию при ошибке
-            log_level: Уровень логирования (error/warning)
-            **kwargs: Именованные аргументы функции
-
-        Returns:
-            Результат fn() или default при ошибке
-
-        Example:
-            result = self._safe_netbox_call(
-                "обновление устройства",
-                device.update, updates,
-                default=False,
-            )
-        """
-        log_fn = getattr(logger, log_level)
-        try:
-            return fn(*args, **kwargs)
-        except (NetBoxError, NetBoxValidationError, NetBoxConnectionError) as e:
-            log_fn(f"{self._log_prefix()}Ошибка {operation}: {format_error_for_log(e)}")
-            return default
-        except Exception as e:
-            log_fn(f"{self._log_prefix()}Неизвестная ошибка {operation}: {e}")
-            return default
-
     # ==================== BATCH С FALLBACK ====================
 
     def _batch_with_fallback(

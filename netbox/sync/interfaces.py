@@ -441,10 +441,6 @@ class InterfacesSyncMixin:
             if not new_mac:
                 continue
 
-            if self.dry_run:
-                mac_queue.append((item.remote_data.id, new_mac, item.name))
-                continue
-
             # Проверяем текущий MAC — назначаем только если отличается
             current_mac = self.client.get_interface_mac(item.remote_data.id)
             if new_mac.upper() != (current_mac or "").upper():
@@ -610,7 +606,8 @@ class InterfacesSyncMixin:
         if sync_mac_only_with_ip and not intf.ip_address:
             return None
         new_mac = normalize_mac_netbox(intf.mac)
-        current_mac = self.client.get_interface_mac(nb_interface.id) if not self.dry_run else None
+        # Проверяем текущий MAC всегда (и в dry-run), чтобы не показывать ложные изменения
+        current_mac = self.client.get_interface_mac(nb_interface.id)
         if new_mac and new_mac.upper() != (current_mac or "").upper():
             actual_changes.append(f"mac: {current_mac} → {new_mac}")
             return new_mac
@@ -712,8 +709,18 @@ class InterfacesSyncMixin:
                     updates["untagged_vlan"] = vlan.id
                     actual_changes.append(f"untagged_vlan: {current_vlan_vid} → {target_vid}")
             else:
+                # VLAN не найден в NetBox — очищаем текущий если он есть
+                # Типичный случай: интерфейс сброшен на default (VLAN 1),
+                # а VLAN 1 не заведён в NetBox
+                if current_vlan_id:
+                    updates["untagged_vlan"] = None
+                    actual_changes.append(
+                        f"untagged_vlan: {current_vlan_vid} → None "
+                        f"(VLAN {target_vid} не найден в NetBox)"
+                    )
                 logger.debug(f"VLAN {target_vid} не найден в NetBox (site={site_name})")
         elif current_vlan_id:
+            # Нет target VLAN (порт без VLAN) — очищаем
             updates["untagged_vlan"] = None
             actual_changes.append(f"untagged_vlan: {current_vlan_vid} → None")
 

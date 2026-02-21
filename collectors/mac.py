@@ -67,7 +67,7 @@ class MACCollector(BaseCollector):
         data = collector.collect(devices)  # List[Dict]
 
         # Или типизированные модели
-        macs = collector.collect_models(devices)  # List[MACEntry]
+        macs = collector.collect(devices)  # List[MACEntry]
     """
 
     # Типизированная модель

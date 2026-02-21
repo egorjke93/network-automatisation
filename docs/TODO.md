@@ -720,7 +720,7 @@ def _find_interface(self, device_id, name):
 
 - Config.get() — исправлен TypeError в cmd_run
 - AggregatePort (QTech LAG) — распознаётся как LAG в detect_port_type, get_netbox_interface_type
-- TFGigabitEthernet (QTech 10G SFP+) — распознаётся как 10g-sfp+ / 10gbase-x-sfpp
+- TFGigabitEthernet (QTech 25G SFP28) — распознаётся как 25g-sfp28 / 25gbase-x-sfp28
 - Маппинги интерфейсов: TF ↔ TFGigabitEthernet, Ag ↔ AggregatePort
 - TextFSM шаблон qtech_show_aggregatePort_summary.textfsm для LAG парсинга
 - LAG парсинг: _parse_lag_membership_qtech() с алиасами всех имён

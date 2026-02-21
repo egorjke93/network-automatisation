@@ -408,7 +408,8 @@ key = ("hu0/51", "switch2")
 
 ```
 100G:  Cisco → HundredGigE       QTech → HundredGigabitEthernet
-10G:   Cisco → TenGigabitEthernet  QTech → TFGigabitEthernet
+25G:   QTech → TFGigabitEthernet
+10G:   Cisco → TenGigabitEthernet
 ```
 
 Решение -- `normalize_interface_short()` приводит ВСЕ варианты к **одной короткой
@@ -1068,7 +1069,7 @@ Arista EOS (TextFSM):              |   normalize_dicts()
 normalize_interface_short("GigabitEthernet0/1")      # --> "Gi0/1"
 normalize_interface_short("TenGigabitEthernet1/0/1")  # --> "Te1/0/1"
 normalize_interface_short("Port-channel10")            # --> "Po10"
-normalize_interface_short("TFGigabitEthernet 0/1")    # --> "TF0/1"   (QTech 10G)
+normalize_interface_short("TFGigabitEthernet 0/1")    # --> "TF0/1"   (QTech 25G)
 normalize_interface_short("AggregatePort 1")           # --> "Ag1"     (QTech LAG)
 
 normalize_mac("aabb.ccdd.eeff", format="ieee")  # --> "AA:BB:CC:DD:EE:FF"

@@ -556,13 +556,13 @@ INTERFACE_NAME_PORT_TYPE_MAP: Dict[str, str] = {
 # Если нужны сокращения/расширения имён
 ```
 
-**Пример из QTech: TFGigabitEthernet = 10G, AggregatePort = LAG**
+**Пример из QTech: TFGigabitEthernet = 25G, AggregatePort = LAG**
 
 ```python
 # core/constants/interfaces.py → INTERFACE_NAME_PORT_TYPE_MAP (data-driven)
 INTERFACE_NAME_PORT_TYPE_MAP = {
     ...,
-    "tfgigabitethernet": "10g-sfp+", "tf": "10g-sfp+",
+    "tfgigabitethernet": "25g-sfp28", "tf": "25g-sfp28",
     ...
 }
 # LAG: is_lag_name() в core/constants/interfaces.py (единый источник)

@@ -57,7 +57,7 @@ class LLDPCollector(BaseCollector):
         neighbors = collector.collect(devices)  # List[Dict]
 
         # Или типизированные модели
-        neighbors = collector.collect_models(devices)  # List[LLDPNeighbor]
+        neighbors = collector.collect(devices)  # List[LLDPNeighbor]
     """
 
     # Типизированная модель

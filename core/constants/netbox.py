@@ -150,7 +150,7 @@ NETBOX_HARDWARE_TYPE_MAP: Dict[str, str] = {
     # 10G
     "ten gig": "10gbase-x-sfpp",
     "tengig": "10gbase-x-sfpp",
-    "tfgigabitethernet": "10gbase-x-sfpp",  # QTech 10G
+    "tfgigabitethernet": "25gbase-x-sfp28",  # QTech 25G
     "10g": "10gbase-x-sfpp",
     # 1G - SFP на Cisco 6500
     "c6k 1000mb 802.3": "1000base-x-sfp",

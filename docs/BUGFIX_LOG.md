@@ -1244,6 +1244,203 @@ for prefix, port_type in INTERFACE_NAME_PORT_TYPE_MAP.items():
 
 ---
 
+## Баг 17: MAC dry-run показывает ложные "Назначение MAC" для существующих MAC
+
+### Симптом
+
+При `--dry-run` в логе видно `[DRY-RUN] Назначение MAC: AA:BB:CC:DD:EE:FF → GigabitEthernet0/1` для интерфейсов, где MAC уже назначен корректно. При реальном запуске (без dry-run) — "0 обновлений".
+
+### Причина
+
+В `_post_sync_mac_check()` был ранний выход для dry_run:
+
+```python
+if self.dry_run:
+    mac_queue.append((item.remote_data.id, new_mac, item.name))  # Сразу в очередь!
+    continue
+# Проверяем текущий MAC — только НЕ в dry_run
+current_mac = self.client.get_interface_mac(item.remote_data.id)
+```
+
+В dry_run режиме `get_interface_mac()` НЕ вызывался — MAC не проверялся. Все интерфейсы с mac_address попадали в очередь как "требующие обновления".
+
+Аналогичная проблема в `_check_mac()`:
+
+```python
+current_mac = self.client.get_interface_mac(nb_interface.id) if not self.dry_run else None
+```
+
+### Цепочка
+
+```
+dry_run=True → _post_sync_mac_check() → skip get_interface_mac()
+→ mac_queue заполняется ВСЕМИ интерфейсами с MAC → stats["mac_updated"] = N
+→ пользователь думает что MAC будет обновлён → при реальном запуске 0 обновлений
+```
+
+### Исправление
+
+Убран ранний выход по dry_run. Теперь `get_interface_mac()` вызывается ВСЕГДА — и в dry_run, и в реальном режиме. Сравнение `new_mac != current_mac` фильтрует ложные обновления:
+
+```python
+# _post_sync_mac_check(): убран if self.dry_run блок
+current_mac = self.client.get_interface_mac(item.remote_data.id)
+if new_mac.upper() != (current_mac or "").upper():
+    mac_queue.append((item.remote_data.id, new_mac, item.name))
+
+# _check_mac(): убран conditional
+current_mac = self.client.get_interface_mac(nb_interface.id)  # Всегда проверяем
+```
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `netbox/sync/interfaces.py` | `_post_sync_mac_check()` — убран `if self.dry_run` early exit; `_check_mac()` — убран conditional |
+
+---
+
+## Баг 18: VLAN не очищается при возврате интерфейса в default (VLAN 1)
+
+### Симптом
+
+Интерфейс настроен с `switchport access vlan 901`. В NetBox у порта `untagged_vlan = VLAN 901`. После сброса на default (`switchport access vlan 1` или удаление конфига), коллектор возвращает `target_vid = 1`. Но VLAN 1 не создан в NetBox. Результат: VLAN 901 остаётся в NetBox, хотя на оборудовании уже нет.
+
+### Причина
+
+В `_check_untagged_vlan()` логика проверки:
+
+```python
+if target_vid:  # VLAN 1 → truthy
+    nb_vlan = self._find_vlan(target_vid, site_name)
+    if nb_vlan:
+        # Назначаем найденный VLAN
+        ...
+    else:
+        # VLAN не найден — просто debug лог, НЕ очищаем!
+        logger.debug(f"VLAN {target_vid} не найден в NetBox")
+        # ← current_vlan_id НЕ очищается!
+elif current_vlan_id:
+    # Эта ветка НИКОГДА не выполняется для VLAN 1
+    updates["untagged_vlan"] = None
+```
+
+Проблема: `target_vid = 1` (truthy) → заходим в `if target_vid` → VLAN 1 не найден → debug лог → выход. Ветка `elif current_vlan_id` недостижима.
+
+### Цепочка
+
+```
+switch: vlan 1 (default) → collector: target_vid=1 → _check_untagged_vlan()
+→ if target_vid (1=True) → _find_vlan(1, "SU") → None (VLAN 1 не в NetBox)
+→ logger.debug("VLAN 1 не найден") → return (без изменений!)
+→ NetBox: untagged_vlan = VLAN 901 (остался старый!)
+```
+
+### Исправление
+
+В ветке `else` (VLAN не найден) добавлена очистка текущего VLAN:
+
+```python
+else:
+    # VLAN не найден в NetBox — очищаем текущий если он есть
+    if current_vlan_id:
+        updates["untagged_vlan"] = None
+        actual_changes.append(
+            f"untagged_vlan: {current_vlan_vid} → None "
+            f"(VLAN {target_vid} не найден в NetBox)"
+        )
+    logger.debug(f"VLAN {target_vid} не найден в NetBox (site={site_name})")
+```
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `netbox/sync/interfaces.py` | `_check_untagged_vlan()` — добавлена очистка VLAN когда target не найден в NetBox |
+
+---
+
+## Баг 19: IP sync не показывает какой IP обновлён
+
+### Симптом
+
+При синхронизации IP-адресов лог показывает только итоговый `updated: 5`, без деталей какие именно IP были обновлены. Для диагностики приходилось включать DEBUG.
+
+### Исправление
+
+Добавлен `logger.info()` при каждом обновлении IP:
+
+```python
+logger.info(f"Обновлён IP: {entry.with_prefix} на {entry.interface}")
+```
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `netbox/sync/ip_addresses.py` | Добавлен `logger.info()` для каждого обновлённого IP |
+
+---
+
+## Баг 20: TFGigabitEthernet определялся как 10G вместо 25G + неполные маппинги
+
+### Симптом
+
+QTech QSW-6900-56F: порты `TFGigabitEthernet 0/1-0/48` — это 25G SFP28 порты. Но во всех маппингах TF определялся как 10G:
+- `detect_port_type()` → `"10g-sfp+"` (неверно, должно быть `"25g-sfp28"`)
+- `get_netbox_interface_type()` → `"10gbase-x-sfpp"` (неверно, должно быть `"25gbase-x-sfp28"`)
+
+Дополнительно:
+- `STATUS_MAP` не содержал QTech-специфичных статусов `"down (administratively down)"` и `"down (xcvr not inserted)"`
+- `HARDWARE_TYPE_PORT_TYPE_MAP` не содержал NX-OS multi-speed `"100/1000/10000/25000"`
+
+### Причина
+
+При добавлении QTech TFGigabitEthernet маппинги были скопированы из TenGigabitEthernet (10G) вместо TwentyFiveGigE (25G):
+
+```python
+# БЫЛО (неверно):
+"tfgigabitethernet": "10g-sfp+",   # interfaces.py
+"tfgigabitethernet": "10gbase-x-sfpp",  # netbox.py (INTERFACE_NAME_PORT_TYPE_MAP)
+```
+
+### Исправление
+
+Исправлены маппинги в 4 файлах кода и 5 файлах тестов:
+
+```python
+# СТАЛО (верно):
+# interfaces.py — HARDWARE_TYPE_PORT_TYPE_MAP:
+"tfgigabitethernet": "25g-sfp28",
+# interfaces.py — INTERFACE_NAME_PORT_TYPE_MAP:
+"tfgigabitethernet": "25g-sfp28",
+"tf": "25g-sfp28",
+# netbox.py — _detect_type_by_name_prefix():
+"tfgigabitethernet": "25gbase-x-sfp28",  # через PORT_TYPE_MAP
+```
+
+Добавлены маппинги:
+
+```python
+# STATUS_MAP (domain/interface.py):
+"down (administratively down)": "disabled",  # QTech формат
+"down (xcvr not inserted)": "disabled",      # трансивер не установлен
+
+# HARDWARE_TYPE_PORT_TYPE_MAP (constants/interfaces.py):
+"100/1000/10000/25000": "25g-sfp28",  # NX-OS multi-speed 25G
+```
+
+### Файлы изменены
+
+| Файл | Что изменено |
+|------|-------------|
+| `core/constants/interfaces.py` | `HARDWARE_TYPE_PORT_TYPE_MAP`: TF→25G, добавлен "100/1000/10000/25000"; `INTERFACE_NAME_PORT_TYPE_MAP`: TF→25G |
+| `core/constants/netbox.py` | TF→25G в `_detect_type_by_name_prefix()` |
+| `core/domain/interface.py` | `STATUS_MAP`: добавлены 2 QTech статуса |
+| tests/* | Обновлены ожидаемые значения TF: 10G→25G (5 тестовых файлов) |
+
+---
+
 ## Общие уроки
 
 1. **При добавлении платформы — проверять ВСЕ места**, где есть хардкод имён (не только парсинг, но и сортировку, поиск, case-insensitive сравнение)
@@ -1279,3 +1476,7 @@ for prefix, port_type in INTERFACE_NAME_PORT_TYPE_MAP.items():
 31. **_is_same_lag() через normalize_interface_short** — вместо 25 строк ручного сравнения `Port-channel1 == Po1 == po1`, одна строка через `normalize_interface_short(name, lowercase=True)`. Надёжнее и автоматически поддерживает новые платформы
 32. **HARDWARE_TYPE_PORT_TYPE_MAP неполный** — отсутствовали "tengig" (без пробела), "twentyfive", "twenty-five". NETBOX_HARDWARE_TYPE_MAP имел все варианты, а domain layer — нет. Порты с такими hardware_type получали неверный тип
 33. **exclude_interfaces без QTech LAG** — дефолтные `exclude_interfaces` не содержали `AggregatePort`/`Ag\d+`. При сборе MAC с QTech LAG-интерфейсы не фильтровались
+34. **dry_run не должен пропускать READ-операции** — `get_interface_mac()` это GET-запрос, не мутация. Пропуск чтения в dry_run приводит к ложным diff. Правило: dry_run пропускает только WRITE (create/update/delete), но НЕ READ (get/list)
+35. **elif после if — недостижимые ветки** — `if target_vid:` (truthy для 1) → `elif current_vlan_id:` никогда не выполнится когда target_vid=1 и VLAN не найден. При написании if/elif — проверять что каждая ветка достижима для реальных данных
+36. **Маппинги из спецификации, не по аналогии** — TFGigabitEthernet скопировали из TenGigabitEthernet (10G), хотя TF это 25G по спецификации QTech QSW-6900. При добавлении нового типа порта — проверять datasheet, а не копировать похожее имя
+37. **INFO-лог для каждого изменения** — итоговые `stats["updated"] = N` недостаточно для диагностики. Каждое изменение (IP обновлён, VLAN назначен, MAC изменён) должно логироваться на INFO с деталями

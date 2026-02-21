@@ -95,6 +95,9 @@ class IPAddressesSyncMixin:
                             "interface": entry.interface,
                             "changes": changes,
                         })
+                        logger.info(
+                            f"Обновлён IP: {entry.with_prefix} на {entry.interface}"
+                        )
                     else:
                         stats["skipped"] += 1
 

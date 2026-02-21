@@ -8,6 +8,8 @@ import os
 import logging
 from typing import Optional
 
+from ...core.constants import slugify
+
 logger = logging.getLogger(__name__)
 
 # Пробуем импортировать pynetbox
@@ -88,7 +90,7 @@ class NetBoxClientBase:
     def _resolve_site_slug(self, site_name_or_slug: str) -> Optional[str]:
         """Находит slug сайта по имени или slug."""
         # Сначала пробуем как slug
-        site_obj = self.api.dcim.sites.get(slug=site_name_or_slug.lower())
+        site_obj = self.api.dcim.sites.get(slug=slugify(site_name_or_slug))
         if site_obj:
             return site_obj.slug
 
@@ -107,7 +109,7 @@ class NetBoxClientBase:
     def _resolve_role_slug(self, role_name_or_slug: str) -> Optional[str]:
         """Находит slug роли по имени или slug."""
         # Сначала пробуем как slug
-        role_obj = self.api.dcim.device_roles.get(slug=role_name_or_slug.lower())
+        role_obj = self.api.dcim.device_roles.get(slug=slugify(role_name_or_slug))
         if role_obj:
             return role_obj.slug
 

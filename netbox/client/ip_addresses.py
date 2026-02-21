@@ -39,35 +39,6 @@ class IPAddressesMixin:
         logger.debug(f"Получено IP-адресов: {len(ips)}")
         return ips
 
-    def get_ip_by_address(self, address: str) -> Optional[Any]:
-        """
-        Находит IP-адрес по его значению.
-
-        Args:
-            address: IP-адрес (с маской или без)
-
-        Returns:
-            IPAddress объект или None
-        """
-        if not address:
-            return None
-
-        ip_only = address.split("/")[0]
-
-        try:
-            ip_obj = self.api.ipam.ip_addresses.get(address=ip_only)
-            if ip_obj:
-                return ip_obj
-
-            ips = list(self.api.ipam.ip_addresses.filter(address=ip_only))
-            if ips:
-                return ips[0]
-
-        except Exception as e:
-            logger.debug(f"Ошибка поиска IP {address}: {e}")
-
-        return None
-
     def get_cables(
         self,
         device_id: Optional[int] = None,

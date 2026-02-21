@@ -23,7 +23,7 @@ show interfaces        → "GigabitEthernet0/1"     (полное имя)
 show interfaces status → "Gi0/1"                  (короткое имя)
 show cdp neighbors     → "Gig 0/1"                (CDP формат с пробелом)
 
-QTech 10G порт:
+QTech 25G порт:
 show interface         → "TFGigabitEthernet0/1"   (полное имя)
 show interface status  → "TF0/1"                  (короткое)
 
@@ -74,7 +74,7 @@ INTERFACE_SHORT_MAP: List[tuple] = [
     ("hundredgigabitethernet", "Hu"),        # 100G
     ("hundredgige", "Hu"),                   # 100G (альтернативное)
     ("fortygigabitethernet", "Fo"),           # 40G
-    ("tfgigabitethernet", "TF"),             # QTech 10G
+    ("tfgigabitethernet", "TF"),             # QTech 25G
     ("tengigabitethernet", "Te"),             # 10G
     ("gigabitethernet", "Gi"),               # 1G
     ("fastethernet", "Fa"),                  # 100M
@@ -153,7 +153,7 @@ INTERFACE_FULL_MAP: Dict[str, str] = {
     "Gi": "GigabitEthernet",
     "Fa": "FastEthernet",
     "Te": "TenGigabitEthernet",
-    "TF": "TFGigabitEthernet",    # QTech 10G
+    "TF": "TFGigabitEthernet",    # QTech 25G
     "Twe": "TwentyFiveGigE",
     "Fo": "FortyGigabitEthernet",
     "Hu": "HundredGigE",

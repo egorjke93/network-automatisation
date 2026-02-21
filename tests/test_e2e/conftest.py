@@ -51,24 +51,6 @@ def mock_device():
     return create_mock_device
 
 
-@pytest.fixture
-def cisco_ios_device():
-    """Mock Cisco IOS устройства."""
-    return create_mock_device("cisco_ios", "ios-switch")
-
-
-@pytest.fixture
-def cisco_nxos_device():
-    """Mock Cisco NX-OS устройства."""
-    return create_mock_device("cisco_nxos", "nxos-switch")
-
-
-@pytest.fixture
-def qtech_device():
-    """Mock QTech устройства."""
-    return create_mock_device("qtech", "qtech-switch")
-
-
 # Платформы для параметризованных тестов
 SUPPORTED_PLATFORMS = [
     "cisco_ios",
@@ -110,12 +92,6 @@ PLATFORM_FIXTURES = {
         "config": "show_running_config.txt",
     },
 }
-
-
-@pytest.fixture
-def platform_fixture_map():
-    """Возвращает маппинг fixtures для платформ."""
-    return PLATFORM_FIXTURES
 
 
 def get_fixture_filename(platform: str, fixture_type: str) -> Optional[str]:

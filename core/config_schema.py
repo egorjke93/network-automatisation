@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, field_validator, HttpUrl
 from pydantic_core import PydanticCustomError
 
 from .exceptions import ConfigError
+from .constants.utils import DEFAULT_EXCLUDE_INTERFACES
 
 
 class OutputConfig(BaseModel):
@@ -77,22 +78,9 @@ class MACConfig(BaseModel):
 class FiltersConfig(BaseModel):
     """Настройки фильтрации."""
     exclude_vlans: List[int] = Field(default_factory=list)
-    exclude_interfaces: List[str] = Field(default_factory=lambda: [
-        r"^Vlan\d+",
-        r"^Vl\d+",
-        r"^Loopback\d+",
-        r"^Lo\d+",
-        r"^Null\d+",
-        r"^Port-channel\d+",
-        r"^Po\d+",
-        r"^AggregatePort",  # QTech LAG
-        r"^Ag\d+",  # QTech LAG (короткая форма)
-        r"^mgmt\d*",
-        r"^CPU$",
-        r"^Switch$",
-        r"^Router$",
-        r"^Sup-eth",
-    ])
+    exclude_interfaces: List[str] = Field(
+        default_factory=lambda: list(DEFAULT_EXCLUDE_INTERFACES)
+    )
 
 
 class LoggingConfig(BaseModel):

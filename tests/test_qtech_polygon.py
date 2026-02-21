@@ -99,7 +99,7 @@ def build_qtech_interfaces():
 
     interfaces = []
 
-    # ── TFGigabitEthernet 0/1-4 (10G SFP+ с трансиверами) ──
+    # ── TFGigabitEthernet 0/1-4 (25G SFP28 порты с 10G трансиверами) ──
     transceivers = {
         "TFGigabitEthernet 0/1": "10GBASE-SR-SFP+",
         "TFGigabitEthernet 0/2": "10GBASE-SR-SFP+",
@@ -295,7 +295,7 @@ class TestQTechPolygon:
         logger.info(f"✓ TF0/3: type=10gbase-lr (точный из трансивера)")
 
     def test_07_no_media_type_fallback(self, nb_api, qtech_device):
-        """10G интерфейс без трансивера → generic тип."""
+        """25G интерфейс без трансивера → generic тип."""
         tf5_list = list(nb_api.dcim.interfaces.filter(
             device_id=qtech_device.id, name="TFGigabitEthernet 0/5"
         ))
@@ -303,11 +303,11 @@ class TestQTechPolygon:
         tf5 = tf5_list[0]
 
         logger.info(f"  TF0/5 type: {tf5.type.value} (label: {tf5.type.label})")
-        # Без media_type → по имени → 10gbase-x-sfpp (generic SFP+)
-        assert tf5.type.value == "10gbase-x-sfpp", (
-            f"TF0/5: ожидался generic тип 10gbase-x-sfpp, получен {tf5.type.value}"
+        # Без media_type → по имени → 25gbase-x-sfp28 (generic SFP28)
+        assert tf5.type.value == "25gbase-x-sfp28", (
+            f"TF0/5: ожидался generic тип 25gbase-x-sfp28, получен {tf5.type.value}"
         )
-        logger.info(f"✓ TF0/5: type=10gbase-x-sfpp (generic, нет трансивера)")
+        logger.info(f"✓ TF0/5: type=25gbase-x-sfp28 (generic, нет трансивера)")
 
     def test_08_100g_type(self, nb_api, qtech_device):
         """100G интерфейс получил правильный тип."""

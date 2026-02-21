@@ -59,7 +59,7 @@ INTERFACE_SHORT_MAP: List[tuple] = [
     ("hundredgigabitethernet", "Hu"),
     ("hundredgige", "Hu"),
     ("fortygigabitethernet", "Fo"),
-    ("tfgigabitethernet", "TF"),  # QTech 10G
+    ("tfgigabitethernet", "TF"),  # QTech 25G
     ("tengigabitethernet", "Te"),
     ("gigabitethernet", "Gi"),
     ("fastethernet", "Fa"),
@@ -79,7 +79,7 @@ INTERFACE_FULL_MAP: Dict[str, str] = {
     "Gi": "GigabitEthernet",
     "Fa": "FastEthernet",
     "Te": "TenGigabitEthernet",
-    "TF": "TFGigabitEthernet",  # QTech 10G
+    "TF": "TFGigabitEthernet",  # QTech 25G
     "Twe": "TwentyFiveGigE",
     "Fo": "FortyGigabitEthernet",
     "Hu": "HundredGigE",
@@ -252,7 +252,8 @@ MEDIA_TYPE_PORT_TYPE_MAP: Dict[str, str] = {
 # Порядок: NX-OS multi-speed → 100G → 40G → 25G → 10G → 1G
 # "10000" перед "1000" чтобы не было ложного совпадения
 HARDWARE_TYPE_PORT_TYPE_MAP: Dict[str, str] = {
-    # NX-OS multi-speed (должны быть первыми)
+    # NX-OS multi-speed (должны быть первыми, более специфичные вперёд)
+    "100/1000/10000/25000": "25g-sfp28",  # multi-speed 25G
     "100/1000/10000": "10g-sfp+",
     # 100G
     "100000": "100g-qsfp28",
@@ -273,7 +274,7 @@ HARDWARE_TYPE_PORT_TYPE_MAP: Dict[str, str] = {
     "10g": "10g-sfp+",
     "ten gig": "10g-sfp+",
     "tengig": "10g-sfp+",  # без пробела (NX-OS, Arista)
-    "tfgigabitethernet": "10g-sfp+",  # QTech 10G
+    "tfgigabitethernet": "25g-sfp28",  # QTech 25G
     # 1G (после 10G, чтобы "10000" не матчил "1000")
     "1000": "1g-rj45",
     "gigabit": "1g-rj45",
@@ -288,8 +289,8 @@ INTERFACE_NAME_PORT_TYPE_MAP: Dict[str, str] = {
     "fo": "40g-qsfp",
     "twentyfivegig": "25g-sfp28",
     "twe": "25g-sfp28",
-    "tfgigabitethernet": "10g-sfp+",  # QTech 10G
-    "tf": "10g-sfp+",  # QTech 10G короткий
+    "tfgigabitethernet": "25g-sfp28",  # QTech 25G
+    "tf": "25g-sfp28",  # QTech 25G короткий
     "tengig": "10g-sfp+",
     "te": "10g-sfp+",
     "gigabit": "1g-rj45",

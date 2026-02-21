@@ -29,7 +29,7 @@ from ..parsers.textfsm_parser import NTCParser
 from ..core.device import Device
 from ..core.connection import ConnectionManager
 from ..core.credentials import Credentials
-from ..core.constants import normalize_device_model
+from ..core.constants import normalize_device_model, slugify
 from ..core.logging import get_logger
 from ..core.models import DeviceInfo
 from ..core.exceptions import (
@@ -187,15 +187,6 @@ class DeviceCollector:
 
         logger.info(f"Собрано устройств: {len(all_data)} из {len(devices)}")
         return all_data
-
-    # Алиас для совместимости
-    def collect_models(
-        self,
-        devices: List[Device],
-        parallel: bool = True,
-    ) -> List[DeviceInfo]:
-        """Алиас для collect() (обратная совместимость)."""
-        return self.collect(devices, parallel=parallel)
 
     def _collect_parallel(
         self,
@@ -451,7 +442,7 @@ class DeviceInventoryCollector(DeviceCollector):
             "tenant": tenant,
             "u_height": "1",
             # slug для модели (lowercase)
-            "slug": lambda data, dev: str(data.get("model", "")).lower().replace(" ", "-"),
+            "slug": lambda data, dev: slugify(str(data.get("model", ""))),
         }
 
         super().__init__(

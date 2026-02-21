@@ -7,6 +7,8 @@ Device Types, Manufacturers, Device Roles, Sites, Platforms, MAC-адреса.
 import logging
 from typing import Any, Optional
 
+from ...core.constants import slugify
+
 logger = logging.getLogger(__name__)
 
 
@@ -121,29 +123,6 @@ class DCIMMixin:
 
     # ==================== DEVICE TYPES ====================
 
-    def get_device_type(
-        self,
-        model: str,
-        manufacturer: Optional[str] = None,
-    ) -> Optional[Any]:
-        """
-        Находит device type по модели.
-
-        Args:
-            model: Модель устройства
-            manufacturer: Производитель (опционально)
-
-        Returns:
-            DeviceType или None
-        """
-        params = {"model": model}
-        if manufacturer:
-            mfr = self.get_or_create_manufacturer(manufacturer)
-            if mfr:
-                params["manufacturer_id"] = mfr.id
-
-        return self.api.dcim.device_types.get(**params)
-
     def get_or_create_device_type(
         self,
         model: str,
@@ -178,7 +157,7 @@ class DCIMMixin:
             return existing
 
         if not slug:
-            slug = model.lower().replace(" ", "-").replace("/", "-")
+            slug = slugify(model)
 
         data = {
             "manufacturer": mfr.id,
@@ -205,7 +184,7 @@ class DCIMMixin:
         Returns:
             Manufacturer или None
         """
-        slug = name.lower().replace(" ", "-")
+        slug = slugify(name)
         mfr = self.api.dcim.manufacturers.get(slug=slug)
         if mfr:
             return mfr
@@ -225,7 +204,7 @@ class DCIMMixin:
         if existing:
             return existing
 
-        slug = name.lower().replace(" ", "-")
+        slug = slugify(name)
         mfr = self.api.dcim.manufacturers.create({
             "name": name,
             "slug": slug,
@@ -245,7 +224,7 @@ class DCIMMixin:
         Returns:
             DeviceRole или None
         """
-        slug = name.lower().replace(" ", "-")
+        slug = slugify(name)
         role = self.api.dcim.device_roles.get(slug=slug)
         if role:
             return role
@@ -272,7 +251,7 @@ class DCIMMixin:
         if existing:
             return existing
 
-        slug = name.lower().replace(" ", "-")
+        slug = slugify(name)
         role = self.api.dcim.device_roles.create({
             "name": name,
             "slug": slug,
@@ -294,7 +273,7 @@ class DCIMMixin:
         Returns:
             Site или None
         """
-        slug = name.lower().replace(" ", "-")
+        slug = slugify(name)
         site = self.api.dcim.sites.get(slug=slug)
         if site:
             return site
@@ -315,7 +294,7 @@ class DCIMMixin:
         if existing:
             return existing
 
-        slug = name.lower().replace(" ", "-")
+        slug = slugify(name)
         site = self.api.dcim.sites.create({
             "name": name,
             "slug": slug,
@@ -336,7 +315,7 @@ class DCIMMixin:
         Returns:
             Platform или None
         """
-        slug = name.lower().replace(" ", "-").replace("_", "-")
+        slug = slugify(name)
         platform = self.api.dcim.platforms.get(slug=slug)
         if platform:
             return platform
@@ -361,7 +340,7 @@ class DCIMMixin:
         if existing:
             return existing
 
-        slug = name.lower().replace(" ", "-").replace("_", "-")
+        slug = slugify(name)
         data = {
             "name": name,
             "slug": slug,

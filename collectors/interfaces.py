@@ -50,12 +50,12 @@ class InterfaceCollector(BaseCollector):
         interfaces = collector.collect(devices)  # List[Dict]
 
         # Или типизированные модели
-        interfaces = collector.collect_models(devices)  # List[Interface]
+        interfaces = collector.collect(devices)  # List[Interface]
         for intf in interfaces:
             print(intf.name, intf.status, intf.ip_address)
     """
 
-    # Типизированная модель для collect_models()
+    # Типизированная модель для collect()
     model_class = Interface
 
     # Команды для разных платформ (из централизованного хранилища)

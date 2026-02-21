@@ -951,8 +951,8 @@ INTERFACE_NAME_PORT_TYPE_MAP = {
 
 ```
 БЕЗ transceiver (определение по имени):
-  detect_port_type("tfgigabitethernet 0/1") → "10g-sfp+" (по имени)
-  get_netbox_interface_type("TFGi 0/1")     → "10gbase-x-sfpp" (generic SFP+)
+  detect_port_type("tfgigabitethernet 0/1") → "25g-sfp28" (по имени)
+  get_netbox_interface_type("TFGi 0/1")     → "25gbase-x-sfp28" (generic SFP28)
 
 С transceiver (media_type = "10GBASE-SR-SFP+"):
   detect_port_type()                        → "10g-sfp+" (та же категория)

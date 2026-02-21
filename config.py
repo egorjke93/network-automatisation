@@ -14,6 +14,8 @@ import os
 import logging
 from typing import Any, Optional
 
+from .core.constants.utils import DEFAULT_EXCLUDE_INTERFACES
+
 logger = logging.getLogger(__name__)
 
 # Pydantic валидация (опциональна)
@@ -117,22 +119,7 @@ class Config:
             },
             "filters": {
                 "exclude_vlans": [],
-                "exclude_interfaces": [
-                    r"^Vlan\d+",
-                    r"^Vl\d+",
-                    r"^Loopback\d+",
-                    r"^Lo\d+",
-                    r"^Null\d+",
-                    r"^Port-channel\d+",
-                    r"^Po\d+",
-                    r"^AggregatePort",  # QTech LAG
-                    r"^Ag\d+",  # QTech LAG (короткая форма)
-                    r"^mgmt\d*",
-                    r"^CPU$",
-                    r"^Switch$",
-                    r"^Router$",
-                    r"^Sup-eth",
-                ],
+                "exclude_interfaces": list(DEFAULT_EXCLUDE_INTERFACES),
             },
             "logging": {
                 "level": "INFO",

@@ -331,17 +331,17 @@ class TestQtechPortTypeDetection:
         ("AggregatePort 100", "", "lag"),
         ("Ag1", "", "lag"),
         ("Ag10", "", "lag"),
-        # QTech TFGigabitEthernet → 10G
-        ("TFGigabitEthernet 0/1", "Broadcom TFGigabitEthernet", "10g-sfp+"),
-        ("TFGigabitEthernet 0/48", "", "10g-sfp+"),
-        ("TF0/1", "", "10g-sfp+"),
-        ("TF0/48", "", "10g-sfp+"),
+        # QTech TFGigabitEthernet → 25G
+        ("TFGigabitEthernet 0/1", "Broadcom TFGigabitEthernet", "25g-sfp28"),
+        ("TFGigabitEthernet 0/48", "", "25g-sfp28"),
+        ("TF0/1", "", "25g-sfp28"),
+        ("TF0/48", "", "25g-sfp28"),
         # QTech HundredGigabitEthernet → 100G (уже работает)
         ("HundredGigabitEthernet 0/55", "", "100g-qsfp28"),
         ("Hu0/55", "", "100g-qsfp28"),
     ])
     def test_qtech_port_types(self, normalizer, interface, hardware_type, expected):
-        """QTech: TFGigabitEthernet=10G, AggregatePort=LAG, HundredGigabitEthernet=100G."""
+        """QTech: TFGigabitEthernet=25G, AggregatePort=LAG, HundredGigabitEthernet=100G."""
         data = {"interface": interface, "hardware_type": hardware_type, "media_type": ""}
         result = normalizer.detect_port_type(data, interface.lower())
         assert result == expected, (
@@ -350,14 +350,14 @@ class TestQtechPortTypeDetection:
         )
 
     def test_tfgigabit_hardware_not_1g(self, normalizer):
-        """Регрессия: Broadcom TFGigabitEthernet содержит 'gigabit', но это 10G, не 1G."""
+        """Регрессия: Broadcom TFGigabitEthernet содержит 'gigabit', но это 25G, не 1G."""
         data = {
             "interface": "TFGigabitEthernet 0/1",
             "hardware_type": "Broadcom TFGigabitEthernet",
             "media_type": "",
         }
         result = normalizer.detect_port_type(data, "tfgigabitethernet 0/1")
-        assert result == "10g-sfp+", (
+        assert result == "25g-sfp28", (
             "TFGigabitEthernet с hardware 'Broadcom TFGigabitEthernet' "
-            "должен определяться как 10G, а не 1G!"
+            "должен определяться как 25G, а не 1G!"
         )

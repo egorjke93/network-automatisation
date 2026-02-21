@@ -24,6 +24,7 @@ from ..constants.netbox import (
     VIRTUAL_INTERFACE_PREFIXES,
     MGMT_INTERFACE_PATTERNS,
 )
+from ..domain.vlan import FULL_VLAN_RANGES
 
 
 # Маппинг статусов из show interfaces в стандартные значения
@@ -38,6 +39,8 @@ STATUS_MAP: Dict[str, str] = {
     "errdisabled": "error",  # вариант без дефиса
     "administratively down": "disabled",
     "admin down": "disabled",
+    "down (administratively down)": "disabled",  # QTech формат
+    "down (xcvr not inserted)": "disabled",  # трансивер не установлен
 }
 
 
@@ -289,9 +292,7 @@ class InterfaceNormalizer:
             vlans_str = str(raw_vlans).lower().strip()
 
         # "all", пустые или полный диапазон → tagged-all
-        if (not vlans_str or
-                vlans_str == "all" or
-                vlans_str in ("1-4094", "1-4093", "1-4095")):
+        if not vlans_str or vlans_str in FULL_VLAN_RANGES:
             return "tagged-all", ""
 
         return "tagged", vlans_str

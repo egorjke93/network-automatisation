@@ -16,10 +16,10 @@
 
 Поддержка типизированных моделей:
     # Collectors возвращают List[Dict] для обратной совместимости
-    data = collector.collect(devices)
+    data = collector.collect_dicts(devices)
 
     # Или типизированные модели
-    interfaces = collector.collect_models(devices)  # List[Interface]
+    interfaces = collector.collect(devices)  # List[Interface]
 
     # Конвертация существующих данных
     from network_collector.core import interfaces_from_dicts
@@ -76,7 +76,7 @@ class BaseCollector(ABC):
 
     Типизированный сбор:
         collector = InterfaceCollector()
-        interfaces = collector.collect_models(devices)  # List[Interface]
+        interfaces = collector.collect(devices)  # List[Interface]
     """
 
     # Команда для выполнения (переопределяется в наследниках)
@@ -219,15 +219,6 @@ class BaseCollector(ABC):
 
         logger.info(f"{self._log_prefix()}Собрано записей: {len(all_data)} с {len(devices)} устройств")
         return all_data
-
-    # Алиас для обратной совместимости
-    def collect_models(
-        self,
-        devices: List[Device],
-        parallel: bool = True,
-    ) -> List[T]:
-        """Алиас для collect() (обратная совместимость)."""
-        return self.collect(devices, parallel=parallel)
 
     def to_models(self, data: List[Dict[str, Any]]) -> List[T]:
         """

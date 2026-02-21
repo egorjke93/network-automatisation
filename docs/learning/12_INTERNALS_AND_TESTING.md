@@ -490,7 +490,7 @@ INTERFACE_SHORT_MAP: List[tuple] = [
 INTERFACE_FULL_MAP: Dict[str, str] = {
     "Gi": "GigabitEthernet",
     "Te": "TenGigabitEthernet",
-    "TF": "TFGigabitEthernet",  # QTech 10G
+    "TF": "TFGigabitEthernet",  # QTech 25G
     "Ag": "AggregatePort",      # QTech LAG
     "Po": "Port-channel",
 }

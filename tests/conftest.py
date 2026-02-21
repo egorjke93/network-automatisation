@@ -4,7 +4,7 @@ Pytest configuration и общие fixtures для тестов.
 Предоставляет переиспользуемые fixtures:
 - load_fixture: Загрузка тестовых данных из файлов
 - mock_netbox_client: Mock NetBox клиента
-- sample_interface_data: Примеры данных интерфейсов
+- sample_interface_data: Примеры данных интерфейсов (продовые кейсы)
 """
 
 import sys
@@ -137,99 +137,6 @@ def sample_interface_data() -> Dict[str, Any]:
     }
 
 
-@pytest.fixture
-def sample_switchport_data() -> Dict[str, Dict[str, Any]]:
-    """
-    Примеры данных switchport для тестирования mode (tagged vs tagged-all).
-
-    Returns:
-        Dict: Словарь с примерами switchport данных
-    """
-    return {
-        "trunk_all_vlans": {
-            "interface": "GigabitEthernet1/0/1",
-            "switchport_mode": "trunk",
-            "access_vlan": "1",
-            "trunk_vlans": "ALL",
-        },
-        "trunk_1_4094": {
-            "interface": "GigabitEthernet1/0/2",
-            "switchport_mode": "trunk",
-            "access_vlan": "1",
-            "trunk_vlans": "1-4094",
-        },
-        "trunk_specific_vlans": {
-            "interface": "GigabitEthernet1/0/3",
-            "switchport_mode": "trunk",
-            "access_vlan": "1",
-            "trunk_vlans": "10,20,30",
-        },
-        "trunk_range_vlans": {
-            "interface": "GigabitEthernet1/0/4",
-            "switchport_mode": "trunk",
-            "access_vlan": "1",
-            "trunk_vlans": "10-20,30,40-50",
-        },
-        "access_mode": {
-            "interface": "GigabitEthernet1/0/5",
-            "switchport_mode": "access",
-            "access_vlan": "100",
-            "trunk_vlans": "",
-        },
-        "trunk_single_vlan": {
-            "interface": "GigabitEthernet1/0/6",
-            "switchport_mode": "trunk",
-            "access_vlan": "1",
-            "trunk_vlans": "100",
-        },
-    }
-
-
-@pytest.fixture
-def expected_fields() -> Dict[str, list]:
-    """
-    Обязательные поля для каждого типа собираемых данных.
-
-    Используется для проверки единообразия вывода с разных платформ.
-
-    Returns:
-        Dict: Словарь с обязательными полями для каждого типа данных
-    """
-    return {
-        "interfaces": [
-            "interface",
-            "status",
-            "description",
-            "mac",
-            "ip_address",
-            "mode",  # access/tagged/tagged-all
-        ],
-        "mac": [
-            "mac",
-            "vlan",
-            "interface",
-            "type",  # dynamic/static
-        ],
-        "lldp": [
-            "local_interface",
-            "remote_hostname",
-            "remote_port",
-            "neighbor_type",  # hostname/mac/ip/unknown
-        ],
-        "inventory": [
-            "name",
-            "part_id",
-            "serial",
-            "description",
-        ],
-        "lag": [
-            "interface",  # Po1
-            "members",    # [Gi0/1, Gi0/2]
-            "protocol",   # LACP/PAgP/Static
-        ],
-    }
-
-
 # Маркеры для группировки тестов
 def pytest_configure(config):
     """Регистрация custom markers для pytest."""
@@ -243,5 +150,8 @@ def pytest_configure(config):
         "markers", "netbox: NetBox sync tests (требуют mock NetBox API)"
     )
     config.addinivalue_line(
-        "markers", "slow: Медленные тесты"
+        "markers", "api: API endpoint tests (FastAPI TestClient)"
+    )
+    config.addinivalue_line(
+        "markers", "e2e: End-to-end tests (полный цикл коллектор → нормализация)"
     )

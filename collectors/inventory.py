@@ -47,7 +47,7 @@ class InventoryCollector(BaseCollector):
         inventory = collector.collect(devices)  # List[Dict]
 
         # Или типизированные модели
-        items = collector.collect_models(devices)  # List[InventoryItem]
+        items = collector.collect(devices)  # List[InventoryItem]
     """
 
     # Типизированная модель
