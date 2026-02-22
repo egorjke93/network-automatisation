@@ -90,7 +90,7 @@ UNIVERSAL_FIELD_MAP = {
     "status": ["status", "link_status", "link"],
     "protocol": ["protocol", "protocol_status"],
     "description": ["description", "desc"],
-    "speed": ["speed", "bandwidth"],
+    "speed": ["speed"],
     "duplex": ["duplex"],
     "mtu": ["mtu"],
     # LLDP/CDP fields
