@@ -19,6 +19,7 @@
 13. [Inventory: show inventory vs transceiver](#1215-inventory-show-inventory-vs-show-interface-transceiver)
 14. [QTech SVI: проверка VLAN интерфейсов](#1216-qtech-svi-добавление-vlan-интерфейсов)
 15. [LLDP шаблоны и кабельная синхронизация](#1217-lldp-шаблоны-и-кабельная-синхронизация)
+16. [UNIVERSAL_FIELD_MAP: нормализация имён полей NTC](#1219-universal_field_map-нормализация-имён-полей-ntc)
 
 ---
 
@@ -2707,6 +2708,142 @@ INTERFACE_NAME_PORT_TYPE_MAP = {
 # normalize_interface_short("ExtremeEthernet0/1", lowercase=True) → "xe0/1" ✓
 # detect_port_type({"interface": "ExtremeEthernet0/1"}, "extremeethernet0/1") → "10g-sfp+" ✓
 # get_netbox_interface_type("ExtremeEthernet0/1") → "10gbase-x-sfpp" ✓
+```
+
+---
+
+## 12.19 UNIVERSAL_FIELD_MAP: нормализация имён полей NTC
+
+### Что это
+
+`UNIVERSAL_FIELD_MAP` в `parsers/textfsm_parser.py` — маппинг для приведения имён полей из разных NTC-шаблонов к единым стандартным именам.
+
+Разные платформы возвращают одни и те же данные под разными ключами:
+
+```
+Cisco IOS:  {"mac_address": "aa:bb:cc:dd:ee:ff"}
+NX-OS:      {"mac": "aa:bb:cc:dd:ee:ff"}
+Arista:     {"destination_address": "aa:bb:cc:dd:ee:ff"}
+```
+
+`UNIVERSAL_FIELD_MAP` маппит все варианты на стандартный ключ `"mac"`:
+
+```python
+"mac": ["mac", "mac_address", "destination_address"],
+```
+
+После `_normalize_fields()` весь остальной код работает с единым `data.get("mac")`.
+
+### Как работает _normalize_fields()
+
+```python
+def _normalize_fields(self, data):
+    for row in data:
+        new_row = {}
+        for key, value in row.items():
+            key_lower = key.lower()
+            # Ищем стандартное имя для ключа
+            standard_key = key_lower
+            for std_name, aliases in UNIVERSAL_FIELD_MAP.items():
+                if key_lower in aliases:
+                    standard_key = std_name
+                    break
+            new_row[standard_key] = value
+        normalized.append(new_row)
+```
+
+**Важно:** если два ключа из исходного dict маппятся на один `standard_key`, **последний перезаписывает первый**.
+
+### Текущие маппинги
+
+```python
+UNIVERSAL_FIELD_MAP = {
+    # Устройство
+    "hostname": ["hostname", "host", "switchname", "device_id"],
+    "hardware": ["hardware", "platform", "model", "chassis", "device_model"],
+    "serial":   ["serial", "serial_number", "sn", "chassis_sn", "serialnum"],
+    "version":  ["version", "software_version", "os", "kickstart_ver", "sys_ver", "os_version"],
+    "uptime":   ["uptime", "uptime_string", "system_uptime"],
+
+    # MAC таблица
+    "mac":       ["mac", "mac_address", "destination_address"],
+    "vlan":      ["vlan", "vlan_id"],
+    "interface": ["interface", "port", "destination_port"],
+    "type":      ["type", "mac_type", "entry_type"],
+
+    # Интерфейсы
+    "status":      ["status", "link_status", "link"],
+    "protocol":    ["protocol", "protocol_status"],
+    "description": ["description", "desc"],
+    "speed":       ["speed"],          # ← только speed, НЕ bandwidth!
+    "duplex":      ["duplex"],
+    "mtu":         ["mtu"],
+
+    # LLDP/CDP
+    "neighbor":         ["neighbor", "neighbor_id", "device_id", "remote_system_name"],
+    "local_interface":  ["local_interface", "local_port"],
+    "remote_interface": ["remote_interface", "remote_port", "port_id"],
+}
+```
+
+### Правила добавления алиасов
+
+#### Когда МОЖНО добавлять алиас
+
+Поле с **одинаковой семантикой**, но другим именем на другой платформе:
+
+```python
+# ✅ Одно и то же — MAC-адрес, просто разные имена полей:
+"mac": ["mac", "mac_address", "destination_address"]
+
+# ✅ Одно и то же — hostname устройства:
+"hostname": ["hostname", "switchname", "host"]
+
+# ✅ Одно и то же — серийный номер:
+"serial": ["serial", "serial_number", "serialnum"]
+```
+
+#### Когда НЕЛЬЗЯ добавлять алиас
+
+Поля с **разной семантикой**, даже если кажутся похожими:
+
+```python
+# ❌ НЕПРАВИЛЬНО — bandwidth и speed это РАЗНЫЕ поля:
+"speed": ["speed", "bandwidth"]
+#   speed     = согласованная скорость (1000Mb/s, auto-speed)
+#   bandwidth = сконфигурированный BW для QoS (10000 Kbit — дефолт)
+
+# ❌ НЕПРАВИЛЬНО — chassis_id это MAC в LLDP, не hostname:
+"hostname": ["hostname", "chassis_id"]
+
+# ❌ НЕПРАВИЛЬНО — input_rate и speed это разные метрики:
+"speed": ["speed", "input_rate"]
+```
+
+### Проверка: конфликт ключей
+
+Если NTC-шаблон возвращает **оба** ключа, маппящиеся на один `standard_key`, последний перезаписывает первый:
+
+```python
+# NTC вернул: {"speed": "1000Mb/s", "bandwidth": "10000"}
+# _normalize_fields():
+#   speed → standard_key="speed" → new_row["speed"] = "1000Mb/s"
+#   bandwidth → standard_key="speed" → new_row["speed"] = "10000"  ← ПЕРЕЗАПИСЬ!
+# Результат: speed = "10000" — НЕПРАВИЛЬНО
+```
+
+**Правило:** перед добавлением алиаса проверить, что NTC-шаблоны платформ НЕ возвращают оба ключа одновременно. Если возвращают — это разные поля, а не алиасы.
+
+### Чеклист добавления нового алиаса
+
+1. Убедиться что это **одно и то же поле** с другим именем (не разная семантика)
+2. Проверить что NTC-шаблоны **НЕ** возвращают оба ключа одновременно
+3. Если сомневаешься — НЕ добавлять алиас; лучше обработать в конкретном коллекторе
+4. Проверить на всех платформах: `--format parsed` покажет сырые поля TextFSM
+
+```bash
+# Посмотреть какие поля возвращает TextFSM для платформы
+python -m network_collector interfaces --format parsed --host 10.0.0.1
 ```
 
 ---

@@ -114,15 +114,17 @@ NETBOX_INTERFACE_TYPE_MAP: Dict[str, str] = {
     "100baselx-fe sfp": "100base-fx",
     "100baselx-fe": "100base-fx",
     # === Медные (RJ45) ===
+    # Порядок важен! Специфичные паттерны перед общими,
+    # иначе "basetx" матчит "10/100basetx" и возвращает 1000base-t вместо 100base-tx
+    "10/100/1000baset": "1000base-t",
+    "10/100/1000": "1000base-t",
+    "1000baset": "1000base-t",
+    "100baset": "100base-tx",
+    "10/100": "100base-tx",
+    "10baset": "10base-t",
     "basetx": "1000base-t",
     "base-tx": "1000base-t",
     "rj45": "1000base-t",
-    "10/100/1000baset": "1000base-t",
-    "10/100/1000": "1000base-t",
-    "10/100": "100base-tx",
-    "1000baset": "1000base-t",
-    "100baset": "100base-tx",
-    "10baset": "10base-t",
     # === 2.5G / 5G ===
     "2.5gbase": "2.5gbase-t",
     "5gbase": "5gbase-t",

@@ -1598,6 +1598,127 @@ self.api.http_session = session
 
 ---
 
+## Баг 23: UNIVERSAL_FIELD_MAP маппил bandwidth → speed, ломая номинальную скорость
+
+**Дата:** Февраль 2026
+**Симптом:** После фикса Бага 22 (номинальная скорость из port_type) на проде синхронизация интерфейсов всё ещё показывала 10 Mbps для down GigabitEthernet. Sync не обнаруживал изменений.
+
+### Причина
+
+Фикс Бага 22 убрал fallback `bandwidth` из `Interface.from_dict()` и добавил подстановку номинальной скорости в нормализаторе. Но **раньше** в pipeline стоял `UNIVERSAL_FIELD_MAP` в `parsers/textfsm_parser.py`:
+
+```python
+UNIVERSAL_FIELD_MAP = {
+    "speed": ["speed", "bandwidth"],  # bandwidth — алиас для speed
+}
+```
+
+Метод `_normalize_fields()` итерирует по ключам NTC-вывода и маппит алиасы на стандартные имена. Когда NTC шаблон возвращает оба поля:
+
+1. `speed: ""` (пустой для down-порта) → `new_row["speed"] = ""`
+2. `bandwidth: "10000"` → тоже маппится на `speed` → `new_row["speed"] = "10000"` **(перезапись!)**
+
+В результате нормализатор видит `speed = "10000"` — это НЕ в `_UNKNOWN_SPEED_VALUES` (`{"unknown", "auto", "auto-speed", ""}`), поэтому номинальная скорость из port_type не подставлялась. `_parse_speed("10000")` → 10000 Kbps → **10 Mbps**.
+
+### Цепочка: где это происходит
+
+```
+NTC Template → {speed: "", bandwidth: "10000"}
+    ↓
+NTCParser._normalize_fields() → {speed: "10000"}  ← bandwidth ПЕРЕЗАПИСАЛ speed
+    ↓
+InterfaceNormalizer._normalize_row() → speed="10000" не в _UNKNOWN_SPEED_VALUES → пропуск
+    ↓
+Interface.from_dict() → speed="10000"
+    ↓
+_parse_speed("10000") → 10000 Kbps → 10 Mbps в NetBox
+```
+
+### Почему bandwidth — не алиас speed
+
+`UNIVERSAL_FIELD_MAP` задуман для маппинга **одного и того же поля** с разным именем на разных платформах (например `mac_address` и `mac` — одно и то же). Но `bandwidth` и `speed` — это **разные поля** с разной семантикой:
+
+| Поле | Значение | Пример (DOWN port) |
+|------|----------|-------------------|
+| `speed` | Согласованная/реальная скорость | `""`, `"Auto-speed"`, `"1000Mb/s"` |
+| `bandwidth` | Сконфигурированный BW (для QoS) | `"10000"` Kbit — дефолт, **НЕ** номинальная скорость порта |
+
+### Исправление
+
+**`parsers/textfsm_parser.py`** — убран `bandwidth` из алиасов `speed`:
+
+```python
+# Было:
+"speed": ["speed", "bandwidth"],
+# Стало:
+"speed": ["speed"],
+```
+
+Теперь `bandwidth` остаётся как отдельный ключ, не перезаписывает speed. Нормализатор видит пустой `speed` → подставляет номинальную скорость из port_type.
+
+### Почему фикс Бага 22 не помог без этого
+
+| Шаг | Баг 22 (from_dict fallback) | Баг 23 (UNIVERSAL_FIELD_MAP) |
+|-----|----------------------------|------------------------------|
+| Где | `core/models.py:112` | `parsers/textfsm_parser.py:93` |
+| Когда | При создании Interface модели | При парсинге NTC-вывода |
+| Порядок | Позже в pipeline | **Раньше** в pipeline |
+| Эффект | `data.get("bandwidth")` как fallback | `bandwidth` **переименовывается** в `speed` |
+
+Баг 23 срабатывал **раньше** Бага 22 в pipeline. `_normalize_fields()` переименовывал `bandwidth` в `speed` ещё до того, как данные доходили до `Interface.from_dict()` или нормализатора.
+
+---
+
+## Баг 24: FastEthernet определялся как 1000base-t вместо 100base-tx
+
+**Дата:** Февраль 2026
+**Симптом:** На проде FastEthernet интерфейсы (100 Mbps) синхронизировались в NetBox с типом `1000base-t` (1G) вместо `100base-tx` (100M).
+
+### Причина
+
+Неправильный порядок паттернов в `NETBOX_INTERFACE_TYPE_MAP` (`core/constants/netbox.py`).
+
+Cisco IOS для FastEthernet возвращает `media type is 10/100BaseTX`. В `get_netbox_interface_type()` media_type проверяется **раньше** port_type (приоритет 4 vs 5). Итерация по `NETBOX_INTERFACE_TYPE_MAP`:
+
+```python
+# Было (НЕПРАВИЛЬНЫЙ порядок):
+"basetx": "1000base-t",          # строка 117 — проверяется ПЕРВЫМ
+...
+"10/100": "100base-tx",          # строка 122 — НИКОГДА не достигается
+```
+
+`"basetx"` является подстрокой `"10/100basetx"` → срабатывает → возвращает `1000base-t`.
+
+При этом `port_type = "100m-rj45"` определялся **правильно** (через `INTERFACE_NAME_PORT_TYPE_MAP["fastethernet"] = "100m-rj45"`), но `get_netbox_interface_type()` возвращал результат из media_type до проверки port_type.
+
+### Исправление
+
+**`core/constants/netbox.py`** — переупорядочены медные паттерны (специфичные перед общими):
+
+```python
+# Стало (ПРАВИЛЬНЫЙ порядок):
+"10/100/1000baset": "1000base-t",  # самый специфичный
+"10/100/1000": "1000base-t",
+"1000baset": "1000base-t",
+"100baset": "100base-tx",          # ← матчит "10/100basetx" правильно
+"10/100": "100base-tx",
+"10baset": "10base-t",
+"basetx": "1000base-t",            # общий — ПОСЛЕДНИМ
+"base-tx": "1000base-t",
+"rj45": "1000base-t",
+```
+
+### Как это работает по media_type
+
+| media_type (lowercase) | Первый совпавший паттерн | Результат |
+|------------------------|--------------------------|-----------|
+| `10/100/1000basetx` | `"10/100/1000baset"` | `1000base-t` ✓ |
+| `10/100basetx` | `"100baset"` | `100base-tx` ✓ |
+| `basetx` | `"basetx"` | `1000base-t` ✓ |
+| `rj45` | `"rj45"` | `1000base-t` ✓ |
+
+---
+
 ## Общие уроки
 
 1. **При добавлении платформы — проверять ВСЕ места**, где есть хардкод имён (не только парсинг, но и сортировку, поиск, case-insensitive сравнение)
@@ -1640,3 +1761,5 @@ self.api.http_session = session
 38. **Timeout в конфиге ≠ timeout в сессии** — `config.netbox.timeout` хранился и валидировался, но не передавался в `requests.Session`. pynetbox по умолчанию создаёт сессию с `timeout=None` (бесконечное ожидание). Решение: кастомный `NetBoxSession(requests.Session)` с timeout в каждом запросе
 39. **HTTP 429 Rate Limit** — при массовом sync NetBox может вернуть 429. Retry с `Retry-After` header и экспоненциальным backoff (2с, 4с, 6с) — стандартный паттерн. Максимум 3 попытки, затем возврат 429 как есть
 40. **Ненадёжный bandwidth как fallback для speed** — `Interface.from_dict()` при пустом speed подставлял bandwidth, а он на некоторых моделях показывает 10000 Kbit (10 Mbps) для down GigabitEthernet вместо 1000000 Kbit (1G). Решение: убрать fallback на bandwidth, вместо этого определять номинальную скорость из port_type (который уже определён из имени интерфейса). Новых маппингов не нужно — скорость парсится из префикса port_type ("1g-rj45" → 1G, "10g-sfp+" → 10G)
+41. **UNIVERSAL_FIELD_MAP — алиасы только для ОДНОГО и ТОГО ЖЕ поля** — `bandwidth` и `speed` — это разные поля с разной семантикой (configured BW vs negotiated speed). Маппинг `bandwidth → speed` приводил к перезаписи пустого speed значением bandwidth в `_normalize_fields()`. При добавлении алиаса в UNIVERSAL_FIELD_MAP проверять: это действительно одно и то же поле с другим именем, или это другое поле? Если разные — НЕ маппить. Также учитывать порядок итерации dict.items(): если оба ключа маппятся на один стандартный, последний перезаписывает первый
+42. **Порядок паттернов в substring-маппингах — контракт** — `NETBOX_INTERFACE_TYPE_MAP` использует `if pattern in media_lower` (substring). Общий паттерн `"basetx"` матчил `"10/100basetx"` раньше специфичного `"10/100"`. Правило: в маппингах с substring-проверкой специфичные паттерны ВСЕГДА перед общими (`"10/100/1000baset"` → `"100baset"` → `"10/100"` → `"basetx"`). Тот же принцип что в Уроке 22 (HARDWARE_TYPE_PORT_TYPE_MAP), но для другого маппинга
