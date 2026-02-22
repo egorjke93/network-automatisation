@@ -1810,6 +1810,75 @@ def get_netbox_interface_type(interface_name, media_type, hardware_type, port_ty
 
 **Если Eltex использует стандартные имена** — ничего добавлять не нужно.
 
+### 12.7.1 Определение скорости для down-портов
+
+Когда интерфейс admin up / link down, устройство не возвращает реальную negotiated
+скорость. TextFSM захватывает `speed = ""` / `"Unknown"` / `"Auto-speed"`.
+
+**Как работает:**
+
+```
+TextFSM → speed="Auto-speed", hardware="Gigabit Ethernet"
+    ↓
+detect_port_type() → port_type="1g-rj45" (из hardware/имени)
+    ↓
+speed в _UNKNOWN_SPEED_VALUES? → ДА
+    ↓
+get_nominal_speed_from_port_type("1g-rj45") → "1000000 Kbit" (1G)
+    ↓
+Результат: speed = "1000000 Kbit" (номинальная скорость порта)
+```
+
+**Приоритет:**
+
+1. **UP-порт с реальной скоростью** (`"1000Mb/s"`, `"10G"`) → используется как есть
+2. **DOWN-порт** (`speed` пустой/unknown/auto) → номинальная из `port_type`
+3. **LAG / Virtual** (`port_type="lag"/"virtual"`) → speed остаётся пустым
+
+**Откуда берётся номинальная скорость:**
+
+Парсится из префикса `port_type` — **отдельный маппинг не нужен**:
+
+| port_type | Префикс | Номинальная скорость |
+|-----------|---------|---------------------|
+| `1g-rj45` | `1g` | 1000000 Kbit (1 Gbps) |
+| `1g-sfp` | `1g` | 1000000 Kbit (1 Gbps) |
+| `10g-sfp+` | `10g` | 10000000 Kbit (10 Gbps) |
+| `25g-sfp28` | `25g` | 25000000 Kbit (25 Gbps) |
+| `40g-qsfp` | `40g` | 40000000 Kbit (40 Gbps) |
+| `100g-qsfp28` | `100g` | 100000000 Kbit (100 Gbps) |
+| `100m-rj45` | `100m` | 100000 Kbit (100 Mbps) |
+| `lag` | — | пусто (не физический порт) |
+| `virtual` | — | пусто (не физический порт) |
+
+**Поведение по платформам:**
+
+| Платформа | Интерфейс | Статус | speed TextFSM | Результат в NetBox |
+|-----------|-----------|--------|--------------|-------------------|
+| Cisco IOS | Gi1/0/2 | UP, 1G | `"1000Mb/s"` | 1G — реальная |
+| Cisco IOS | Gi1/0/1 | UP, 100M | `"100Mb/s"` | 100M — реальная |
+| Cisco IOS | Gi1/0/4 | DOWN | `"Auto-speed"` | **1G — номинальная** |
+| Cisco IOS | Te1/1/3 | DOWN | `"Auto-speed"` | **10G — номинальная** |
+| QTech | TFGi 0/1 | UP | `"10G"` | 10G — реальная |
+| QTech | TFGi 0/3 | DOWN | `"Unknown"` | **25G — номинальная** |
+| NX-OS | Eth1/2 | UP | `"10 Gb/s"` | 10G — реальная |
+| NX-OS | Eth1/7 | DOWN | `"auto-speed"` | **25G — номинальная** |
+| NX-OS | mgmt0 | DOWN | `"auto-speed"` | **1G — номинальная** |
+
+**Ключевые файлы:**
+
+| Файл | Что делает |
+|------|-----------|
+| `core/constants/interfaces.py` | `_UNKNOWN_SPEED_VALUES` — набор значений speed, не содержащих реальной скорости |
+| `core/constants/interfaces.py` | `get_nominal_speed_from_port_type()` — парсит `"1g-rj45"` → `"1000000 Kbit"` |
+| `core/domain/interface.py` | `_normalize_row()` — подставляет номинальную если speed неизвестен |
+| `core/models.py` | `Interface.from_dict()` — НЕ использует bandwidth как fallback |
+
+**При добавлении новой платформы:**
+
+Если новый port_type следует формату `{число}{g|m}-{коннектор}` (напр. `5g-rj45`),
+номинальная скорость подхватится автоматически. Ничего дополнительно настраивать не нужно.
+
 ### 12.8 Шаг 7: Алиасы интерфейсов для LAG matching
 
 **Файл:** `core/constants/interfaces.py` → `get_interface_aliases()`

@@ -1529,6 +1529,75 @@ self.api.http_session = session
 
 ---
 
+## Баг 22: Down-порт 1G показывает speed 10 Mbps вместо номинальной 1 Gbps
+
+**Дата:** Февраль 2026
+**Симптом:** На проде GigabitEthernet интерфейс admin up / link down синхронизировался в NetBox со speed 10000 Kbps (10 Mbps) вместо 1000000 Kbps (1 Gbps).
+
+### Причина
+
+Цепочка ошибки:
+
+1. TextFSM парсит `show interfaces` — для down-порта `speed` пустая строка (нет negotiated speed)
+2. `Interface.from_dict()` в `core/models.py:112` при пустом speed делал fallback на `bandwidth`:
+   ```python
+   speed=data.get("speed") or data.get("bandwidth") or ""
+   ```
+3. На некоторых моделях `bandwidth` для down GigabitEthernet = `"10000 Kbit"` (10 Mbps), а не `"1000000 Kbit"` (1 Gbps) — это дефолтный configured BW, **НЕ** номинальная скорость порта
+4. `_parse_speed("10000 Kbit")` → 10000 Kbps → в NetBox записывается 10 Mbps
+
+### Исправление
+
+**Два изменения:**
+
+1. **`core/models.py`** — убран fallback на bandwidth (ненадёжный источник):
+   ```python
+   # Было:
+   speed=data.get("speed") or data.get("bandwidth") or ""
+   # Стало:
+   speed=data.get("speed") or ""
+   ```
+
+2. **`core/domain/interface.py`** — в `_normalize_row()` добавлена подстановка номинальной скорости из port_type для down-портов:
+   ```python
+   # Если speed пустой/unknown/auto — берём номинальную из port_type
+   speed = result.get("speed", "")
+   if speed.lower().strip() in _UNKNOWN_SPEED_VALUES:
+       nominal = get_nominal_speed_from_port_type(result.get("port_type", ""))
+       if nominal:
+           result["speed"] = nominal
+   ```
+
+3. **`core/constants/interfaces.py`** — добавлена функция `get_nominal_speed_from_port_type()`, которая парсит префикс port_type без отдельного маппинга:
+   - `"1g-rj45"` → `"1000000 Kbit"` (1G)
+   - `"10g-sfp+"` → `"10000000 Kbit"` (10G)
+   - `"25g-sfp28"` → `"25000000 Kbit"` (25G)
+
+**Новых маппингов не создаётся** — скорость извлекается из уже определённого port_type.
+
+### Поведение по платформам после фикса
+
+| Платформа | Интерфейс | Статус | speed TextFSM | Результат |
+|-----------|-----------|--------|--------------|-----------|
+| Cisco IOS | Gi1/0/2 | UP, 1G negotiated | `"1000Mb/s"` | 1G — реальная, без изменений |
+| Cisco IOS | Gi1/0/1 | UP, 100M negotiated | `"100Mb/s"` | 100M — реальная, без изменений |
+| Cisco IOS | Gi1/0/4 | DOWN | `"Auto-speed"` | **1G — номинальная** (было: пусто) |
+| Прод | Gi... | DOWN | `""` | **1G — номинальная** (было: 10M ошибочно) |
+| QTech | TFGi 0/1 | UP | `"10G"` | 10G — реальная, без изменений |
+| QTech | TFGi 0/3 | DOWN | `"Unknown"` | **25G — номинальная** (было: пусто) |
+| NX-OS | Eth1/2 | UP | `"10 Gb/s"` | 10G — реальная, без изменений |
+| NX-OS | Eth1/1 | DOWN | `"auto-speed"` | **25G — номинальная** (было: пусто) |
+
+### Изменённые файлы
+
+| Файл | Что изменено |
+|------|-------------|
+| `core/models.py` | Убран fallback `data.get("bandwidth")` в `from_dict()` |
+| `core/domain/interface.py` | Номинальная скорость в `_normalize_row()` для down-портов |
+| `core/constants/interfaces.py` | `get_nominal_speed_from_port_type()`, `_UNKNOWN_SPEED_VALUES` |
+
+---
+
 ## Общие уроки
 
 1. **При добавлении платформы — проверять ВСЕ места**, где есть хардкод имён (не только парсинг, но и сортировку, поиск, case-insensitive сравнение)
@@ -1570,3 +1639,4 @@ self.api.http_session = session
 37. **INFO-лог для каждого изменения** — итоговые `stats["updated"] = N` недостаточно для диагностики. Каждое изменение (IP обновлён, VLAN назначен, MAC изменён) должно логироваться на INFO с деталями
 38. **Timeout в конфиге ≠ timeout в сессии** — `config.netbox.timeout` хранился и валидировался, но не передавался в `requests.Session`. pynetbox по умолчанию создаёт сессию с `timeout=None` (бесконечное ожидание). Решение: кастомный `NetBoxSession(requests.Session)` с timeout в каждом запросе
 39. **HTTP 429 Rate Limit** — при массовом sync NetBox может вернуть 429. Retry с `Retry-After` header и экспоненциальным backoff (2с, 4с, 6с) — стандартный паттерн. Максимум 3 попытки, затем возврат 429 как есть
+40. **Ненадёжный bandwidth как fallback для speed** — `Interface.from_dict()` при пустом speed подставлял bandwidth, а он на некоторых моделях показывает 10000 Kbit (10 Mbps) для down GigabitEthernet вместо 1000000 Kbit (1G). Решение: убрать fallback на bandwidth, вместо этого определять номинальную скорость из port_type (который уже определён из имени интерфейса). Новых маппингов не нужно — скорость парсится из префикса port_type ("1g-rj45" → 1G, "10g-sfp+" → 10G)

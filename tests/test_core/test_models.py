@@ -52,7 +52,7 @@ class TestInterface:
             "name": "Eth1/1",  # альтернатива "interface"
             "link_status": "down",  # альтернатива "status"
             "mac_address": "AA:BB:CC:DD:EE:FF",  # альтернатива "mac"
-            "bandwidth": "10 Gbit",  # альтернатива "speed"
+            "speed": "10 Gbit",
         }
         intf = Interface.from_dict(data)
 

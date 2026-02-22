@@ -19,6 +19,8 @@ from ..constants.interfaces import (
     HARDWARE_TYPE_PORT_TYPE_MAP,
     INTERFACE_NAME_PORT_TYPE_MAP,
     _SHORT_PORT_TYPE_PREFIXES,
+    _UNKNOWN_SPEED_VALUES,
+    get_nominal_speed_from_port_type,
 )
 from ..constants.netbox import (
     VIRTUAL_INTERFACE_PREFIXES,
@@ -151,6 +153,13 @@ class InterfaceNormalizer:
         if not result.get("port_type"):
             iface = result.get("interface", result.get("name", ""))
             result["port_type"] = self.detect_port_type(result, iface.lower())
+
+        # Номинальная скорость для down-портов (когда speed пустой/unknown/auto)
+        speed = result.get("speed", "")
+        if speed.lower().strip() in _UNKNOWN_SPEED_VALUES:
+            nominal = get_nominal_speed_from_port_type(result.get("port_type", ""))
+            if nominal:
+                result["speed"] = nominal
 
         return result
 

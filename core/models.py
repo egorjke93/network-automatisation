@@ -109,7 +109,7 @@ class Interface:
             ip_address=data.get("ip_address") or "",
             prefix_length=str(data.get("prefix_length") or data.get("mask") or ""),
             mac=data.get("mac") or data.get("mac_address") or "",
-            speed=data.get("speed") or data.get("bandwidth") or "",
+            speed=data.get("speed") or "",
             duplex=data.get("duplex") or "",
             mtu=int(data["mtu"]) if data.get("mtu") else None,
             vlan=str(data.get("vlan") or ""),

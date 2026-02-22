@@ -301,3 +301,33 @@ INTERFACE_NAME_PORT_TYPE_MAP: Dict[str, str] = {
 
 # Короткие префиксы, требующие цифры после (для port_type detection)
 _SHORT_PORT_TYPE_PREFIXES = {"hu", "fo", "twe", "tf", "te", "gi", "fa"}
+
+# Значения speed, которые не содержат реальной скорости (down-порты)
+_UNKNOWN_SPEED_VALUES = {"unknown", "auto", "auto-speed", ""}
+
+
+def get_nominal_speed_from_port_type(port_type: str) -> str:
+    """
+    Извлекает номинальную скорость из port_type для down-портов.
+
+    Парсит префикс port_type: "1g-rj45" → "1g" → 1000000 Kbit.
+    Не создаёт отдельного маппинга — переиспользует уже определённый port_type.
+
+    Returns:
+        str: Скорость в формате Kbit ("1000000 Kbit") или "" если не определить
+    """
+    parts = port_type.split("-", 1)
+    if not parts:
+        return ""
+    speed_part = parts[0]  # "1g", "10g", "100m", "25g", etc.
+    if speed_part.endswith("g"):
+        try:
+            return f"{int(speed_part[:-1]) * 1000000} Kbit"
+        except ValueError:
+            return ""
+    elif speed_part.endswith("m"):
+        try:
+            return f"{int(speed_part[:-1]) * 1000} Kbit"
+        except ValueError:
+            return ""
+    return ""
