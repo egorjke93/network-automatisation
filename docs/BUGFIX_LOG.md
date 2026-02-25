@@ -1782,6 +1782,43 @@ if media_type not in ("10g", "25g", "40g", "100g", "1g", "fiber", "copper", "aut
 
 ---
 
+## Баг 26: LAG Port-channel получал speed одного member-а вместо агрегатной скорости
+
+**Дата:** Февраль 2026
+**Симптом:** Port-channel1 с 4×1G members: speed менялся с 4000000 → 1000000 (4G → 1G).
+
+### Причина
+
+После фикса Бага 23 (удаление bandwidth→speed из UNIVERSAL_FIELD_MAP), bandwidth перестал попадать в speed. Для обычных интерфейсов это правильно. Но для LAG:
+
+- `speed = "1000Mb/s"` — скорость **одного** member-линка
+- `bandwidth = "4000000 Kbit"` — агрегатная скорость **всего LAG** (4 × 1G)
+
+`_parse_speed("1000Mb/s")` → 1000000 Kbps (1G). NetBox получал 1G вместо 4G.
+
+### Фикс
+
+**Файл:** `core/domain/interface.py`
+
+В `_normalize_row()`: для LAG-интерфейсов использовать bandwidth вместо speed:
+
+```python
+# LAG: bandwidth — агрегатная скорость (сумма member-линков)
+if result.get("port_type") == "lag" and result.get("bandwidth"):
+    result["speed"] = result["bandwidth"]
+```
+
+### Результат
+
+| Порт | Было | Стало |
+|------|------|-------|
+| Port-channel1 (4×1G) | 4000000 → **1000000** | 4000000 → **4000000** ✓ |
+| Port-channel10 (2×10G) | 20000000 → **10000000** | 20000000 → **20000000** ✓ |
+| GigabitEthernet0/1 UP | 1000000 | 1000000 (не изменился) ✓ |
+| GigabitEthernet0/2 DOWN | 1000000 Kbit (номинал) | 1000000 Kbit (не изменился) ✓ |
+
+---
+
 ## Общие уроки
 
 1. **При добавлении платформы — проверять ВСЕ места**, где есть хардкод имён (не только парсинг, но и сортировку, поиск, case-insensitive сравнение)
@@ -1828,3 +1865,4 @@ if media_type not in ("10g", "25g", "40g", "100g", "1g", "fiber", "copper", "aut
 42. **Порядок паттернов в substring-маппингах — контракт** — `NETBOX_INTERFACE_TYPE_MAP` использует `if pattern in media_lower` (substring). Общий паттерн `"basetx"` матчил `"10/100basetx"` раньше специфичного `"10/100"`. Правило: в маппингах с substring-проверкой специфичные паттерны ВСЕГДА перед общими (`"10/100/1000baset"` → `"100baset"` → `"10/100"` → `"basetx"`). Тот же принцип что в Уроке 22 (HARDWARE_TYPE_PORT_TYPE_MAP), но для другого маппинга
 43. **_parse_speed() — все форматы скорости всех платформ** — NX-OS возвращает `"10 Gb/s"`, Cisco IOS `"1000Mb/s"`, QTech `"10G"`. Парсер проверял только `"kbit"/"gbit"/"mbit"`, fallback `int("10")` = 10 Kbps вместо 10 Gbps. Правило: при работе со скоростью тестировать на РЕАЛЬНЫХ UP-портах каждой платформы. DOWN-порты возвращают bandwidth в Kbit (стандартный формат), UP-порты — в формате платформы. Regex `(\d+)\s*(gb/s|gb|g)\b` покрывает все варианты
 44. **Bare speed indicator ≠ media_type трансивера** — NX-OS `show interfaces` возвращает `media type is 10G` — это текущая скорость линка, а НЕ тип трансивера. `detect_port_type()` использовал media_type с приоритетом 1, и `"10g"` матчил `MEDIA_TYPE_PORT_TYPE_MAP` → `"10g-sfp+"`. Для порта с hardware `"100/1000/10000/25000"` (25G) это давало 10G вместо 25G. Правило: различать media_type от трансивера (`"SFP-10GBase-SR"`, `"10GBase-LR"`) и bare speed indicators (`"10G"`, `"25G"`, `"fiber"`, `"copper"`). Вторые пропускать, чтобы hardware_type определил реальную ёмкость порта
+45. **LAG speed ≠ member speed** — для Port-channel `speed = "1000Mb/s"` — это скорость одного member-линка, а `bandwidth = "4000000 Kbit"` — агрегатная скорость всего LAG (сумма members). После удаления bandwidth→speed маппинга (Урок 41) LAG стал получать speed одного member-а. Правило: для LAG (port_type == "lag") bandwidth — правильный источник скорости. Для обычных интерфейсов — нет (bandwidth ненадёжен для down-портов, Урок 40)

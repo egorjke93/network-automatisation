@@ -154,6 +154,12 @@ class InterfaceNormalizer:
             iface = result.get("interface", result.get("name", ""))
             result["port_type"] = self.detect_port_type(result, iface.lower())
 
+        # LAG: bandwidth — агрегатная скорость (сумма member-линков)
+        # speed для LAG показывает скорость одного member-а, а не всего LAG
+        # Пример: Po1 с 4×1G: bandwidth="4000000 Kbit", speed="1000Mb/s"
+        if result.get("port_type") == "lag" and result.get("bandwidth"):
+            result["speed"] = result["bandwidth"]
+
         # Номинальная скорость для down-портов (когда speed пустой/unknown/auto)
         speed = result.get("speed", "")
         if speed.lower().strip() in _UNKNOWN_SPEED_VALUES:

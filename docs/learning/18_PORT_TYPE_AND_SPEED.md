@@ -121,13 +121,13 @@ bandwidth:     "10000 Kbit" ← НЕНАДЁЖНЫЙ! Для QoS, не для р
 
 ### Разница в таблице
 
-| | UP порт | DOWN порт |
-|--|---------|-----------|
-| Откуда speed | Реальная с устройства | Номинальная из port_type |
-| Формат speed | Платформо-зависимый | Всегда "X Kbit" |
-| media_type | Точный (от трансивера) | Пустой или bare indicator |
-| Определяет port_type | media_type (приоритет 1) | hardware_type или имя |
-| bandwidth | Не используется | **Не используется** (ненадёжный!) |
+| | UP порт | DOWN порт | LAG (Port-channel) |
+|--|---------|-----------|-------------------|
+| Откуда speed | Реальная с устройства | Номинальная из port_type | **bandwidth** (агрегат) |
+| Формат speed | Платформо-зависимый | Всегда "X Kbit" | "X Kbit" (из bandwidth) |
+| media_type | Точный (от трансивера) | Пустой или bare indicator | "unknown" обычно |
+| Определяет port_type | media_type (приоритет 1) | hardware_type или имя | "lag" (по имени) |
+| bandwidth | Не используется | **Не используется** | **Используется!** (сумма members) |
 
 ---
 
@@ -178,7 +178,26 @@ BW 10000 Kbit/sec   ← 10 Mbps! Это НЕ скорость порта 1G!
 
 **Решение:** bandwidth **никогда** не используется для speed.
 
-### Ловушка 4: порядок паттернов в маппингах
+### Ловушка 4: LAG speed ≠ member speed
+
+Port-channel с 4×1G members:
+```
+BW 4000000 Kbit/sec              ← агрегатная скорость (4G = 4 × 1G)
+Full-duplex, 1000Mb/s            ← скорость одного member-линка (1G)
+Members: Gi1/0/1 Gi1/0/2 Gi1/0/3 Gi1/0/4
+```
+
+Если взять speed ("1000Mb/s") → NetBox получит 1G вместо 4G.
+
+**Решение:** для LAG (port_type == "lag") берём bandwidth, а не speed:
+```python
+if result.get("port_type") == "lag" and result.get("bandwidth"):
+    result["speed"] = result["bandwidth"]
+```
+
+Для обычных интерфейсов bandwidth по-прежнему **не используется** (ненадёжен для DOWN-портов).
+
+### Ловушка 5: порядок паттернов в маппингах
 
 Все маппинги с `if pattern in value` (поиск подстроки):
 ```python
@@ -336,7 +355,23 @@ show interfaces → speed=""  hw="Fast Ethernet"  media="10/100BaseTX"
   _parse_speed("100000 Kbit") → 100000 Kbps = 100 Mbps ✓
 ```
 
-### Пример 5: QTech TFGigabitEthernet DOWN (25G, нет трансивера)
+### Пример 5: Cisco IOS Port-channel (LAG 4×1G)
+
+```
+show interfaces → speed="1000Mb/s"  bandwidth="4000000 Kbit"  hw="EtherChannel"
+
+СЛОЙ 2 нормализация:
+  detect_port_type():
+    имя "port-channel1" → is_lag_name() → port_type = "lag"
+  LAG? Да → speed = bandwidth = "4000000 Kbit" ✓
+
+СЛОЙ 3 sync:
+  get_netbox_interface_type():
+    port_type "lag" → type = "lag" ✓
+  _parse_speed("4000000 Kbit") → 4000000 Kbps = 4 Gbps ✓
+```
+
+### Пример 6: QTech TFGigabitEthernet DOWN (25G, нет трансивера)
 
 ```
 show interfaces → speed="Unknown"  hw=""  media=""
@@ -443,4 +478,4 @@ python -m network_collector sync-netbox --interfaces --device HOSTNAME --dry-run
 | [14_INTERFACE_NAME_MAPPINGS.md](14_INTERFACE_NAME_MAPPINGS.md) | Нормализация имён интерфейсов |
 | [PLATFORM_GUIDE.md 12.18](../PLATFORM_GUIDE.md) | Сводная таблица всех маппингов |
 | [PLATFORM_GUIDE.md 12.19](../PLATFORM_GUIDE.md) | UNIVERSAL_FIELD_MAP: правила и чеклист |
-| [BUGFIX_LOG.md Баги 22-25](../BUGFIX_LOG.md) | История багов speed и port_type |
+| [BUGFIX_LOG.md Баги 22-26](../BUGFIX_LOG.md) | История багов speed и port_type |
