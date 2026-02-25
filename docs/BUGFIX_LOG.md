@@ -1719,6 +1719,69 @@ Cisco IOS для FastEthernet возвращает `media type is 10/100BaseTX`.
 
 ---
 
+## Баг 25: NX-OS UP-порты получали speed 10 Kbps вместо 10 Gbps + multi-speed 25G→10G
+
+**Дата:** Февраль 2026
+**Симптом:** На NX-OS (N9K-C93180) после синхронизации:
+- UP-порты: speed менялся с 10000000 → 10 (10G → 10 Kbps), с 100000000 → 100 (100G → 100 Kbps)
+- DOWN 25G-порты: speed менялся с 25000000 → 10000000 (25G → 10G)
+
+### Причина 1: _parse_speed() не понимает NX-OS/IOS/QTech форматы
+
+**Файл:** `netbox/sync/base.py`
+
+`_parse_speed()` проверял только `"kbit"`, `"gbit"`, `"mbit"`:
+
+```python
+# Не обрабатывались:
+"10 Gb/s"    → fallback int("10") = 10 Kbps      ← NX-OS
+"1000Mb/s"   → fallback int("1000Mb/s") = None    ← Cisco IOS
+"10G"        → fallback int("10G") = None          ← QTech
+```
+
+**Фикс:** добавлены regex-паттерны для `"gb/s"`, `"mb/s"`, `"XG"`, `"XM"`:
+
+```python
+m = re.match(r"(\d+)\s*(gb/s|gb|g)\b", speed_lower)
+if m:
+    return int(m.group(1)) * 1000000
+m = re.match(r"(\d+)\s*(mb/s|mb|m)\b", speed_lower)
+if m:
+    return int(m.group(1)) * 1000
+```
+
+### Причина 2: NX-OS "media type is 10G" перехватывает port_type у 25G-портов
+
+**Файл:** `core/domain/interface.py`
+
+NX-OS `show interfaces` возвращает `media type is 10G` — это bare speed indicator, НЕ тип трансивера. Для порта с hardware `"100/1000/10000/25000 Ethernet"` (25G-capable):
+
+1. `detect_port_type()` → media_type `"10g"` → MEDIA_TYPE_PORT_TYPE_MAP: `"10g"` match → port_type = `"10g-sfp+"`
+2. hardware_type `"100/1000/10000/25000"` → `"25g-sfp28"` — никогда не проверяется
+3. Номинальная скорость = 10G (из port_type `"10g-sfp+"`) вместо 25G
+
+**Фикс:** bare speed indicators пропускаются в `detect_port_type()`:
+
+```python
+# NX-OS bare speed indicators — не являются реальным media_type трансивера
+if media_type not in ("10g", "25g", "40g", "100g", "1g", "fiber", "copper", "auto", ...):
+    port_type = self._detect_from_media_type(media_type)
+```
+
+Реальные media_type от трансиверов (например `"SFP-10GBase-SR"`) по-прежнему обрабатываются.
+
+### Результат
+
+| Порт | Было | Стало |
+|------|------|-------|
+| Ethernet1/43 UP 10G | 10000000 → **10** | 10000000 → **10000000** ✓ |
+| Ethernet1/49 UP 100G | 100000000 → **100** | 100000000 → **100000000** ✓ |
+| port-channel1 UP 10G | 10000000 → **10** | 10000000 → **10000000** ✓ |
+| port-channel42 UP 1G | 1000000 → **1000** | 1000000 → **1000000** ✓ |
+| Ethernet1/1 DOWN 25G hw | 25000000 → **10000000** | 25000000 → **25000000** ✓ |
+
+---
+
 ## Общие уроки
 
 1. **При добавлении платформы — проверять ВСЕ места**, где есть хардкод имён (не только парсинг, но и сортировку, поиск, case-insensitive сравнение)
@@ -1763,3 +1826,5 @@ Cisco IOS для FastEthernet возвращает `media type is 10/100BaseTX`.
 40. **Ненадёжный bandwidth как fallback для speed** — `Interface.from_dict()` при пустом speed подставлял bandwidth, а он на некоторых моделях показывает 10000 Kbit (10 Mbps) для down GigabitEthernet вместо 1000000 Kbit (1G). Решение: убрать fallback на bandwidth, вместо этого определять номинальную скорость из port_type (который уже определён из имени интерфейса). Новых маппингов не нужно — скорость парсится из префикса port_type ("1g-rj45" → 1G, "10g-sfp+" → 10G)
 41. **UNIVERSAL_FIELD_MAP — алиасы только для ОДНОГО и ТОГО ЖЕ поля** — `bandwidth` и `speed` — это разные поля с разной семантикой (configured BW vs negotiated speed). Маппинг `bandwidth → speed` приводил к перезаписи пустого speed значением bandwidth в `_normalize_fields()`. При добавлении алиаса в UNIVERSAL_FIELD_MAP проверять: это действительно одно и то же поле с другим именем, или это другое поле? Если разные — НЕ маппить. Также учитывать порядок итерации dict.items(): если оба ключа маппятся на один стандартный, последний перезаписывает первый
 42. **Порядок паттернов в substring-маппингах — контракт** — `NETBOX_INTERFACE_TYPE_MAP` использует `if pattern in media_lower` (substring). Общий паттерн `"basetx"` матчил `"10/100basetx"` раньше специфичного `"10/100"`. Правило: в маппингах с substring-проверкой специфичные паттерны ВСЕГДА перед общими (`"10/100/1000baset"` → `"100baset"` → `"10/100"` → `"basetx"`). Тот же принцип что в Уроке 22 (HARDWARE_TYPE_PORT_TYPE_MAP), но для другого маппинга
+43. **_parse_speed() — все форматы скорости всех платформ** — NX-OS возвращает `"10 Gb/s"`, Cisco IOS `"1000Mb/s"`, QTech `"10G"`. Парсер проверял только `"kbit"/"gbit"/"mbit"`, fallback `int("10")` = 10 Kbps вместо 10 Gbps. Правило: при работе со скоростью тестировать на РЕАЛЬНЫХ UP-портах каждой платформы. DOWN-порты возвращают bandwidth в Kbit (стандартный формат), UP-порты — в формате платформы. Regex `(\d+)\s*(gb/s|gb|g)\b` покрывает все варианты
+44. **Bare speed indicator ≠ media_type трансивера** — NX-OS `show interfaces` возвращает `media type is 10G` — это текущая скорость линка, а НЕ тип трансивера. `detect_port_type()` использовал media_type с приоритетом 1, и `"10g"` матчил `MEDIA_TYPE_PORT_TYPE_MAP` → `"10g-sfp+"`. Для порта с hardware `"100/1000/10000/25000"` (25G) это давало 10G вместо 25G. Правило: различать media_type от трансивера (`"SFP-10GBase-SR"`, `"10GBase-LR"`) и bare speed indicators (`"10G"`, `"25G"`, `"fiber"`, `"copper"`). Вторые пропускать, чтобы hardware_type определил реальную ёмкость порта

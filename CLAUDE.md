@@ -53,6 +53,7 @@ python -m network_collector --help
 | 15 | **[15_PUSH_CONFIG.md](docs/learning/15_PUSH_CONFIG.md)** | Push Config: YAML → маппинг платформ → ConfigPusher → Netmiko |
 | 16 | **[16_NETBOX_CLIENT_DEEP_DIVE.md](docs/learning/16_NETBOX_CLIENT_DEEP_DIVE.md)** | NetBox Client: pynetbox, 6 миксинов, bulk API, slug, lazy loading |
 | 17 | **[17_PYTHON_WORKBOOK.md](docs/learning/17_PYTHON_WORKBOOK.md)** | Workbook: ~60 задач, 15 блоков, 3 мини-проекта — пиши код сам |
+| 18 | **[18_PORT_TYPE_AND_SPEED.md](docs/learning/18_PORT_TYPE_AND_SPEED.md)** | Полная цепочка: тип порта + скорость, все маппинги, номинальная скорость |
 
 ## Ключевые файлы
 

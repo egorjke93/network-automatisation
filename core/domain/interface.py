@@ -214,7 +214,15 @@ class InterfaceNormalizer:
             return "1g-rj45"
 
         # 1. По media_type (наиболее точный)
-        if media_type and media_type not in ("unknown", "not present", ""):
+        # Пропускаем bare speed indicators из NX-OS "media type is 10G" —
+        # это НЕ тип трансивера, а generic индикатор скорости порта.
+        # Реальный media_type трансивера приходит из show interface transceiver/status
+        # и содержит "base", "sfp" и т.д. (например "SFP-10GBase-SR")
+        if media_type and media_type not in (
+            "unknown", "not present", "",
+            "10g", "25g", "40g", "100g", "1g",
+            "fiber", "copper", "auto",
+        ):
             port_type = self._detect_from_media_type(media_type)
             if port_type:
                 return port_type

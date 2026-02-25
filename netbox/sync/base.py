@@ -428,18 +428,40 @@ class SyncBase:
     # Парсинг VLAN перенесён в core/domain/vlan.py (parse_vlan_range)
 
     def _parse_speed(self, speed_str: str) -> Optional[int]:
-        """Парсит скорость в kbps для NetBox."""
+        """
+        Парсит скорость в kbps для NetBox.
+
+        Поддерживаемые форматы:
+        - "1000000 Kbit"  — стандартный (down-порты, номинальная скорость)
+        - "10 Gb/s"       — NX-OS UP
+        - "1000Mb/s"      — Cisco IOS UP (без пробела)
+        - "10G"           — QTech UP
+        - "100M"          — QTech (если вернёт)
+        - "10000"         — голое число (Kbps)
+        """
         if not speed_str:
             return None
-        speed_str = speed_str.lower()
+        speed_lower = speed_str.lower().strip()
         try:
-            if "kbit" in speed_str:
-                return int(speed_str.split()[0])
-            if "gbit" in speed_str:
-                return int(float(speed_str.split()[0]) * 1000000)
-            if "mbit" in speed_str:
-                return int(float(speed_str.split()[0]) * 1000)
-            return int(speed_str.split()[0])
+            # "1000000 Kbit" — наш стандартный формат для down-портов
+            if "kbit" in speed_lower:
+                return int(speed_lower.split()[0])
+            # "1 Gbit", "10 Gbit/sec"
+            if "gbit" in speed_lower:
+                return int(float(speed_lower.split()[0]) * 1000000)
+            # "1000 Mbit", "100 Mbit/sec"
+            if "mbit" in speed_lower:
+                return int(float(speed_lower.split()[0]) * 1000)
+            # Regex: число + единица (с пробелом или без)
+            # "10 Gb/s", "25Gb/s", "1000Mb/s", "10G", "100M"
+            m = re.match(r"(\d+)\s*(gb/s|gb|g)\b", speed_lower)
+            if m:
+                return int(m.group(1)) * 1000000
+            m = re.match(r"(\d+)\s*(mb/s|mb|m)\b", speed_lower)
+            if m:
+                return int(m.group(1)) * 1000
+            # Голое число — предполагаем Kbps
+            return int(speed_lower.split()[0])
         except (ValueError, IndexError):
             return None
 
