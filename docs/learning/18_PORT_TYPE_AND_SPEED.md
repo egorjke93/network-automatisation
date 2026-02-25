@@ -1,557 +1,435 @@
-# 18. Определение типа порта и скорости: полная цепочка
+# 18. Тип порта и скорость: как всё работает
 
-## Зачем это нужно
+## Быстрый ответ: что происходит при синхронизации
 
-Когда ты синхронизируешь интерфейсы с NetBox, для каждого порта нужно определить:
-1. **Тип порта** (`1000base-t`, `10gbase-x-sfpp`, `100base-tx`) — для поля `type` в NetBox
-2. **Скорость** (1000000 Kbps, 10000000 Kbps) — для поля `speed` в NetBox
+Когда ты запускаешь `sync-netbox --interfaces`, система определяет для каждого порта две вещи:
 
-Проблема: устройства разных вендоров возвращают эти данные в совершенно разных форматах. А для down-портов данные вообще неполные или ненадёжные.
+1. **type** — тип порта в NetBox (`1000base-t`, `10gbase-x-sfpp`, `100base-tx`)
+2. **speed** — скорость в Kbps (`1000000`, `10000000`)
+
+**Всего 3 слоя, каждый делает своё:**
+
+```
+СЛОЙ 1: Сбор          SSH → TextFSM → сырые поля (speed, hardware_type, media_type)
+СЛОЙ 2: Нормализация  → port_type + номинальная скорость (для down-портов)
+СЛОЙ 3: Синхронизация  → NetBox type + speed в Kbps
+```
 
 ---
 
-## Общая архитектура: 5 шагов pipeline
+## Одна страница: полная цепочка
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│  1. TextFSM / NTC Templates                                         │
-│     show interfaces → {speed, bandwidth, hardware_type, media_type}  │
-│     Ключи в разном формате по платформам                             │
-└──────────────────────────┬───────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│ СЛОЙ 1: СБОР (collectors → parsers)                             │
+│                                                                 │
+│  SSH: show interfaces                                           │
+│  TextFSM → сырые поля:                                          │
+│    speed        = "10 Gb/s" (UP) / "auto-speed" (DOWN)          │
+│    hardware_type = "100/1000/10000 Ethernet"                    │
+│    media_type   = "10G" или "SFP-10GBase-SR"                    │
+│    bandwidth    = "10000000 Kbit" (ИГНОРИРУЕТСЯ для speed!)     │
+│                                                                 │
+│  UNIVERSAL_FIELD_MAP: нормализация ИМЁН полей                   │
+│    "link_status" → "status", "mac_address" → "mac"              │
+│    speed остаётся speed, bandwidth остаётся bandwidth            │
+└──────────────────────────┬──────────────────────────────────────┘
                            ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│  2. NTCParser._normalize_fields() — UNIVERSAL_FIELD_MAP              │
-│     Приводит ключи к единым стандартным именам                       │
-│     "link_status" → "status", "mac_address" → "mac"                  │
-│     ⚠ bandwidth НЕ маппится на speed (разная семантика!)             │
-└──────────────────────────┬───────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│ СЛОЙ 2: НОРМАЛИЗАЦИЯ (core/domain/interface.py)                 │
+│                                                                 │
+│  ШАГ A: detect_port_type() — определяет port_type               │
+│                                                                 │
+│    Приоритет:                                                    │
+│    ┌──────────────────┐   ┌─────────────────┐                   │
+│    │ 0. LAG/Virtual/  │──▶│ "lag", "virtual" │                  │
+│    │    Management    │   │ "1g-rj45" (mgmt) │                  │
+│    └──────────────────┘   └─────────────────┘                   │
+│    ┌──────────────────┐                                          │
+│    │ 1. media_type    │──▶ "SFP-10GBase-SR" → "10g-sfp+"        │
+│    │    (трансивер)   │   ⚠ "10G" пропускается (bare speed)     │
+│    └──────────────────┘                                          │
+│    ┌──────────────────┐                                          │
+│    │ 2. hardware_type │──▶ "100/1000/10000" → "10g-sfp+"        │
+│    │    (макс.скорость│   "Gigabit Ethernet" → "1g-rj45"        │
+│    │     порта)       │                                          │
+│    └──────────────────┘                                          │
+│    ┌──────────────────┐                                          │
+│    │ 3. имя интерфейса│──▶ "GigabitEthernet" → "1g-rj45"        │
+│    │    (fallback)    │   "FastEthernet" → "100m-rj45"          │
+│    └──────────────────┘                                          │
+│                                                                 │
+│  ШАГ B: скорость                                                │
+│                                                                 │
+│    UP порт?  → speed уже заполнен ("10 Gb/s") → оставляем      │
+│    DOWN порт? → speed пустой/unknown/auto                       │
+│                → get_nominal_speed_from_port_type("10g-sfp+")   │
+│                → "10000000 Kbit"                                │
+│                                                                 │
+└──────────────────────────┬──────────────────────────────────────┘
                            ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│  3. InterfaceNormalizer._normalize_row()                             │
-│     a) detect_port_type() — определяет port_type                     │
-│        Приоритет: media_type → hardware_type → имя интерфейса        │
-│     b) Номинальная скорость для down-портов                          │
-│        Если speed пустой/unknown/auto → берём из port_type           │
-└──────────────────────────┬───────────────────────────────────────────┘
-                           ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│  4. Interface.from_dict() → модель Interface                         │
-│     speed = data.get("speed") or ""                                  │
-│     ⚠ bandwidth НЕ используется (ненадёжный для down-портов)        │
-└──────────────────────────┬───────────────────────────────────────────┘
-                           ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│  5. Sync: get_netbox_interface_type() + _parse_speed()               │
-│     a) Определяет NetBox тип (1000base-t, 10gbase-x-sfpp)           │
-│        Приоритет: LAG → virtual → mgmt → media → port_type → hw →   │
-│                   имя → speed → default                              │
-│     b) Парсит speed в Kbps для NetBox API                            │
-└──────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│ СЛОЙ 3: СИНХРОНИЗАЦИЯ (netbox/sync/)                            │
+│                                                                 │
+│  get_netbox_interface_type(interface):                           │
+│    port_type "10g-sfp+" → PORT_TYPE_MAP → "10gbase-x-sfpp"     │
+│    media "SFP-10GBase-SR" → NETBOX_INTERFACE_TYPE_MAP           │
+│                           → "10gbase-sr" (точнее!)              │
+│                                                                 │
+│  _parse_speed(speed_str):                                       │
+│    "10000000 Kbit" → 10000000 (Kbps)     ← DOWN порт           │
+│    "10 Gb/s"       → 10000000 (Kbps)     ← UP порт NX-OS       │
+│    "1000Mb/s"      → 1000000 (Kbps)      ← UP порт IOS         │
+│    "10G"           → 10000000 (Kbps)      ← UP порт QTech       │
+│                                                                 │
+│  → NetBox API: type="10gbase-x-sfpp", speed=10000000            │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Шаг 1: TextFSM — что возвращает каждая платформа
+## UP порт vs DOWN порт — в чём разница
 
-### Cisco IOS (`show interfaces`)
+Это главный источник путаницы. Для UP и DOWN портов данные приходят **по-разному**:
+
+### UP порт (линк поднят, есть трансивер)
 
 ```
-GigabitEthernet0/1 is up, line protocol is up (connected)
-  Hardware is Gigabit Ethernet, address is 0011.2233.4455
-  Full-duplex, 1000Mb/s, media type is 10/100/1000BaseTX
-  ...
-  MTU 1500 bytes, BW 1000000 Kbit/sec
+speed:         "10 Gb/s" (NX-OS) / "1000Mb/s" (IOS) / "10G" (QTech)
+                ↳ реальная согласованная скорость линка
+media_type:    "SFP-10GBase-SR" (если собрали show interface transceiver)
+                ↳ реальный тип трансивера
+hardware_type: "100/1000/10000 Ethernet"
+                ↳ максимальная ёмкость порта (всегда есть)
 ```
 
-NTC Template возвращает:
+**Цепочка:** speed → `_parse_speed()` → Kbps. Всё просто.
 
-| Поле | UP порт | DOWN порт |
-|------|---------|-----------|
-| `speed` | `"1000Mb/s"` | `"Auto-speed"` или `""` |
-| `bandwidth` | `"1000000 Kbit"` | `"10000 Kbit"` ⚠ ненадёжно |
-| `hardware_type` | `"Gigabit Ethernet"` | `"Gigabit Ethernet"` |
-| `media_type` | `"10/100/1000BaseTX"` | `"10/100/1000BaseTX"` |
+### DOWN порт (линк не поднят / нет трансивера)
 
-**Ключевое:** `bandwidth` для down-порта может показывать 10000 Kbit (10 Mbps) — это дефолтный BW для QoS, а НЕ номинальная скорость порта.
+```
+speed:         "" / "auto-speed" / "Unknown"
+                ↳ ПУСТОЙ! Линк не согласован, скорости нет
+media_type:    "" / "Not Present" / "10G" (NX-OS bare indicator)
+                ↳ часто пустой или неточный
+hardware_type: "100/1000/10000 Ethernet"
+                ↳ максимальная ёмкость порта (всегда есть)
+bandwidth:     "10000 Kbit" ← НЕНАДЁЖНЫЙ! Для QoS, не для реальной скорости
+```
 
-### FastEthernet на Cisco IOS
+**Цепочка:** speed пустой → `detect_port_type()` из hw/name → `get_nominal_speed_from_port_type()` → "10000000 Kbit" → `_parse_speed()` → Kbps.
 
-| Поле | UP порт | DOWN порт |
-|------|---------|-----------|
-| `speed` | `"100Mb/s"` | `""` |
-| `bandwidth` | `"100000 Kbit"` | `"10000 Kbit"` ⚠ |
-| `hardware_type` | `"Fast Ethernet"` | `"Fast Ethernet"` |
-| `media_type` | `"10/100BaseTX"` | `"10/100BaseTX"` |
+### Разница в таблице
 
-### QTech (`show interfaces`)
-
-| Поле | UP порт | DOWN порт |
-|------|---------|-----------|
-| `speed` | `"10G"`, `"1G"` | `"Unknown"` |
-| `bandwidth` | `"10000000"` | `"10000"` ⚠ |
-| `hardware_type` | из TextFSM | из TextFSM |
-| `media_type` | из `show interface transceiver` (отдельная команда) | `""` (нет трансивера) |
-
-### NX-OS (`show interfaces`)
-
-| Поле | UP порт | DOWN порт |
-|------|---------|-----------|
-| `speed` | `"10 Gb/s"` | `"auto-speed"` |
-| `bandwidth` | `"10000000 Kbit"` | `"10000000 Kbit"` |
-| `hardware_type` | `"100/1000/10000 Ethernet"` | `"100/1000/10000 Ethernet"` |
+| | UP порт | DOWN порт |
+|--|---------|-----------|
+| Откуда speed | Реальная с устройства | Номинальная из port_type |
+| Формат speed | Платформо-зависимый | Всегда "X Kbit" |
+| media_type | Точный (от трансивера) | Пустой или bare indicator |
+| Определяет port_type | media_type (приоритет 1) | hardware_type или имя |
+| bandwidth | Не используется | **Не используется** (ненадёжный!) |
 
 ---
 
-## Шаг 2: UNIVERSAL_FIELD_MAP — нормализация ключей
+## Ключевые ловушки (почему были баги)
 
-**Файл:** `parsers/textfsm_parser.py`
+### Ловушка 1: NX-OS "media type is 10G" — это НЕ тип трансивера
 
-Разные NTC-шаблоны возвращают одни и те же данные под разными ключами. `UNIVERSAL_FIELD_MAP` приводит их к единым стандартным именам:
+NX-OS `show interfaces` для DOWN-порта:
+```
+Hardware: 100/1000/10000/25000 Ethernet    ← порт до 25G
+auto-speed, media type is 10G              ← это НЕ трансивер, это дефолт
+```
 
+`"10G"` — это bare speed indicator. Если его принять за media_type:
+- `detect_port_type()` → media `"10g"` → port_type `"10g-sfp+"` (10G)
+- Но hardware `"100/1000/10000/25000"` → port_type `"25g-sfp28"` (25G) ← правильно!
+
+**Решение:** bare speed indicators (`"10g"`, `"25g"`, `"1g"` и т.д.) пропускаются в `detect_port_type()`. Реальные media_type трансиверов содержат "base", "sfp" и т.д. (`"SFP-10GBase-SR"`).
+
+### Ловушка 2: _parse_speed() и форматы разных платформ
+
+| Платформа | Формат UP-порта | Если не обработать |
+|-----------|----------------|-------------------|
+| NX-OS | `"10 Gb/s"` | `int("10")` = **10 Kbps** (вместо 10G!) |
+| Cisco IOS | `"1000Mb/s"` | `int("1000Mb/s")` = **ValueError → None** |
+| QTech | `"10G"` | `int("10G")` = **ValueError → None** |
+| DOWN (все) | `"1000000 Kbit"` | Работает корректно |
+
+**Решение:** regex-паттерны в `_parse_speed()`:
 ```python
-UNIVERSAL_FIELD_MAP = {
-    "mac": ["mac", "mac_address", "destination_address"],
-    "status": ["status", "link_status", "link"],
-    "speed": ["speed"],          # ← ТОЛЬКО speed, НЕ bandwidth!
-    "hostname": ["hostname", "host", "switchname", "device_id"],
-    ...
-}
+# Порядок проверки:
+"kbit" → стандартный формат (down-порты)
+"gbit" → "1 Gbit" формат
+"mbit" → "100 Mbit" формат
+regex r"(\d+)\s*(gb/s|gb|g)\b" → NX-OS "10 Gb/s", QTech "10G"
+regex r"(\d+)\s*(mb/s|mb|m)\b" → IOS "1000Mb/s"
+голое число → предполагаем Kbps
 ```
 
-### Как работает _normalize_fields()
+### Ловушка 3: bandwidth ≠ speed
 
+`bandwidth` (BW) — это сконфигурированная полоса для QoS. Для down GigE на некоторых моделях:
+```
+BW 10000 Kbit/sec   ← 10 Mbps! Это НЕ скорость порта 1G!
+```
+
+Если маппить `bandwidth → speed` (через UNIVERSAL_FIELD_MAP), down GigE получит 10 Mbps вместо 1G.
+
+**Решение:** bandwidth **никогда** не используется для speed.
+
+### Ловушка 4: порядок паттернов в маппингах
+
+Все маппинги с `if pattern in value` (поиск подстроки):
 ```python
-for key, value in row.items():
-    key_lower = key.lower()
-    # Ищем стандартное имя
-    standard_key = key_lower
-    for std_name, aliases in UNIVERSAL_FIELD_MAP.items():
-        if key_lower in aliases:
-            standard_key = std_name
-            break
-    new_row[standard_key] = value  # ← если два ключа маппятся на один — ПОСЛЕДНИЙ побеждает
-```
+# ❌ "basetx" матчит "10/100basetx" раньше "10/100":
+"basetx": "1000base-t",     # перехватывает FastEthernet!
+"10/100": "100base-tx",     # не достигается
 
-### Правило: алиас только для ОДНОГО поля
-
-```python
-# ✅ Правильно — одно поле с разным именем:
-"mac": ["mac", "mac_address"]
-
-# ❌ Неправильно — разные поля (bandwidth ≠ speed):
-"speed": ["speed", "bandwidth"]
-# bandwidth это BW для QoS, speed это согласованная скорость
-```
-
-Если маппить `bandwidth → speed`, то bandwidth (10000 Kbit) перезаписывает пустой speed для down-портов.
-
----
-
-## Шаг 3: InterfaceNormalizer — port_type и номинальная скорость
-
-**Файл:** `core/domain/interface.py`
-
-### 3a. detect_port_type() — три приоритета
-
-Определяет нормализованный тип порта (`"1g-rj45"`, `"10g-sfp+"`, `"100m-rj45"`).
-
-**Приоритет определения:**
-
-```
-1. media_type  → MEDIA_TYPE_PORT_TYPE_MAP    (самый точный: "10GBASE-SR" → "10g-sfp+")
-2. hardware_type → HARDWARE_TYPE_PORT_TYPE_MAP  ("100/1000/10000 Ethernet" → "10g-sfp+")
-3. имя интерфейса → INTERFACE_NAME_PORT_TYPE_MAP  ("fastethernet" → "100m-rj45")
-```
-
-**Маппинги (файл `core/constants/interfaces.py`):**
-
-```python
-# media_type паттерн → port_type
-MEDIA_TYPE_PORT_TYPE_MAP = {
-    "100gbase": "100g-qsfp28",
-    "10gbase": "10g-sfp+",
-    "1000base-t": "1g-rj45",    # медь
-    "1000base": "1g-sfp",       # оптика (generic)
-    ...
-}
-
-# hardware_type паттерн → port_type
-HARDWARE_TYPE_PORT_TYPE_MAP = {
-    "100/1000/10000": "10g-sfp+",   # NX-OS multi-speed
-    "gigabit": "1g-rj45",
-    "1000": "1g-rj45",
-    ...
-}
-
-# имя интерфейса → port_type
-INTERFACE_NAME_PORT_TYPE_MAP = {
-    "hundredgig": "100g-qsfp28",
-    "hu": "100g-qsfp28",
-    "tengig": "10g-sfp+",
-    "te": "10g-sfp+",
-    "gigabit": "1g-rj45",
-    "gi": "1g-rj45",
-    "fastethernet": "100m-rj45",
-    "fa": "100m-rj45",
-    ...
-}
-```
-
-### 3b. Номинальная скорость для down-портов
-
-После определения `port_type`, если speed пустой или неизвестный:
-
-```python
-_UNKNOWN_SPEED_VALUES = {"unknown", "auto", "auto-speed", ""}
-
-# В _normalize_row():
-speed = result.get("speed", "")
-if speed.lower().strip() in _UNKNOWN_SPEED_VALUES:
-    nominal = get_nominal_speed_from_port_type(result.get("port_type", ""))
-    if nominal:
-        result["speed"] = nominal
-```
-
-**Как get_nominal_speed_from_port_type() парсит скорость из port_type:**
-
-```python
-def get_nominal_speed_from_port_type(port_type: str) -> str:
-    """
-    "1g-rj45"   → "1000000 Kbit"    (1G)
-    "10g-sfp+"  → "10000000 Kbit"   (10G)
-    "25g-sfp28" → "25000000 Kbit"   (25G)
-    "100m-rj45" → "100000 Kbit"     (100M)
-    """
-    prefix = port_type.split("-", 1)[0]  # "1g", "10g", "100m"
-    if prefix.endswith("g"):
-        return f"{int(prefix[:-1]) * 1000000} Kbit"
-    elif prefix.endswith("m"):
-        return f"{int(prefix[:-1]) * 1000} Kbit"
-```
-
-**Новых маппингов не нужно** — скорость уже закодирована в port_type.
-
----
-
-## Шаг 4: Interface.from_dict()
-
-**Файл:** `core/models.py`
-
-```python
-speed=data.get("speed") or ""   # ← ТОЛЬКО speed, НЕ bandwidth
-```
-
-К этому моменту speed уже содержит правильное значение:
-- UP порт: реальная скорость (`"1000Mb/s"`, `"10G"`)
-- DOWN порт: номинальная скорость (`"1000000 Kbit"`, `"100000 Kbit"`)
-
----
-
-## Шаг 5: Sync — NetBox тип и скорость
-
-### 5a. get_netbox_interface_type()
-
-**Файл:** `core/constants/netbox.py`
-
-Определяет тип интерфейса для NetBox API. Приоритет:
-
-```
-1. LAG (Port-channel, AggregatePort) → "lag"
-2. Virtual (Vlan, Loopback) → "virtual"
-3. Management (mgmt, Management) → "1000base-t"
-4. media_type → NETBOX_INTERFACE_TYPE_MAP     ← ВЫСШИЙ приоритет для физических портов
-5. port_type → PORT_TYPE_MAP
-6. hardware_type → NETBOX_HARDWARE_TYPE_MAP
-7. имя интерфейса → _detect_type_by_name_prefix()
-8. speed → fallback по скорости
-9. default → "1000base-t"
-```
-
-**NETBOX_INTERFACE_TYPE_MAP (медные паттерны):**
-
-```python
-# Порядок КРИТИЧЕН! Специфичные перед общими.
-"10/100/1000baset": "1000base-t",   # GigE copper
-"10/100/1000": "1000base-t",
-"1000baset": "1000base-t",
-"100baset": "100base-tx",            # FastEthernet copper
-"10/100": "100base-tx",
-"10baset": "10base-t",
-"basetx": "1000base-t",              # generic — ПОСЛЕДНИМ
-"base-tx": "1000base-t",
-"rj45": "1000base-t",
-```
-
-**Почему порядок важен:** маппинг использует `if pattern in media_lower` (поиск подстроки). Если `"basetx"` стоит перед `"10/100"`, то `"basetx"` матчит `"10/100basetx"` и возвращает `1000base-t` (НЕПРАВИЛЬНО для FastEthernet).
-
-### 5b. _parse_speed()
-
-**Файл:** `netbox/sync/base.py`
-
-Конвертирует speed в Kbps для NetBox API:
-
-```python
-def _parse_speed(self, speed_str):
-    if "kbit" in speed_str:    # "1000000 Kbit" → 1000000
-        return int(speed_str.split()[0])
-    if "gbit" in speed_str:    # "1 Gbit" → 1000000
-        return int(float(speed_str.split()[0]) * 1000000)
-    if "mbit" in speed_str:    # "100 Mbit" → 100000
-        return int(float(speed_str.split()[0]) * 1000)
-    return int(speed_str.split()[0])  # fallback
-```
-
-Для DOWN-портов наши номинальные скорости всегда в формате "X Kbit" — `_parse_speed` обрабатывает их корректно.
-
----
-
-## Примеры: полная цепочка для каждого сценария
-
-### Cisco IOS GigabitEthernet DOWN
-
-```
-show interfaces:
-  speed=""  bandwidth="10000"  media_type="10/100/1000BaseTX"  hw="Gigabit Ethernet"
-    ↓
-UNIVERSAL_FIELD_MAP:
-  speed=""  (bandwidth остаётся отдельным ключом, НЕ перезаписывает speed)
-    ↓
-detect_port_type():
-  media "10/100/1000basetx" → "1000base" match → port_type = "1g-sfp" (или "1g-rj45" по имени)
-    ↓
-Номинальная скорость:
-  speed="" IS in _UNKNOWN_SPEED_VALUES → get_nominal("1g-...") = "1000000 Kbit"
-    ↓
-Interface.from_dict():
-  speed = "1000000 Kbit"
-    ↓
-get_netbox_interface_type():
-  media "10/100/1000baset" match → "1000base-t" ✓
-    ↓
-_parse_speed("1000000 Kbit"):
-  "kbit" match → 1000000 Kbps = 1 Gbps ✓
-```
-
-### FastEthernet DOWN
-
-```
-show interfaces:
-  speed=""  bandwidth="10000"  media_type="10/100BaseTX"  hw="Fast Ethernet"
-    ↓
-UNIVERSAL_FIELD_MAP:
-  speed=""  (bandwidth — отдельный ключ)
-    ↓
-detect_port_type():
-  media "10/100basetx" — нет совпадения в MEDIA_TYPE_PORT_TYPE_MAP
-  hw "fast ethernet" — нет совпадения в HARDWARE_TYPE_PORT_TYPE_MAP
-  name "fastethernet0/1" → port_type = "100m-rj45"
-    ↓
-Номинальная скорость:
-  speed="" IS in _UNKNOWN_SPEED_VALUES → get_nominal("100m-rj45") = "100000 Kbit"
-    ↓
-Interface.from_dict():
-  speed = "100000 Kbit"
-    ↓
-get_netbox_interface_type():
-  media "10/100basetx" → "100baset" match → "100base-tx" ✓
-    ↓
-_parse_speed("100000 Kbit"):
-  "kbit" match → 100000 Kbps = 100 Mbps ✓
-```
-
-### QTech TFGigabitEthernet DOWN (без трансивера)
-
-```
-show interfaces:
-  speed="Unknown"  media_type=""  hw=""
-    ↓
-detect_port_type():
-  media пустой  hw пустой
-  name "tfgigabitethernet0/3" → port_type = "25g-sfp28"
-    ↓
-Номинальная скорость:
-  "unknown" IS in _UNKNOWN_SPEED_VALUES → get_nominal("25g-sfp28") = "25000000 Kbit"
-    ↓
-get_netbox_interface_type():
-  media пустой → port_type "25g-sfp28" in PORT_TYPE_MAP → "25gbase-x-sfp28" ✓
-    ↓
-_parse_speed("25000000 Kbit"):
-  "kbit" match → 25000000 Kbps = 25 Gbps ✓
-```
-
-### NX-OS Ethernet DOWN
-
-```
-show interfaces:
-  speed="auto-speed"  hw="100/1000/10000 Ethernet"
-    ↓
-detect_port_type():
-  hw "100/1000/10000 ethernet" → "100/1000/10000" match → port_type = "10g-sfp+"
-    ↓
-Номинальная скорость:
-  "auto-speed" IS in _UNKNOWN_SPEED_VALUES → get_nominal("10g-sfp+") = "10000000 Kbit"
-    ↓
-get_netbox_interface_type():
-  port_type "10g-sfp+" in PORT_TYPE_MAP → "10gbase-x-sfpp" ✓
-    ↓
-_parse_speed("10000000 Kbit"):
-  "kbit" match → 10000000 Kbps = 10 Gbps ✓
+# ✅ Специфичные перед общими:
+"10/100": "100base-tx",     # матчит "10/100basetx" ПЕРВЫМ
+"basetx": "1000base-t",     # только для generic
 ```
 
 ---
 
-## Все маппинги и где они живут
+## Где живут маппинги (карта файлов)
 
-### Маппинги port_type (domain layer)
+```
+core/constants/interfaces.py          ← port_type маппинги (domain layer)
+├── MEDIA_TYPE_PORT_TYPE_MAP          media → port_type ("10gbase" → "10g-sfp+")
+├── HARDWARE_TYPE_PORT_TYPE_MAP       hw → port_type ("100/1000/10000" → "10g-sfp+")
+├── INTERFACE_NAME_PORT_TYPE_MAP      имя → port_type ("gigabit" → "1g-rj45")
+├── _UNKNOWN_SPEED_VALUES             {"unknown", "auto", "auto-speed", ""}
+└── get_nominal_speed_from_port_type  port_type → "X Kbit" ("10g-sfp+" → "10000000 Kbit")
 
-**Файл:** `core/constants/interfaces.py`
+core/constants/netbox.py              ← NetBox тип маппинги (sync layer)
+├── NETBOX_INTERFACE_TYPE_MAP         media → NetBox ("10gbase-sr" → "10gbase-sr")
+├── NETBOX_HARDWARE_TYPE_MAP          hw → NetBox ("fast ethernet" → "100base-tx")
+├── PORT_TYPE_MAP                     port_type → NetBox ("10g-sfp+" → "10gbase-x-sfpp")
+└── get_netbox_interface_type()       собирает всё вместе → финальный NetBox type
 
-| Маппинг | Что делает | Формат значений |
-|---------|-----------|----------------|
-| `MEDIA_TYPE_PORT_TYPE_MAP` | media_type → port_type | `"10gbase" → "10g-sfp+"` |
-| `HARDWARE_TYPE_PORT_TYPE_MAP` | hardware_type → port_type | `"gigabit" → "1g-rj45"` |
-| `INTERFACE_NAME_PORT_TYPE_MAP` | имя интерфейса → port_type | `"fastethernet" → "100m-rj45"` |
+core/domain/interface.py              ← логика нормализации
+├── detect_port_type()                media → hw → имя → port_type
+└── _normalize_row()                  port_type + номинальная скорость
 
-### Маппинги NetBox типа (sync layer)
+netbox/sync/base.py                   ← парсинг для API
+└── _parse_speed()                    "10 Gb/s" → 10000000 Kbps
 
-**Файл:** `core/constants/netbox.py`
-
-| Маппинг | Что делает | Формат значений |
-|---------|-----------|----------------|
-| `PORT_TYPE_MAP` | port_type → NetBox API тип | `"1g-rj45" → "1000base-t"` |
-| `NETBOX_INTERFACE_TYPE_MAP` | media_type → NetBox тип | `"10gbase-sr" → "10gbase-sr"` |
-| `NETBOX_HARDWARE_TYPE_MAP` | hardware_type → NetBox тип | `"fast ethernet" → "100base-tx"` |
-
-### Маппинг ключей полей
-
-**Файл:** `parsers/textfsm_parser.py`
-
-| Маппинг | Что делает |
-|---------|-----------|
-| `UNIVERSAL_FIELD_MAP` | Нормализация имён полей NTC: `"link_status" → "status"` |
-
-### Номинальная скорость
-
-**Файл:** `core/constants/interfaces.py`
-
-| Константа / Функция | Что делает |
-|---------------------|-----------|
-| `_UNKNOWN_SPEED_VALUES` | Множество значений speed, которые считаются "неизвестными" |
-| `get_nominal_speed_from_port_type()` | Парсит скорость из префикса port_type |
+parsers/textfsm_parser.py            ← нормализация имён полей
+└── UNIVERSAL_FIELD_MAP               "link_status" → "status"
+```
 
 ---
 
-## Правила порядка в маппингах
+## Два слоя маппингов — зачем
 
-### Правило: substring-маппинги — специфичные перед общими
+Это главный источник путаницы: **почему два набора маппингов?**
 
-Все маппинги с `if pattern in value` (substring match) требуют правильного порядка:
+### Слой 1: port_type (domain layer)
 
-```python
-# ✅ Правильно — специфичные перед общими:
-"10/100/1000baset": "1000base-t",   # матчит "10/100/1000basetx"
-"100baset": "100base-tx",            # матчит "10/100basetx"
-"basetx": "1000base-t",              # generic, ПОСЛЕДНИЙ
-
-# ❌ Неправильно — "basetx" матчит "10/100basetx" первым:
-"basetx": "1000base-t",              # ПЕРЕХВАТЫВАЕТ FastEthernet!
-"10/100/1000baset": "1000base-t",    # никогда не достигается для "10/100basetx"
+```
+"10g-sfp+"    "1g-rj45"    "25g-sfp28"    "100m-rj45"    "lag"    "virtual"
 ```
 
-Это относится ко ВСЕМ маппингам:
-- `NETBOX_INTERFACE_TYPE_MAP` (медные паттерны)
-- `HARDWARE_TYPE_PORT_TYPE_MAP` ("10000" перед "1000")
-- `MEDIA_TYPE_PORT_TYPE_MAP`
+**Зачем:** универсальная категория, не привязанная к NetBox. Используется для:
+- Номинальной скорости (`"10g"` → 10G, `"1g"` → 1G)
+- Сортировки LAG перед member-портами
+- Фильтрации виртуальных интерфейсов
+- Передачи в sync layer как входной параметр
+
+### Слой 2: NetBox type (sync layer)
+
+```
+"10gbase-x-sfpp"    "1000base-t"    "25gbase-x-sfp28"    "100base-tx"    "10gbase-sr"
+```
+
+**Зачем:** конкретный тип для NetBox API. Отличается от port_type:
+- `media_type = "SFP-10GBase-SR"` → `"10gbase-sr"` (точный тип трансивера)
+- `port_type = "10g-sfp+"` → `"10gbase-x-sfpp"` (generic SFP+)
+- media_type даёт **точнее** результат, если есть трансивер
+
+**Связь между ними:**
+
+```
+port_type "10g-sfp+"  ─── PORT_TYPE_MAP ───▶  "10gbase-x-sfpp"  (generic)
+media "SFP-10GBase-SR" ── NETBOX_TYPE_MAP ──▶  "10gbase-sr"      (точный)
+```
+
+`get_netbox_interface_type()` проверяет media_type с **высшим приоритетом** и может дать более точный результат, чем PORT_TYPE_MAP.
 
 ---
 
-## Добавление нового типа порта
+## Примеры: полная цепочка
 
-### Шаг 1: Определить характеристики
+### Пример 1: Cisco IOS GigabitEthernet DOWN
 
-- Какой port_type? (например `"2.5g-rj45"`)
-- Какой NetBox тип? (например `"2.5gbase-t"`)
-- Какой media_type на устройстве? (например `"2.5GbaseT"`)
-- Какой hardware_type? (например `"2500 Ethernet"`)
-- Какой префикс имени? (например `"TwoDotFiveGigE"`)
+```
+show interfaces → speed=""  hw="Gigabit Ethernet"  media="10/100/1000BaseTX"
 
-### Шаг 2: Обновить маппинги
+СЛОЙ 2 нормализация:
+  detect_port_type():
+    media "10/100/1000basetx" → не bare indicator → MEDIA_TYPE_PORT_TYPE_MAP
+      "1000base" match → port_type = "1g-sfp" (можно спорить, но дальше исправится)
+  speed "" IN _UNKNOWN_SPEED_VALUES → get_nominal("1g-sfp") = "1000000 Kbit"
 
-```python
-# 1. core/constants/interfaces.py
-
-# Имя → port_type (если новый префикс)
-INTERFACE_NAME_PORT_TYPE_MAP["twodotfivegige"] = "2.5g-rj45"
-
-# Media → port_type
-MEDIA_TYPE_PORT_TYPE_MAP["2.5gbase"] = "2.5g-rj45"
-
-# Hardware → port_type
-HARDWARE_TYPE_PORT_TYPE_MAP["2500"] = "2.5g-rj45"
-
-# 2. core/constants/netbox.py
-
-# port_type → NetBox тип
-PORT_TYPE_MAP["2.5g-rj45"] = "2.5gbase-t"
-
-# media_type → NetBox тип (если есть уникальный media)
-NETBOX_INTERFACE_TYPE_MAP["2.5gbase"] = "2.5gbase-t"
-
-# hardware_type → NetBox тип
-NETBOX_HARDWARE_TYPE_MAP["2500"] = "2.5gbase-t"
+СЛОЙ 3 sync:
+  get_netbox_interface_type():
+    media "10/100/1000basetx" → NETBOX_INTERFACE_TYPE_MAP
+      "10/100/1000baset" match → type = "1000base-t" ✓
+  _parse_speed("1000000 Kbit") → 1000000 Kbps = 1 Gbps ✓
 ```
 
-### Шаг 3: Номинальная скорость
+### Пример 2: NX-OS Ethernet1/1 DOWN (25G hardware)
 
-Если port_type в формате `"Xg-..."` или `"Xm-..."` — `get_nominal_speed_from_port_type()` автоматически распарсит скорость. Для нестандартных форматов (как `"2.5g"`) нужно проверить парсинг:
+```
+show interfaces → speed="auto-speed"  hw="100/1000/10000/25000 Ethernet"  media="10G"
 
-```python
-# "2.5g-rj45" → parts[0] = "2.5g" → "2.5g".endswith("g") → int("2.5") → ValueError!
-# Нужен float: float("2.5") * 1000000 = 2500000
+СЛОЙ 2 нормализация:
+  detect_port_type():
+    media "10g" → IN bare indicators → ПРОПУСКАЕМ ✓
+    hw "100/1000/10000/25000 ethernet" → HARDWARE_TYPE_PORT_TYPE_MAP
+      "100/1000/10000/25000" match → port_type = "25g-sfp28" ✓
+  speed "auto-speed" IN _UNKNOWN_SPEED_VALUES → get_nominal("25g-sfp28") = "25000000 Kbit"
+
+СЛОЙ 3 sync:
+  get_netbox_interface_type():
+    port_type "25g-sfp28" → PORT_TYPE_MAP → "25gbase-x-sfp28" ✓
+  _parse_speed("25000000 Kbit") → 25000000 Kbps = 25 Gbps ✓
 ```
 
-Если стандартный парсинг не работает, нужно обновить `get_nominal_speed_from_port_type()`.
+### Пример 3: NX-OS Ethernet1/43 UP (10G линк)
 
-### Шаг 4: Проверить
+```
+show interfaces → speed="10 Gb/s"  hw="100/1000/10000 Ethernet"  media=""
 
+СЛОЙ 2 нормализация:
+  detect_port_type():
+    media пустой → пропуск
+    hw "100/1000/10000 ethernet" → port_type = "10g-sfp+"
+  speed "10 Gb/s" NOT IN _UNKNOWN_SPEED_VALUES → оставляем как есть
+
+СЛОЙ 3 sync:
+  get_netbox_interface_type():
+    port_type "10g-sfp+" → PORT_TYPE_MAP → "10gbase-x-sfpp" ✓
+  _parse_speed("10 Gb/s"):
+    regex r"(\d+)\s*(gb/s)" → group(1)="10" * 1000000 = 10000000 Kbps ✓
+```
+
+### Пример 4: FastEthernet DOWN
+
+```
+show interfaces → speed=""  hw="Fast Ethernet"  media="10/100BaseTX"
+
+СЛОЙ 2 нормализация:
+  detect_port_type():
+    media "10/100basetx" → нет match в MEDIA_TYPE_PORT_TYPE_MAP
+    hw "fast ethernet" → нет match в HARDWARE_TYPE_PORT_TYPE_MAP
+    имя "fastethernet0/1" → INTERFACE_NAME_PORT_TYPE_MAP
+      "fastethernet" match → port_type = "100m-rj45" ✓
+  speed "" → get_nominal("100m-rj45") = "100000 Kbit"
+
+СЛОЙ 3 sync:
+  get_netbox_interface_type():
+    media "10/100basetx" → NETBOX_INTERFACE_TYPE_MAP
+      "100baset" match → "100base-tx" ✓   (не "basetx"! порядок важен)
+  _parse_speed("100000 Kbit") → 100000 Kbps = 100 Mbps ✓
+```
+
+### Пример 5: QTech TFGigabitEthernet DOWN (25G, нет трансивера)
+
+```
+show interfaces → speed="Unknown"  hw=""  media=""
+
+СЛОЙ 2 нормализация:
+  detect_port_type():
+    media пустой → пропуск
+    hw пустой → пропуск
+    имя "tfgigabitethernet0/3" → port_type = "25g-sfp28" ✓
+  speed "unknown" → get_nominal("25g-sfp28") = "25000000 Kbit"
+
+СЛОЙ 3 sync:
+  get_netbox_interface_type():
+    port_type "25g-sfp28" → PORT_TYPE_MAP → "25gbase-x-sfp28" ✓
+  _parse_speed("25000000 Kbit") → 25000000 Kbps = 25 Gbps ✓
+```
+
+---
+
+## Добавление нового устройства/платформы
+
+### Если платформа уже поддерживается (Cisco IOS, NX-OS, QTech)
+
+Ничего делать не нужно. Добавляешь устройство в `devices_ips.py` и запускаешь sync — всё работает автоматически.
+
+### Если новый тип порта (например 2.5G)
+
+**Шаг 1:** Определи исходные данные — что устройство отдаёт в `show interfaces`:
 ```bash
-# Собрать с устройства
 python -m network_collector interfaces --format parsed --host 10.0.0.1
+```
 
-# Проверить тесты
+Посмотри: speed, hardware_type, media_type для нового типа порта.
+
+**Шаг 2:** Добавь в маппинги (от 2 до 6 записей):
+
+```python
+# core/constants/interfaces.py — port_type маппинги
+HARDWARE_TYPE_PORT_TYPE_MAP["2500"] = "2.5g-rj45"       # если hw содержит "2500"
+INTERFACE_NAME_PORT_TYPE_MAP["twodotfivegige"] = "2.5g-rj45"  # если новый префикс
+
+# core/constants/netbox.py — NetBox маппинги
+PORT_TYPE_MAP["2.5g-rj45"] = "2.5gbase-t"               # port_type → NetBox
+NETBOX_HARDWARE_TYPE_MAP["2500"] = "2.5gbase-t"          # hw → NetBox
+```
+
+**Шаг 3:** Проверь номинальную скорость:
+```python
+get_nominal_speed_from_port_type("2.5g-rj45")
+# "2.5g" → int("2.5") → ValueError!  Нужен float
+```
+Если `int()` не работает для нового префикса — обнови `get_nominal_speed_from_port_type()`.
+
+**Шаг 4:** Проверь `_parse_speed()` — если платформа отдаёт speed в новом формате, добавь regex.
+
+**Шаг 5:** Тесты:
+```bash
 pytest tests/ -v -k "port_type or interface_type"
 ```
 
+### Если новая платформа целиком
+
+1. Добавь TextFSM шаблон в `templates/`
+2. Добавь платформу в `core/constants/platforms.py`
+3. Собери `show interfaces` с реального устройства
+4. Посмотри формат speed для UP и DOWN портов
+5. Добавь regex в `_parse_speed()` если формат новый
+6. Добавь маппинги hw/media в `core/constants/interfaces.py` и `netbox.py`
+7. Протестируй: `python -m network_collector interfaces --format parsed --host X`
+
 ---
 
-## Частые ошибки и уроки
+## Чеклист: как проверить что порт определился правильно
 
-### 1. bandwidth ≠ speed
+```bash
+# 1. Собери данные с устройства
+python -m network_collector interfaces --format parsed --host 10.0.0.1
 
-**bandwidth** (BW) — это сконфигурированная пропускная способность для QoS. Для down-портов на некоторых моделях показывает 10000 Kbit (10 Mbps) — это НЕ номинальная скорость 1G порта.
+# 2. Проверь port_type и speed в выводе
+# Ожидание: port_type="10g-sfp+", speed="10000000 Kbit" (или "10 Gb/s" для UP)
 
-**speed** — это реальная согласованная скорость (1000Mb/s при UP) или пустая строка при DOWN.
+# 3. Dry-run sync
+python -m network_collector sync-netbox --interfaces --device HOSTNAME --dry-run
 
-### 2. Порядок паттернов в substring-маппингах
+# 4. Посмотри что sync хочет изменить:
+#    ~ HOSTNAME: Ethernet1/1 (type: 10gbase-x-sfpp, speed: 10000000) ← ожидаемо
+#    ~ HOSTNAME: Ethernet1/1 (speed: 10000000 → 10)                  ← ПРОБЛЕМА!
+```
 
-Python 3.7+ гарантирует порядок dict. Если маппинг использует `in` (подстрока), общий паттерн может перехватить значения, предназначенные для специфичного. Всегда ставь специфичные паттерны первыми.
-
-### 3. Два слоя маппингов
-
-`detect_port_type()` (domain) определяет промежуточный `port_type` ("1g-rj45").
-`get_netbox_interface_type()` (sync) определяет финальный NetBox тип ("1000base-t").
-
-Это **два независимых маппинга** с разными приоритетами. `get_netbox_interface_type()` может вернуть правильный тип даже если `port_type` неточный.
-
-### 4. media_type — самый точный источник
-
-Если на порту стоит трансивер, `media_type = "SFP-10GBase-SR"` — это самый точный источник типа. Он определяет и тип порта, и NetBox тип напрямую.
-
-Без трансивера (down-порт, пустой SFP) — fallback на hardware_type и имя интерфейса.
-
-### 5. Номинальная скорость — из port_type, не из нового маппинга
-
-Скорость уже закодирована в port_type: `"1g"` → 1G, `"10g"` → 10G, `"100m"` → 100M. Функция `get_nominal_speed_from_port_type()` парсит префикс. Не нужно создавать отдельный маппинг port_type → speed.
+Если speed/type неправильные — ищи причину по слоям:
+1. **Сырые данные:** `--format parsed` покажет что вернул TextFSM
+2. **Нормализация:** port_type в выводе — проверь какой маппинг сработал
+3. **Sync:** `--dry-run` покажет что пойдёт в NetBox API
 
 ---
 
@@ -565,4 +443,4 @@ Python 3.7+ гарантирует порядок dict. Если маппинг 
 | [14_INTERFACE_NAME_MAPPINGS.md](14_INTERFACE_NAME_MAPPINGS.md) | Нормализация имён интерфейсов |
 | [PLATFORM_GUIDE.md 12.18](../PLATFORM_GUIDE.md) | Сводная таблица всех маппингов |
 | [PLATFORM_GUIDE.md 12.19](../PLATFORM_GUIDE.md) | UNIVERSAL_FIELD_MAP: правила и чеклист |
-| [BUGFIX_LOG.md Баги 22-24](../BUGFIX_LOG.md) | История багов speed и port_type |
+| [BUGFIX_LOG.md Баги 22-25](../BUGFIX_LOG.md) | История багов speed и port_type |
