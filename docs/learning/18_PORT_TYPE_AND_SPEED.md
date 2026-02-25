@@ -61,6 +61,7 @@
 │                                                                 │
 │  ШАГ B: скорость                                                │
 │                                                                 │
+│    LAG UP?   → speed = bandwidth ("4000000 Kbit", агрегат)      │
 │    UP порт?  → speed уже заполнен ("10 Gb/s") → оставляем      │
 │    DOWN порт? → speed пустой/unknown/auto                       │
 │                → get_nominal_speed_from_port_type("10g-sfp+")   │
@@ -121,13 +122,13 @@ bandwidth:     "10000 Kbit" ← НЕНАДЁЖНЫЙ! Для QoS, не для р
 
 ### Разница в таблице
 
-| | UP порт | DOWN порт | LAG (Port-channel) |
-|--|---------|-----------|-------------------|
-| Откуда speed | Реальная с устройства | Номинальная из port_type | **bandwidth** (агрегат) |
-| Формат speed | Платформо-зависимый | Всегда "X Kbit" | "X Kbit" (из bandwidth) |
-| media_type | Точный (от трансивера) | Пустой или bare indicator | "unknown" обычно |
-| Определяет port_type | media_type (приоритет 1) | hardware_type или имя | "lag" (по имени) |
-| bandwidth | Не используется | **Не используется** | **Используется!** (сумма members) |
+| | UP порт | DOWN порт | LAG UP | LAG DOWN |
+|--|---------|-----------|--------|----------|
+| Откуда speed | Реальная с устройства | Номинальная из port_type | **bandwidth** (агрегат) | Пустой (нет members) |
+| Формат speed | Платформо-зависимый | Всегда "X Kbit" | "X Kbit" (из bandwidth) | — |
+| media_type | Точный (от трансивера) | Пустой или bare indicator | "unknown" обычно | — |
+| Определяет port_type | media_type (приоритет 1) | hardware_type или имя | "lag" (по имени) | "lag" (по имени) |
+| bandwidth | Не используется | **Не используется** | **Используется!** | **Не используется** |
 
 ---
 
@@ -189,13 +190,16 @@ Members: Gi1/0/1 Gi1/0/2 Gi1/0/3 Gi1/0/4
 
 Если взять speed ("1000Mb/s") → NetBox получит 1G вместо 4G.
 
-**Решение:** для LAG (port_type == "lag") берём bandwidth, а не speed:
+**Решение:** для UP LAG (port_type == "lag") берём bandwidth, а не speed:
 ```python
-if result.get("port_type") == "lag" and result.get("bandwidth"):
+if (result.get("port_type") == "lag"
+        and result.get("bandwidth")
+        and result.get("status") == "up"):
     result["speed"] = result["bandwidth"]
 ```
 
-Для обычных интерфейсов bandwidth по-прежнему **не используется** (ненадёжен для DOWN-портов).
+Только для UP: для DOWN LAG bandwidth ненадёжен (как и для обычных DOWN-портов).
+Работает для всех платформ: Cisco Port-channel, NX-OS port-channel, QTech AggregatePort.
 
 ### Ловушка 5: порядок паттернов в маппингах
 

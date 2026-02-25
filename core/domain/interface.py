@@ -157,7 +157,10 @@ class InterfaceNormalizer:
         # LAG: bandwidth — агрегатная скорость (сумма member-линков)
         # speed для LAG показывает скорость одного member-а, а не всего LAG
         # Пример: Po1 с 4×1G: bandwidth="4000000 Kbit", speed="1000Mb/s"
-        if result.get("port_type") == "lag" and result.get("bandwidth"):
+        # Только для UP: для DOWN LAG bandwidth ненадёжен (как и для обычных портов)
+        if (result.get("port_type") == "lag"
+                and result.get("bandwidth")
+                and result.get("status") == "up"):
             result["speed"] = result["bandwidth"]
 
         # Номинальная скорость для down-портов (когда speed пустой/unknown/auto)

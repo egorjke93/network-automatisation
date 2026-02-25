@@ -1832,9 +1832,10 @@ get_nominal_speed_from_port_type("1g-rj45") → "1000000 Kbit" (1G)
 
 **Приоритет:**
 
-1. **UP-порт с реальной скоростью** (`"1000Mb/s"`, `"10G"`) → используется как есть
-2. **DOWN-порт** (`speed` пустой/unknown/auto) → номинальная из `port_type`
-3. **LAG / Virtual** (`port_type="lag"/"virtual"`) → speed остаётся пустым
+1. **LAG UP** (`port_type="lag"`, status="up") → bandwidth (агрегатная скорость, сумма members)
+2. **UP-порт с реальной скоростью** (`"1000Mb/s"`, `"10G"`) → используется как есть
+3. **DOWN-порт** (`speed` пустой/unknown/auto) → номинальная из `port_type`
+4. **Virtual** (`port_type="virtual"`) → speed остаётся пустым
 
 **Откуда берётся номинальная скорость:**
 
