@@ -14,7 +14,8 @@
 8. [Фильтры и исключения](#8-фильтры-и-исключения)
 9. [Безопасность](#9-безопасность)
 10. [Примеры использования](#10-примеры-использования)
-11. [Устранение неполадок](#11-устранение-неполадок)
+11. [Резервное копирование в Git](#11-резервное-копирование-в-git-giteagitlabgithub)
+12. [Устранение неполадок](#12-устранение-неполадок)
 
 ---
 
@@ -2164,9 +2165,268 @@ network-backups/
 
 ---
 
-## 11. Устранение неполадок
+## 11. Резервное копирование в Git (Gitea/GitLab/GitHub)
 
-### 11.1 Ошибка подключения SSH
+Network Collector может автоматически пушить бэкапы конфигураций сетевых устройств
+в Git-репозиторий. Каждое устройство — отдельная папка, с историей коммитов и diff
+между версиями.
+
+### 11.1 Настройка Gitea (Docker)
+
+#### Быстрый старт
+
+```bash
+# Создаём папку для данных
+mkdir -p ~/gitea-data
+
+# Запускаем Gitea (HTTP)
+docker run -d --name gitea \
+  -p 3001:3000 \
+  -v ~/gitea-data:/data \
+  gitea/gitea:latest
+
+# Открываем http://localhost:3001 и завершаем установку через Web UI
+```
+
+#### Настройка с HTTPS (self-signed)
+
+```bash
+# 1. Генерируем сертификат
+mkdir -p ~/gitea-data/certs
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout ~/gitea-data/certs/key.pem \
+  -out ~/gitea-data/certs/cert.pem \
+  -subj "/CN=localhost"
+
+# 2. Запускаем контейнер
+docker run -d --name gitea \
+  -p 3443:3000 \
+  -v ~/gitea-data:/data \
+  -e GITEA__server__PROTOCOL=https \
+  -e GITEA__server__CERT_FILE=/data/certs/cert.pem \
+  -e GITEA__server__KEY_FILE=/data/certs/key.pem \
+  gitea/gitea:latest
+```
+
+#### Создание сервисного аккаунта и репозитория
+
+```bash
+# 1. Создаём admin пользователя (если ещё нет)
+docker exec -u git gitea gitea admin user create \
+  --username admin --password admin123 \
+  --email admin@localhost --admin
+
+# 2. Создаём сервисный аккаунт для бэкапов
+docker exec -u git gitea gitea admin user create \
+  --username backup-bot \
+  --password 'BackupBot123!' \
+  --email backup@localhost
+
+# 3. Входим в Gitea Web UI под backup-bot
+# 4. Создаём приватный репозиторий "network-backups"
+# 5. Settings → Applications → Generate New Token
+#    Имя: "network-collector", Scopes: repo (read/write)
+#    Копируем токен!
+```
+
+### 11.2 Настройка config.yaml
+
+```yaml
+git:
+  # URL Gitea-сервера
+  url: "https://gitea.example.com"
+
+  # API-токен (лучше через переменную окружения)
+  token: ""
+
+  # Репозиторий: owner/repo
+  repo: "backup-bot/network-backups"
+
+  # Ветка для коммитов
+  branch: "main"
+
+  # SSL: true / false / "/path/to/cert.pem"
+  verify_ssl: true
+
+  # Таймаут HTTP-запросов (секунды)
+  timeout: 30
+```
+
+**Переменные окружения (рекомендуется):**
+
+```bash
+# Linux
+export GIT_BACKUP_URL="https://gitea.example.com"
+export GIT_BACKUP_TOKEN="ваш-api-токен"
+export GIT_BACKUP_REPO="backup-bot/network-backups"
+
+# Windows PowerShell
+$env:GIT_BACKUP_TOKEN="ваш-api-токен"
+```
+
+### 11.3 Настройка devices_ips.py (site для группировки)
+
+Чтобы бэкапы группировались по сайтам, укажите `site` для каждого устройства:
+
+```python
+devices_list = [
+    {"host": "10.0.0.1", "platform": "cisco_iosxe", "site": "DC-Moscow"},
+    {"host": "10.0.0.2", "platform": "cisco_iosxe", "site": "DC-Moscow"},
+    {"host": "10.0.0.3", "platform": "arista_eos",  "site": "DC-SPB"},
+    {"host": "10.0.0.4", "platform": "cisco_nxos"},  # без site → --site или без папки
+]
+```
+
+**Результат в Git:**
+
+```
+network-backups/
+├── DC-Moscow/
+│   ├── switch-core-01/running-config.cfg
+│   └── switch-access-02/running-config.cfg
+└── DC-SPB/
+    └── router-gw-01/running-config.cfg
+```
+
+### 11.4 Использование CLI
+
+#### Проверить подключение к Git
+
+```bash
+python -m network_collector backup --git-test
+# Git подключение: OK
+```
+
+#### Собрать бэкапы и отправить в Git
+
+```bash
+# Бэкап + push (site из devices_ips.py)
+python -m network_collector backup --push-git
+
+# Бэкап + push с дефолтным site для устройств без site
+python -m network_collector backup --push-git --site "DC-1"
+
+# Указать папку для бэкапов
+python -m network_collector backup --push-git -o ./backups/2024-01-15
+```
+
+#### Отправить существующие бэкапы (без SSH)
+
+```bash
+# Push готовых .cfg файлов из папки backups/
+python -m network_collector backup --git-only
+
+# С указанием site (применяется ко всем файлам)
+python -m network_collector backup --git-only --site "DC-Moscow"
+```
+
+#### Результат
+
+```
+=== РЕЗУЛЬТАТЫ БЭКАПА ===
+Успешно: 15
+Ошибки: 1
+  switch-broken: Connection refused
+
+=== РЕЗУЛЬТАТЫ GIT PUSH ===
+Создано: 3        ← новые устройства
+Обновлено: 10     ← конфиг изменился
+Без изменений: 2  ← конфиг не менялся
+```
+
+### 11.5 Интеграция с NetBox (custom field)
+
+Можно добавить ссылку на конфиг устройства в NetBox через custom field:
+
+#### Шаг 1. Создайте custom field в NetBox
+
+1. Admin → Custom Fields → Add
+2. **Name:** `config_backup_url`
+3. **Label:** `Config Backup`
+4. **Type:** URL
+5. **Object types:** Device (dcim.device)
+6. Save
+
+#### Шаг 2. Заполните URL для устройства
+
+URL формируется по шаблону:
+
+```
+https://gitea.example.com/backup-bot/network-backups/src/branch/main/{site}/{hostname}
+```
+
+**Примеры:**
+
+| Устройство | URL |
+|-----------|-----|
+| switch-01 (DC-Moscow) | `https://gitea.example.com/backup-bot/network-backups/src/branch/main/DC-Moscow/switch-01` |
+| router-gw (DC-SPB) | `https://gitea.example.com/backup-bot/network-backups/src/branch/main/DC-SPB/router-gw` |
+
+#### Шаг 3. Генерация URL через Python
+
+```python
+from network_collector.core.git_pusher import GitBackupPusher
+
+pusher = GitBackupPusher(
+    url="https://gitea.example.com",
+    token="...",
+    repo="backup-bot/network-backups",
+)
+
+# URL для конкретного устройства
+url = pusher.get_device_url("switch-01", site="DC-Moscow")
+# → "https://gitea.example.com/backup-bot/network-backups/src/branch/main/DC-Moscow/switch-01"
+```
+
+Этот URL можно вставить в custom field `config_backup_url` устройства в NetBox.
+При клике — откроется Gitea с историей конфигов и diff.
+
+### 11.6 SSL: варианты настройки
+
+| Вариант | config.yaml | Когда использовать |
+|---------|-------------|-------------------|
+| Системный CA | `verify_ssl: true` | Продакшен с доверенным сертификатом |
+| Без проверки | `verify_ssl: false` | Только тесты и разработка |
+| Путь к серту | `verify_ssl: "/path/cert.pem"` | Self-signed или корп. CA |
+
+**Для self-signed сертификата Gitea:**
+
+```yaml
+git:
+  url: "https://gitea.local:3443"
+  verify_ssl: "/home/sa/gitea-data/certs/cert.pem"
+```
+
+**Для системного CA (с truststore):**
+
+```bash
+# Установить truststore (автоматически подхватится при старте)
+pip install truststore
+
+# Добавить корпоративный CA в систему (Linux)
+sudo cp corp-ca.pem /usr/local/share/ca-certificates/corp-ca.crt
+sudo update-ca-certificates
+
+# Windows: certmgr.msc → Trusted Root Certification Authorities → Import
+```
+
+### 11.7 Устранение неполадок Git backup
+
+| Ошибка | Причина | Решение |
+|--------|---------|---------|
+| `Git не настроен` | Нет секции git в config.yaml | Добавьте секцию git |
+| `Git token не указан` | Пустой токен | Задайте `GIT_BACKUP_TOKEN` или token в config |
+| `Connection refused` | Gitea не запущен | `docker start gitea` |
+| `401 Unauthorized` | Неверный токен | Проверьте токен в Gitea → Settings → Applications |
+| `404 Not Found` | Неверный repo | Проверьте формат: `owner/repo` |
+| `SSL: CERTIFICATE_VERIFY_FAILED` | Self-signed сертификат | Используйте `verify_ssl: false` или путь к серту |
+| `Нет .cfg файлов` | Пустая папка backups/ | Сначала запустите `backup` без `--git-only` |
+
+---
+
+## 12. Устранение неполадок
+
+### 12.1 Ошибка подключения SSH
 
 ```
 ConnectionError: Unable to connect to device
@@ -2178,7 +2438,7 @@ ConnectionError: Unable to connect to device
 3. Проверьте учётные данные (`NET_USERNAME`, `NET_PASSWORD`)
 4. Проверьте `platform` в devices_ips.py
 
-### 11.2 Ошибка парсинга NTC Templates
+### 12.2 Ошибка парсинга NTC Templates
 
 ```
 NTC Template not found for command
@@ -2189,7 +2449,7 @@ NTC Template not found for command
 - Используйте `--format raw` для просмотра сырого вывода
 - Добавьте кастомный шаблон в `templates/`
 
-### 11.3 Ошибка NetBox API
+### 12.3 Ошибка NetBox API
 
 ```
 RequestError: 400 Bad Request
@@ -2200,7 +2460,7 @@ RequestError: 400 Bad Request
 2. Убедитесь что токен имеет права на запись
 3. Проверьте версию NetBox (требуется 4.x)
 
-### 11.4 Устройство не найдено в NetBox
+### 12.4 Устройство не найдено в NetBox
 
 ```
 Device 'switch1' not found in NetBox
@@ -2210,7 +2470,7 @@ Device 'switch1' not found in NetBox
 - Сначала создайте устройство: `--create-devices`
 - Убедитесь что hostname совпадает
 
-### 11.5 Включить debug логирование
+### 12.5 Включить debug логирование
 
 ```bash
 # Через CLI
@@ -2221,7 +2481,7 @@ logging:
   level: "DEBUG"
 ```
 
-### 11.6 Проверить данные на каждом этапе
+### 12.6 Проверить данные на каждом этапе
 
 ```bash
 # Сырые данные (JSON)
