@@ -176,6 +176,14 @@ class Config:
         if os.getenv("NETBOX_TOKEN"):
             self._data["netbox"]["token"] = os.getenv("NETBOX_TOKEN")
 
+        # Git (бэкапы)
+        if os.getenv("GIT_BACKUP_URL"):
+            self._data.setdefault("git", {})["url"] = os.getenv("GIT_BACKUP_URL")
+        if os.getenv("GIT_BACKUP_TOKEN"):
+            self._data.setdefault("git", {})["token"] = os.getenv("GIT_BACKUP_TOKEN")
+        if os.getenv("GIT_BACKUP_REPO"):
+            self._data.setdefault("git", {})["repo"] = os.getenv("GIT_BACKUP_REPO")
+
     def _merge_dict(self, base: dict, override: dict) -> None:
         """Рекурсивно мержит словари."""
         for key, value in override.items():

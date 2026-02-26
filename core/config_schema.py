@@ -96,6 +96,27 @@ class LoggingConfig(BaseModel):
     interval: int = Field(default=1, ge=1)
 
 
+class GitConfig(BaseModel):
+    """Настройки Git-сервера для бэкапов конфигураций."""
+    url: str = ""
+    token: str = ""
+    repo: str = ""
+    branch: str = "main"
+    verify_ssl: bool = True
+    timeout: int = Field(default=30, ge=1, le=300)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        """Проверяет что URL валидный (если указан)."""
+        if v and not v.startswith(("http://", "https://")):
+            raise PydanticCustomError(
+                "invalid_url",
+                "Git URL должен начинаться с http:// или https://",
+            )
+        return v.rstrip("/") if v else v
+
+
 class AppConfig(BaseModel):
     """Полная конфигурация приложения."""
     output: OutputConfig = Field(default_factory=OutputConfig)
@@ -105,6 +126,7 @@ class AppConfig(BaseModel):
     mac: MACConfig = Field(default_factory=MACConfig)
     filters: FiltersConfig = Field(default_factory=FiltersConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    git: GitConfig = Field(default_factory=GitConfig)
     debug: bool = False
     devices_file: str = "devices_ips.py"
 

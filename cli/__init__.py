@@ -524,6 +524,26 @@ def setup_parser() -> argparse.ArgumentParser:
         default="backups",
         help="Папка для сохранения конфигураций (default: backups)",
     )
+    backup_parser.add_argument(
+        "--push-git",
+        action="store_true",
+        help="После сбора отправить бэкапы в Git (настройки из config.yaml секция git)",
+    )
+    backup_parser.add_argument(
+        "--git-only",
+        action="store_true",
+        help="Только отправить существующие бэкапы в Git (без сбора с устройств)",
+    )
+    backup_parser.add_argument(
+        "--git-test",
+        action="store_true",
+        help="Проверить подключение к Git-серверу",
+    )
+    backup_parser.add_argument(
+        "--site",
+        default=None,
+        help="Сайт для группировки в Git (site/hostname/). Из devices_ips.py per-device или этот дефолт",
+    )
 
     # === Validate Fields (валидация fields.yaml) ===
     validate_parser = subparsers.add_parser(
