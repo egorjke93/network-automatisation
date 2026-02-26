@@ -370,9 +370,23 @@ python -m network_collector backup [опции]
 
 Опции:
   --output DIR               Директория для бэкапов (default: backups)
+  --push-git                 После сбора отправить бэкапы в Git (Gitea)
+  --git-only                 Только отправить существующие бэкапы в Git
+  --git-test                 Проверить подключение к Git-серверу
+  --site SITE                Сайт для группировки в Git (site/hostname/)
 
 Сохраняет:
   - running-config каждого устройства в отдельный файл
+  - При --push-git: пушит в Git с группировкой по сайтам
+
+Примеры:
+  python -m network_collector backup                          # Только сбор
+  python -m network_collector backup --push-git --site Main   # Сбор + Git
+  python -m network_collector backup --git-only --site Main   # Только Git push
+  python -m network_collector backup --git-test               # Проверка Git
+
+Настройки Git в config.yaml (секция git:) или env:
+  GIT_BACKUP_URL, GIT_BACKUP_TOKEN, GIT_BACKUP_REPO
 ```
 
 ### 3.8 run — Произвольная команда

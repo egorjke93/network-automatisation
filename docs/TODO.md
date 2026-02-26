@@ -13,7 +13,7 @@
 | `lldp` | Сбор LLDP/CDP соседей | OK |
 | `interfaces` | Сбор интерфейсов | OK |
 | `inventory` | Сбор модулей/SFP | OK |
-| `backup` | Резервное копирование | OK |
+| `backup` | Резервное копирование + push в Git | OK + **NEW** `--push-git` |
 | `run` | Произвольная команда | OK |
 | `match-mac` | Сопоставление MAC с хостами | OK |
 | `push-descriptions` | Применение описаний | OK |
@@ -745,6 +745,64 @@ def _find_interface(self, device_id, name):
 - [x] Результат: `10GBASE-SR-SFP+` → NetBox тип `10gbase-sr` (вместо generic `10gbase-x-sfpp`)
 - [x] TextFSM шаблон уже был: `qtech_show_interface_transceiver.textfsm`
 - [x] Новый парсер не нужен — используется существующий `_parse_media_types()` с fallback на поля TextFSM
+
+---
+
+## Backup-to-Git (Февраль 2026) ✅ ВЫПОЛНЕНО
+
+Бэкапы конфигураций устройств с автоматическим push в Git (Gitea).
+
+### Что реализовано
+
+| Компонент | Описание |
+|-----------|----------|
+| `core/git_pusher.py` | `GitBackupPusher` — push через Gitea REST API |
+| `core/config_schema.py` | `GitConfig` — Pydantic-модель для валидации |
+| `config.py` | Env variables: `GIT_BACKUP_URL`, `GIT_BACKUP_TOKEN`, `GIT_BACKUP_REPO` |
+| `cli/__init__.py` | Флаги: `--push-git`, `--git-only`, `--git-test`, `--site` |
+| `cli/commands/backup.py` | Обработчики: site_map из devices_ips.py |
+| `tests/test_core/test_git_pusher.py` | 23 unit-теста |
+
+### Структура в Git
+
+```
+network-backups/
+├── msk-office/              ← site из devices_ips.py
+│   ├── switch-core-01/
+│   │   └── running-config.cfg
+│   └── switch-access-02/
+│       └── running-config.cfg
+├── spb-dc/
+│   └── router-gw-01/
+│       └── running-config.cfg
+```
+
+### CLI
+
+```bash
+# Проверить подключение к Git
+python -m network_collector backup --git-test
+
+# Собрать бэкапы и запушить в Git
+python -m network_collector backup --push-git --site "Main"
+
+# Только запушить существующие бэкапы
+python -m network_collector backup --git-only --output backups --site "Main"
+```
+
+### Безопасность
+
+- HTTPS (TLS) для передачи токена и конфигов
+- API-токен через env variable `GIT_BACKUP_TOKEN` (не в config.yaml)
+- Сервисный аккаунт с правами только на один repo
+- `verify_ssl: true/false` для self-signed сертификатов
+- Токен не логируется
+
+### NetBox интеграция
+
+URL для custom field (тип URL): `https://gitea:3443/{owner}/{repo}/src/branch/main/{site}/{hostname}`
+
+Из карточки устройства в NetBox → клик → папка с конфигами и историей в Gitea.
 
 ---
 

@@ -68,6 +68,7 @@ python -m network_collector --help
 | `frontend/` | Vue.js frontend |
 | `frontend/src/views/` | Страницы (Sync.vue, Pipelines.vue, History.vue) |
 | `core/pipeline/` | Pipeline система (executor, models) |
+| `core/git_pusher.py` | GitBackupPusher: push бэкапов в Gitea через REST API |
 | `core/constants/` | Маппинги платформ, команды, интерфейсы (пакет модулей) |
 | `netbox/sync/` | Синхронизация с NetBox (модульная структура) |
 | `config_commands.yaml` | Команды конфигурации по платформам (push-config) |
@@ -88,6 +89,10 @@ python -m network_collector sync-netbox --sync-all --site "Office" --dry-run
 
 # Синхронизация с VLAN на интерфейсы (включить sync_vlans: true в fields.yaml)
 python -m network_collector sync-netbox --interfaces --dry-run
+
+# Бэкап с push в Git (Gitea)
+python -m network_collector backup --push-git --site "Main"
+python -m network_collector backup --git-test
 
 # Конфигурация устройств по платформам
 python -m network_collector push-config --commands config_commands.yaml
