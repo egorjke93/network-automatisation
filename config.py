@@ -18,6 +18,18 @@ from .core.constants.utils import DEFAULT_EXCLUDE_INTERFACES
 
 logger = logging.getLogger(__name__)
 
+# truststore: использовать системное хранилище сертификатов
+# Windows: Windows Certificate Store (certmgr.msc)
+# Linux: /etc/ssl/certs/ (update-ca-certificates)
+# Без truststore: requests использует только certifi bundle из virtualenv
+TRUSTSTORE_AVAILABLE = False
+try:
+    import truststore
+    truststore.inject_into_ssl()
+    TRUSTSTORE_AVAILABLE = True
+except ImportError:
+    pass
+
 # Pydantic валидация (опциональна)
 PYDANTIC_AVAILABLE = False
 try:

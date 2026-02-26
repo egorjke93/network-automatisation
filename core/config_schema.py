@@ -51,7 +51,8 @@ class NetBoxConfig(BaseModel):
     """Настройки NetBox."""
     url: str = "http://localhost:8000/"
     token: str = ""
-    verify_ssl: bool = True
+    # True — системный CA, False — без проверки, "/path/to/cert.pem" — self-signed
+    verify_ssl: Union[bool, str] = True
     timeout: int = Field(default=30, ge=1, le=300)
     create_missing: bool = True
     update_existing: bool = True

@@ -123,7 +123,7 @@ netbox:
   url: "http://localhost:8080/"
   token: ""                     # Лучше через NETBOX_TOKEN
   timeout: 30                   # Таймаут HTTP-запросов к NetBox (сек)
-  verify_ssl: true
+  verify_ssl: true              # true / false / "/path/to/cert.pem"
 
 # Фильтры для MAC коллектора
 filters:
@@ -146,6 +146,15 @@ logging:
   file_path: ""                 # Путь к лог-файлу
   max_bytes: 10485760           # Макс. размер (10MB)
   backup_count: 5               # Кол-во ротируемых файлов
+
+# Git-сервер для бэкапов конфигураций
+git:
+  url: "https://gitea.example.com"  # Gitea / GitLab / GitHub
+  token: ""                     # Лучше через GIT_BACKUP_TOKEN
+  repo: "backup-bot/network-backups"
+  branch: "main"
+  verify_ssl: true              # true / false / "/path/to/cert.pem"
+  timeout: 30
 ```
 
 ### 2.2 fields.yaml — Поля экспорта и синхронизации
@@ -2010,13 +2019,64 @@ export NETBOX_TOKEN=your-token
 
 ### 9.4 SSL сертификаты
 
-Для корпоративных CA:
+Network Collector поддерживает три режима проверки SSL — одинаково для NetBox API и Git backup:
 
-```bash
-pip install python-certifi-win32
+```yaml
+# config.yaml — и для netbox, и для git секций:
+verify_ssl: true                # Системный CA (рекомендуется)
+verify_ssl: false               # Без проверки (только для тестов!)
+verify_ssl: "/path/to/cert.pem" # Путь к CA-сертификату (self-signed / корп. CA)
 ```
 
-Network Collector автоматически использует Windows Certificate Store.
+#### Системный CA (`verify_ssl: true`)
+
+По умолчанию `requests` использует `certifi` bundle из virtualenv, а НЕ системное хранилище.
+Чтобы использовать системные сертификаты, установите `truststore`:
+
+```bash
+pip install truststore
+```
+
+Network Collector автоматически подхватит `truststore` при старте (`config.py`).
+
+| Платформа | Хранилище | Управление |
+|-----------|-----------|------------|
+| **Windows** | Windows Certificate Store | `certmgr.msc` → Trusted Root Certification Authorities |
+| **Linux** | `/etc/ssl/certs/` | `sudo cp corp-ca.pem /usr/local/share/ca-certificates/ && sudo update-ca-certificates` |
+| **macOS** | Keychain Access | `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain corp-ca.pem` |
+
+#### Без проверки (`verify_ssl: false`)
+
+Отключает проверку SSL полностью. Только для тестов и разработки.
+
+#### Путь к сертификату (`verify_ssl: "/path/to/cert.pem"`)
+
+Для self-signed сертификатов или корпоративных CA, когда нет возможности добавить сертификат в системное хранилище:
+
+```yaml
+netbox:
+  verify_ssl: "/etc/ssl/certs/corp-ca.pem"
+
+git:
+  verify_ssl: "/etc/ssl/certs/gitea-ca.pem"
+```
+
+#### Переменные окружения
+
+Альтернативный способ — через переменную `REQUESTS_CA_BUNDLE`:
+
+```bash
+export REQUESTS_CA_BUNDLE=/path/to/ca-bundle.crt
+```
+
+### 9.5 Переменные окружения Git backup
+
+```bash
+# Git-сервер для бэкапов конфигураций
+export GIT_BACKUP_URL="https://gitea.example.com"
+export GIT_BACKUP_TOKEN="your-api-token"
+export GIT_BACKUP_REPO="backup-bot/network-backups"
+```
 
 ---
 
@@ -2079,8 +2139,27 @@ python -m network_collector sync-netbox --interfaces --update-devices
 ### 10.5 Резервное копирование
 
 ```bash
-# Бэкап конфигураций
+# Бэкап конфигураций в файлы
 python -m network_collector backup --output ./backups/$(date +%Y-%m-%d)
+
+# Push бэкапов в Git (Gitea/GitLab/GitHub)
+python -m network_collector backup --push-git --site "DC-1"
+
+# Только Git (без локальных файлов)
+python -m network_collector backup --git-only --site "DC-1"
+
+# Проверить подключение к Git-серверу
+python -m network_collector backup --git-test
+```
+
+Структура в Git:
+```
+network-backups/
+├── DC-1/
+│   ├── switch-01/running-config.cfg
+│   └── switch-02/running-config.cfg
+└── DC-2/
+    └── router-gw/running-config.cfg
 ```
 
 ---

@@ -38,7 +38,14 @@ class NetBoxSession(requests.Session):
     - При получении 429 — ждёт Retry-After и повторяет (до MAX_RETRIES_429 раз)
     """
 
-    def __init__(self, timeout: int = 30, verify: bool = True):
+    def __init__(self, timeout: int = 30, verify=True):
+        """
+        Args:
+            timeout: Таймаут запросов (секунды)
+            verify: True — системный CA (+ truststore если установлен),
+                    False — без проверки,
+                    "/path/to/cert.pem" — путь к CA-сертификату.
+        """
         super().__init__()
         self.timeout = timeout
         self.verify = verify
@@ -82,7 +89,7 @@ class NetBoxClientBase:
         self,
         url: Optional[str] = None,
         token: Optional[str] = None,
-        ssl_verify: bool = True,
+        ssl_verify=True,
         timeout: Optional[int] = None,
     ):
         """
