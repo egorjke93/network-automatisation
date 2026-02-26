@@ -287,3 +287,44 @@ class TestGitConfigSchema:
         app = AppConfig()
         assert hasattr(app, "git")
         assert app.git.branch == "main"
+
+    def test_git_config_verify_ssl_as_path(self):
+        """verify_ssl принимает путь к сертификату."""
+        from network_collector.core.config_schema import GitConfig
+        cfg = GitConfig(verify_ssl="/path/to/cert.pem")
+        assert cfg.verify_ssl == "/path/to/cert.pem"
+
+    def test_git_config_verify_ssl_bool(self):
+        """verify_ssl принимает bool."""
+        from network_collector.core.config_schema import GitConfig
+        cfg = GitConfig(verify_ssl=False)
+        assert cfg.verify_ssl is False
+
+
+class TestGitVerifySSL:
+    """Тесты verify_ssl: bool, строка, путь к сертификату."""
+
+    def test_verify_ssl_true(self):
+        """verify_ssl=True → session.verify=True."""
+        p = GitBackupPusher(url="http://x", token="t", repo="o/r", verify_ssl=True)
+        assert p._session.verify is True
+
+    def test_verify_ssl_false(self):
+        """verify_ssl=False → session.verify=False."""
+        p = GitBackupPusher(url="http://x", token="t", repo="o/r", verify_ssl=False)
+        assert p._session.verify is False
+
+    def test_verify_ssl_cert_path(self):
+        """verify_ssl='/path/to/cert.pem' → session.verify='/path/to/cert.pem'."""
+        p = GitBackupPusher(url="http://x", token="t", repo="o/r", verify_ssl="/certs/ca.pem")
+        assert p._session.verify == "/certs/ca.pem"
+
+    def test_verify_ssl_string_true(self):
+        """verify_ssl='true' (строка из YAML) → session.verify=True."""
+        p = GitBackupPusher(url="http://x", token="t", repo="o/r", verify_ssl="true")
+        assert p._session.verify is True
+
+    def test_verify_ssl_string_false(self):
+        """verify_ssl='false' (строка из YAML) → session.verify=False."""
+        p = GitBackupPusher(url="http://x", token="t", repo="o/r", verify_ssl="false")
+        assert p._session.verify is False

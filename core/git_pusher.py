@@ -73,15 +73,27 @@ class GitBackupPusher:
         token: str,
         repo: str,
         branch: str = "main",
-        verify_ssl: bool = True,
+        verify_ssl: any = True,
         timeout: int = 30,
     ):
+        """
+        Args:
+            verify_ssl: True — проверять системный CA,
+                        False — не проверять (небезопасно),
+                        "/path/to/cert.pem" — путь к self-signed сертификату.
+        """
         self.url = url.rstrip("/")
         self.token = token
         self.repo = repo
         self.branch = branch
-        self.verify_ssl = verify_ssl
         self.timeout = timeout
+
+        # verify_ssl: bool или путь к сертификату
+        # requests принимает: True, False, "/path/to/ca-bundle.crt"
+        if isinstance(verify_ssl, str) and verify_ssl.lower() in ("true", "false"):
+            self.verify_ssl = verify_ssl.lower() == "true"
+        else:
+            self.verify_ssl = verify_ssl
 
         self._session = requests.Session()
         self._session.headers.update({
@@ -91,8 +103,8 @@ class GitBackupPusher:
         })
         self._session.verify = self.verify_ssl
 
-        # Подавляем предупреждения при verify_ssl=False (self-signed сертификаты)
-        if not self.verify_ssl:
+        # Подавляем предупреждения при verify_ssl=False (self-signed без сертификата)
+        if self.verify_ssl is False:
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 

@@ -11,7 +11,7 @@ Pydantic схемы для валидации config.yaml.
     validated = validate_config(config_dict)  # raises ConfigError on failure
 """
 
-from typing import List, Optional
+from typing import List, Optional, Union
 from pydantic import BaseModel, Field, field_validator, HttpUrl
 from pydantic_core import PydanticCustomError
 
@@ -102,7 +102,8 @@ class GitConfig(BaseModel):
     token: str = ""
     repo: str = ""
     branch: str = "main"
-    verify_ssl: bool = True
+    # True — системный CA, False — без проверки, "/path/to/cert.pem" — self-signed
+    verify_ssl: Union[bool, str] = True
     timeout: int = Field(default=30, ge=1, le=300)
 
     @field_validator("url")
