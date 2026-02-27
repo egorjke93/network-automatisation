@@ -304,8 +304,8 @@ python -m network_collector mac --with-port-security --format excel
 **Файл:** `templates/cisco_ios_port_security.textfsm`
 
 ```textfsm
-Value Required INTERFACE (\S+)
-Value VLAN (\d+)
+Value Filldown,Required INTERFACE (\S+)
+Value Filldown VLAN (\d+)
 Value Required MAC ([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})
 Value TYPE (sticky)
 
@@ -317,21 +317,45 @@ Interface
   ^\s+switchport\s+port-security\s+mac-address\s+${TYPE}\s+${MAC} -> Record
   ^interface\s+${INTERFACE} -> Continue.Clearall
   ^interface\s+${INTERFACE} -> Interface
+  ^end -> End
+
+End
 ```
+
+**Зачем `Filldown`:** на одном порту может быть несколько sticky MAC (IP-телефон + ПК,
+хаб с несколькими устройствами). После `Record` TextFSM очищает все поля, но `Filldown`
+сохраняет INTERFACE и VLAN между записями. При переходе к новому интерфейсу `Clearall`
+сбрасывает всё, и regex заново захватывает INTERFACE.
 
 **Что парсится из running-config:**
 
 ```
-interface GigabitEthernet0/1
+interface GigabitEthernet0/3
  switchport access vlan 100
  switchport port-security
- switchport port-security mac-address sticky aabb.ccdd.eeff
+ switchport port-security maximum 2
+ switchport port-security mac-address sticky
+ switchport port-security mac-address sticky 0011.2233.4455  ← PC-Ivanov
 !
-interface GigabitEthernet0/2
+interface GigabitEthernet0/4
  switchport access vlan 100
  switchport port-security
- switchport port-security mac-address sticky 1122.3344.5566
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ switchport port-security mac-address sticky aabb.ccdd.ee01  ← IP-телефон
+ switchport port-security mac-address sticky aabb.ccdd.ee02  ← ПК за телефоном
+!
+interface GigabitEthernet0/5
+ switchport access vlan 100
+ switchport port-security
+ switchport port-security maximum 5
+ switchport port-security mac-address sticky
+ switchport port-security mac-address sticky 1111.2222.3333  ← Хаб: устройство 1
+ switchport port-security mac-address sticky 4444.5555.6666  ← Хаб: устройство 2
+ switchport port-security mac-address sticky 7777.8888.9999  ← Хаб: устройство 3
 ```
+
+Результат парсинга — 6 записей (1 + 2 + 3). Все интерфейсы и VLAN корректные.
 
 ### Merge со основной таблицей
 
@@ -352,11 +376,28 @@ def merge_sticky_macs(self, mac_table, sticky_macs, hostname="", device_ip=""):
 
 **Результат:** sticky MAC, которых нет в обычной таблице, добавляются со статусом "offline".
 
+### Сценарий: IP-телефон + ПК за ним
+
+Типичный кейс — `maximum 3` на порту:
+
+```
+MAC-таблица (show mac address-table):
+  Gi0/4  aabb.ccdd.ee01  DYNAMIC  ← телефон online
+
+Sticky (show running-config):
+  Gi0/4  aabb.ccdd.ee01  sticky   ← телефон
+  Gi0/4  aabb.ccdd.ee02  sticky   ← ПК (выключен)
+
+Merge:
+  aabb.ccdd.ee01  → есть в обеих → 1 запись, status=online
+  aabb.ccdd.ee02  → только sticky → добавлен, status=offline
+```
+
 ### Ограничения
 
 | Ограничение | Описание |
 |-------------|----------|
-| Только Cisco IOS/IOS-XE | Для NX-OS, Arista, QTech нет шаблонов |
+| Только Cisco IOS/IOS-XE | Для NX-OS, Arista, QTech нужны свои шаблоны (см. секцию 9) |
 | Только access-порты | Trunk-порты с port-security не поддерживаются |
 | Тип "sticky" → "static" | В финальном экспорте sticky нормализуется в static |
 | Парсит весь running-config | На больших конфигах может быть медленно |
@@ -791,8 +832,8 @@ interface Ethernet1/1
 **Шаг 3.** Создать TextFSM-шаблон (`templates/cisco_nxos_port_security.textfsm`):
 
 ```textfsm
-Value Required INTERFACE (\S+)
-Value VLAN (\d+)
+Value Filldown,Required INTERFACE (\S+)
+Value Filldown VLAN (\d+)
 Value Required MAC ([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})
 Value TYPE (sticky)
 
@@ -808,7 +849,9 @@ Interface
   ^end -> End
 ```
 
-**Важно:** поля должны называться точно `INTERFACE`, `VLAN`, `MAC`, `TYPE` — это имена, которые ожидает `_collect_sticky_macs()`.
+**Важно:**
+- Поля должны называться точно `INTERFACE`, `VLAN`, `MAC`, `TYPE` — это имена, которые ожидает `_collect_sticky_macs()`.
+- `Filldown` обязателен для INTERFACE и VLAN — без него второй+ sticky MAC на одном порту теряется (TextFSM очищает поля после Record).
 
 **Шаг 4.** Зарегистрировать шаблон (`core/constants/commands.py`):
 

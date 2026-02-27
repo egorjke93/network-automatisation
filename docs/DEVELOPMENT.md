@@ -143,7 +143,7 @@ tests/
 └── test_refactoring_utils.py      # Утилиты рефакторинга
 ```
 
-**Всего: 1906 тестов, покрытие ~85%**
+**Всего: 1870+ тестов, покрытие ~85%**
 
 ### 2.2 Описание тестовых модулей
 
@@ -736,8 +736,10 @@ parsed = self._textfsm_parser.parse(
 
 ```textfsm
 # templates/cisco_ios_port_security.textfsm
-Value Required INTERFACE (\S+)
-Value VLAN (\d+)
+# Filldown для INTERFACE и VLAN — сохраняет значения между Record'ами
+# (несколько sticky MAC на одном порту: IP-телефон + ПК, хаб)
+Value Filldown,Required INTERFACE (\S+)
+Value Filldown VLAN (\d+)
 Value Required MAC ([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})
 Value TYPE (sticky)
 

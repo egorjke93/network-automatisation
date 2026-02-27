@@ -190,8 +190,9 @@ tests/
 │   ├── test_switchport_mode.py
 │   └── test_lldp_parsing.py
 │
-├── test_parsers/           # Парсинг (66)
+├── test_parsers/           # Парсинг (85)
 │   ├── test_mac.py
+│   ├── test_port_security.py       # Port-security sticky MAC (19 тестов)
 │   ├── test_lldp.py
 │   ├── test_interfaces.py
 │   ├── test_inventory.py

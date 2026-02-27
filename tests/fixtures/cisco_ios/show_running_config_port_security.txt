@@ -1,19 +1,153 @@
-
+!
+! Last configuration change at 14:32:15 UTC Wed Feb 26 2025
+! NVRAM config last updated at 14:32:20 UTC Wed Feb 26 2025
+!
+version 15.2
+no service pad
+service timestamps debug datetime msec
+service timestamps log datetime msec
+no service password-encryption
+!
+hostname SW-ACCESS-01
+!
+boot-start-marker
+boot-end-marker
+!
+logging buffered 16384
+!
+username admin privilege 15 secret 5 $1$mERr$hx5rVt7rPNoS4wqbXKX7m0
+!
+aaa new-model
+!
+ip domain-name example.com
+ip name-server 8.8.8.8
+!
+spanning-tree mode rapid-pvst
+spanning-tree extend system-id
+!
+vlan 100
+ name USERS
+!
+vlan 200
+ name VOIP
+!
+vlan 300
+ name PRINTERS
+!
+vlan 999
+ name QUARANTINE
+!
 interface GigabitEthernet0/1
- switchport access vlan 100
- switchport port-security mac-address sticky 0011.2233.4455
+ description Uplink to SW-DIST-01
+ switchport mode trunk
+ switchport trunk allowed vlan 100,200,300,999
+ spanning-tree portfast disable
 !
 interface GigabitEthernet0/2
- switchport access vlan 200
- switchport port-security mac-address sticky aabb.ccdd.eeff
- switchport port-security mac-address sticky 1122.3344.5566
+ description Uplink to SW-DIST-02
+ switchport mode trunk
+ switchport trunk allowed vlan 100,200,300,999
+ spanning-tree portfast disable
 !
 interface GigabitEthernet0/3
- description Uplink
- no shutdown
+ description PC-Ivanov
+ switchport mode access
+ switchport access vlan 100
+ switchport port-security
+ switchport port-security maximum 2
+ switchport port-security violation restrict
+ switchport port-security mac-address sticky
+ switchport port-security mac-address sticky 0011.2233.4455
+ spanning-tree portfast
 !
 interface GigabitEthernet0/4
+ description IP-Phone+PC Petrov
+ switchport mode access
+ switchport access vlan 100
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security violation restrict
+ switchport port-security mac-address sticky
+ switchport port-security mac-address sticky aabb.ccdd.ee01
+ switchport port-security mac-address sticky aabb.ccdd.ee02
+ spanning-tree portfast
+!
+interface GigabitEthernet0/5
+ description Hub-Room204 (3 devices)
+ switchport mode access
+ switchport access vlan 100
+ switchport port-security
+ switchport port-security maximum 5
+ switchport port-security violation restrict
+ switchport port-security mac-address sticky
+ switchport port-security mac-address sticky 1111.2222.3333
+ switchport port-security mac-address sticky 4444.5555.6666
+ switchport port-security mac-address sticky 7777.8888.9999
+ spanning-tree portfast
+!
+interface GigabitEthernet0/6
+ description Printer-HP-301
+ switchport mode access
  switchport access vlan 300
+ switchport port-security
+ switchport port-security maximum 1
+ switchport port-security violation shutdown
+ switchport port-security mac-address sticky
  switchport port-security mac-address sticky dead.beef.0001
+ spanning-tree portfast
+!
+interface GigabitEthernet0/7
+ description Conference-Room
+ switchport mode access
+ switchport access vlan 100
+ spanning-tree portfast
+!
+interface GigabitEthernet0/8
+ shutdown
+ switchport mode access
+ switchport access vlan 999
+!
+interface GigabitEthernet0/9
+ description VoIP-Phone-Sidorov
+ switchport mode access
+ switchport access vlan 200
+ switchport port-security
+ switchport port-security maximum 2
+ switchport port-security violation restrict
+ switchport port-security mac-address sticky
+ switchport port-security mac-address sticky cccc.dddd.eeee
+ switchport port-security mac-address sticky ffff.0000.1111
+ spanning-tree portfast
+!
+interface GigabitEthernet0/10
+ description AP-WiFi-Floor2
+ switchport mode trunk
+ switchport trunk native vlan 100
+ switchport trunk allowed vlan 100,200
+ spanning-tree portfast
+!
+interface Vlan1
+ no ip address
+ shutdown
+!
+interface Vlan100
+ ip address 10.100.0.1 255.255.255.0
+ no shutdown
+!
+ip default-gateway 10.100.0.254
+!
+ip access-list standard SNMP-ACCESS
+ permit 10.0.0.0 0.0.0.255
+!
+snmp-server community public RO SNMP-ACCESS
+!
+line con 0
+ login local
+line vty 0 4
+ login local
+ transport input ssh
+line vty 5 15
+ login local
+ transport input ssh
 !
 end

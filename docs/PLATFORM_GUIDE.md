@@ -2921,10 +2921,11 @@ Port-security работает через **виртуальный ключ ко
 
 ```textfsm
 # templates/newplatform_port_security.textfsm
-# Обязательные поля: INTERFACE, MAC, TYPE. Опционально: VLAN.
+# Filldown обязателен — на одном порту может быть несколько sticky MAC
+# (IP-телефон + ПК, хаб с несколькими устройствами)
 
-Value Required INTERFACE (\S+)
-Value VLAN (\d+)
+Value Filldown,Required INTERFACE (\S+)
+Value Filldown VLAN (\d+)
 Value Required MAC ([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})
 Value TYPE (sticky)
 
