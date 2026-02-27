@@ -1,0 +1,19 @@
+
+interface GigabitEthernet0/1
+ switchport access vlan 100
+ switchport port-security mac-address sticky 0011.2233.4455
+!
+interface GigabitEthernet0/2
+ switchport access vlan 200
+ switchport port-security mac-address sticky aabb.ccdd.eeff
+ switchport port-security mac-address sticky 1122.3344.5566
+!
+interface GigabitEthernet0/3
+ description Uplink
+ no shutdown
+!
+interface GigabitEthernet0/4
+ switchport access vlan 300
+ switchport port-security mac-address sticky dead.beef.0001
+!
+end
