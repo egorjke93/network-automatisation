@@ -55,6 +55,7 @@ python -m network_collector --help
 | 17 | **[17_PYTHON_WORKBOOK.md](docs/learning/17_PYTHON_WORKBOOK.md)** | Workbook: ~60 задач, 15 блоков, 3 мини-проекта — пиши код сам |
 | 18 | **[18_PORT_TYPE_AND_SPEED.md](docs/learning/18_PORT_TYPE_AND_SPEED.md)** | Полная цепочка: тип порта + скорость, все маппинги, номинальная скорость |
 | 19 | **[19_GIT_BACKUP.md](docs/learning/19_GIT_BACKUP.md)** | Бэкап конфигов в Git: CLI → SSH → GitBackupPusher → Gitea REST API, site_map, SSL |
+| 20 | **[20_MAC_MATCH_PUSH.md](docs/learning/20_MAC_MATCH_PUSH.md)** | MAC-таблица → матчинг с GLPI → push описаний, port-security, добавление платформ |
 
 ## Ключевые файлы
 

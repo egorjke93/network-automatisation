@@ -2108,24 +2108,117 @@ python -m network_collector sync-netbox --sync-all \
     --site "Office" --role "switch"
 ```
 
-### 10.3 MAC → Описания портов
+### 10.3 MAC → GLPI → Описания портов (полный workflow)
+
+Три шага: собрать MAC-таблицу → сопоставить с GLPI → установить описания на портах.
+
+#### Шаг 1. Подготовка справочника GLPI
+
+Экспортируйте из GLPI таблицу компьютеров в Excel. Файл должен содержать минимум две колонки:
+
+| Name | MAC |
+|------|-----|
+| PC-Ivanov | aa:bb:cc:dd:ee:ff |
+| PC-Petrov | 11:22:33:44:55:66; 77:88:99:aa:bb:cc |
+
+Допускается несколько MAC в одной ячейке (через `;`, `,` или перенос строки).
+Если колонки называются иначе — укажите `--mac-column` и `--name-column`.
+
+#### Шаг 2. Сбор MAC-адресов
 
 ```bash
-# 1. Сбор MAC с описаниями
-python -m network_collector mac --with-descriptions -o mac.xlsx
+# Базовый сбор
+python -m network_collector mac --with-descriptions --format excel -o mac_data.xlsx
 
-# 2. Сопоставление с GLPI
+# Со sticky MAC (найдёт offline ПК через port-security)
+python -m network_collector mac --with-descriptions --with-port-security --format excel -o mac_data.xlsx
+
+# Включить trunk-порты (по умолчанию исключены)
+python -m network_collector mac --with-descriptions --include-trunk --format excel -o mac_data.xlsx
+```
+
+**Результат:** `mac_data.xlsx` с колонками Device, Device IP, Port, MAC Address, VLAN, Type, Status, Description.
+
+#### Шаг 3. Сопоставление с GLPI
+
+```bash
+# Один файл GLPI
 python -m network_collector match-mac \
-    --mac-file mac.xlsx \
-    --hosts-file glpi.xlsx \
+    --mac-file mac_data.xlsx \
+    --hosts-file glpi_computers.xlsx \
     --output matched.xlsx
 
-# 3. Проверка (dry-run)
+# Папка с несколькими файлами GLPI
+python -m network_collector match-mac \
+    --mac-file mac_data.xlsx \
+    --hosts-folder ./glpi_exports/ \
+    --output matched.xlsx
+
+# Кастомные колонки в файле GLPI
+python -m network_collector match-mac \
+    --mac-file mac_data.xlsx \
+    --hosts-file glpi.xlsx \
+    --mac-column "MAC Address" \
+    --name-column "Computer Name" \
+    --output matched.xlsx
+```
+
+**Результат:** `matched.xlsx` с колонками Device, IP, Interface, MAC, VLAN, Current_Description, Host_Name, Matched.
+
+**Статистика в консоли:**
+
+```
+Справочник хостов: 1500 записей
+MAC-адресов: 3200
+Сопоставлено: 2100 (65.6%)
+Не сопоставлено: 1100
+```
+
+#### Шаг 4. Проверка и применение описаний
+
+```bash
+# Dry-run (по умолчанию) — только показать что будет
 python -m network_collector push-descriptions --matched-file matched.xlsx
 
-# 4. Применение
-python -m network_collector push-descriptions --matched-file matched.xlsx --apply
+# Вывод dry-run:
+# switch-01 (10.0.0.1):
+#   interface Gi0/1
+#   description PC-Ivanov
+#   interface Gi0/2
+#   description PC-Petrov
+
+# Применить только на пустые порты
+python -m network_collector push-descriptions --matched-file matched.xlsx --only-empty --apply
+
+# Перезаписать все описания (включая существующие)
+python -m network_collector push-descriptions --matched-file matched.xlsx --overwrite --apply
 ```
+
+**Логика фильтрации при push:**
+
+| Текущее описание | `--only-empty` | `--overwrite` | По умолчанию |
+|-----------------|----------------|---------------|--------------|
+| Пустое | Обновить | Обновить | Обновить |
+| Уже совпадает | Пропустить | Пропустить | Пропустить |
+| Другое | Пропустить | **Обновить** | Пропустить |
+
+#### Добавление новой платформы для MAC
+
+Если ваше устройство использует тот же формат вывода `show mac address-table`, что и Cisco IOS:
+
+```python
+# core/constants/platforms.py — добавить 4 строки:
+SCRAPLI_PLATFORM_MAP["myplatform"] = "cisco_iosxe"
+NTC_PLATFORM_MAP["myplatform"] = "cisco_ios"
+NETMIKO_PLATFORM_MAP["myplatform"] = "cisco_ios"
+VENDOR_MAP["myvendor"] = ["myplatform"]
+
+# core/constants/commands.py — добавить 1 строку:
+COLLECTOR_COMMANDS["mac"]["myplatform"] = "show mac address-table"
+```
+
+Если формат вывода уникальный — создайте TextFSM-шаблон в `templates/` и зарегистрируйте
+в `CUSTOM_TEXTFSM_TEMPLATES`. Подробности: [docs/learning/20_MAC_MATCH_PUSH.md](learning/20_MAC_MATCH_PUSH.md).
 
 ### 10.4 Обновление существующих устройств
 

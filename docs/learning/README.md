@@ -59,10 +59,11 @@
 | 16 | [NetBox Client Deep Dive](16_NETBOX_CLIENT_DEEP_DIVE.md) | Клиентский слой NetBox API: pynetbox, все 6 миксинов (Devices, Interfaces, IP, VLAN, Inventory, DCIM), bulk операции, slug generation, lazy loading, связь sync→client→API | ~40 мин |
 | 18 | [Port Type и Speed](18_PORT_TYPE_AND_SPEED.md) | Полная цепочка определения типа порта и скорости: TextFSM → UNIVERSAL_FIELD_MAP → detect_port_type → номинальная скорость → get_netbox_interface_type. Все маппинги, порядок паттернов, добавление нового типа | ~35 мин |
 | 19 | [Git Backup](19_GIT_BACKUP.md) | Полная цепочка бэкапа конфигов в Git: CLI → SSH → .cfg → GitBackupPusher → Gitea REST API. Группировка по сайтам, site_map, SSL, тестирование | ~30 мин |
+| 20 | [MAC, Match, Push](20_MAC_MATCH_PUSH.md) | Полная цепочка: MAC-таблица → матчинг с GLPI → push описаний. Port-security, sticky MAC, добавление новой платформы, что доработать | ~45 мин |
 
 **Итого deep dive:** примерно 5 часов.
 
-**Рекомендуемый порядок:** 10 → 11 → 12 → 13 → 14 → 15 → 16 → 18 → 19 (doc 10 вводит паттерны, которые используются в doc 11; doc 12 независимый, но ссылается на оба; doc 13 — глубокий разбор конкретного flow с историей бага; doc 14 — сквозной механизм нормализации имён; doc 15 — конфигурирование устройств через YAML и Netmiko; doc 16 — клиентский слой NetBox API, дополняет doc 11; doc 18 — полная цепочка определения типа порта и скорости, все маппинги; doc 19 — бэкап конфигов в Git через REST API).
+**Рекомендуемый порядок:** 10 → 11 → 12 → 13 → 14 → 15 → 16 → 18 → 19 (doc 10 вводит паттерны, которые используются в doc 11; doc 12 независимый, но ссылается на оба; doc 13 — глубокий разбор конкретного flow с историей бага; doc 14 — сквозной механизм нормализации имён; doc 15 — конфигурирование устройств через YAML и Netmiko; doc 16 — клиентский слой NetBox API, дополняет doc 11; doc 18 — полная цепочка определения типа порта и скорости, все маппинги; doc 19 — бэкап конфигов в Git через REST API; doc 20 — MAC-таблица, матчинг с GLPI, push описаний).
 
 ## Практика: пиши код сам
 
@@ -101,5 +102,6 @@
 | 15 Push Config | [MANUAL.md](../MANUAL.md), [DEVELOPMENT.md](../DEVELOPMENT.md), [ARCHITECTURE.md](../ARCHITECTURE.md) |
 | 16 NetBox Client Deep Dive | [ARCHITECTURE.md](../ARCHITECTURE.md), [DEVELOPMENT.md](../DEVELOPMENT.md) |
 | 19 Git Backup | [MANUAL.md](../MANUAL.md), [TODO.md](../TODO.md) |
+| 20 MAC, Match, Push | [MANUAL.md](../MANUAL.md), [PLATFORM_GUIDE.md](../PLATFORM_GUIDE.md) |
 
 **Рекомендация:** сначала прочитай обучающий документ, чтобы понять концепцию. Потом загляни в связанный документ из основной документации для полной картины.
