@@ -516,6 +516,66 @@ python -m network_collector sync-netbox --interfaces --dry-run
 | LAG формат (если новый) | `core/constants/interfaces.py` | `is_lag_name()` — добавить префикс |
 | Интерфейс маппинг | `core/constants/interfaces.py` | `INTERFACE_SHORT_MAP`, `INTERFACE_FULL_MAP` |
 | LLDP определение | `core/domain/lldp.py` | `_PLATFORM_PATTERNS` — добавить запись |
+| Port-security шаблон | `core/constants/commands.py` | `CUSTOM_TEXTFSM_TEMPLATES[("platform", "port-security")]` |
+
+### 3.7 Добавление MAC-таблицы и port-security для нового вендора
+
+При добавлении нового коммутатора доступа (access switch) нужно настроить:
+1. **MAC-таблица** — основной сбор MAC-адресов
+2. **Port-security** — sticky MAC для обнаружения offline устройств (опционально)
+
+#### MAC-таблица (обязательно)
+
+```python
+# 1. core/constants/platforms.py — 4 маппинга
+SCRAPLI_PLATFORM_MAP["eltex_mes"] = "cisco_iosxe"    # SSH
+NTC_PLATFORM_MAP["eltex_mes"] = "cisco_ios"            # TextFSM
+NETMIKO_PLATFORM_MAP["eltex_mes"] = "cisco_ios"        # Netmiko
+VENDOR_MAP["eltex"] = ["eltex", "eltex_mes"]           # Группировка
+
+# 2. core/constants/commands.py — команда
+COLLECTOR_COMMANDS["mac"]["eltex_mes"] = "show mac address-table"
+
+# 3. [Если NTC не парсит] templates/eltex_mes_show_mac.textfsm + регистрация:
+CUSTOM_TEXTFSM_TEMPLATES[("eltex_mes", "show mac address-table")] = \
+    "eltex_mes_show_mac.textfsm"
+```
+
+**Безопасность:** если NTC Templates уже парсит вывод (формат как у cisco_ios) — шаг 3 не нужен. Fallback на NTC сработает автоматически.
+
+#### Port-security sticky MAC (опционально)
+
+Port-security собирает MAC из `show running-config`. Код спроектирован безопасно:
+- Нет шаблона → fallback на `cisco_ios` → если нет и его → пустой `[]`
+- Любая ошибка → `logger.warning()` + пустой `[]`
+- Основная MAC-таблица работает независимо от port-security
+
+```python
+# core/constants/commands.py — регистрация шаблона
+CUSTOM_TEXTFSM_TEMPLATES[("eltex_mes", "port-security")] = \
+    "eltex_mes_port_security.textfsm"
+```
+
+TextFSM-шаблон должен извлекать поля: `INTERFACE`, `VLAN`, `MAC`, `TYPE`.
+
+**Когда нужен свой шаблон:** только если формат `show running-config` отличается от Cisco IOS (другой синтаксис `port-security mac-address sticky`). Если формат совпадает — cisco_ios fallback сработает автоматически.
+
+#### Проверка
+
+```bash
+# Сбор MAC без port-security
+python -m network_collector mac --format json
+
+# Сбор с port-security
+python -m network_collector mac --with-port-security --format json
+
+# Полная цепочка (dry-run, без применения)
+python -m network_collector mac --format excel
+python -m network_collector match-mac --mac-file mac_data.xlsx --hosts-file glpi.xlsx
+python -m network_collector push-descriptions --matched-file matched_data.xlsx
+```
+
+Подробный разбор: [docs/learning/20_MAC_MATCH_PUSH.md](learning/20_MAC_MATCH_PUSH.md) — секции 9 и port-security.
 
 ---
 

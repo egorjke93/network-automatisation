@@ -20,6 +20,7 @@
 14. [QTech SVI: проверка VLAN интерфейсов](#1216-qtech-svi-добавление-vlan-интерфейсов)
 15. [LLDP шаблоны и кабельная синхронизация](#1217-lldp-шаблоны-и-кабельная-синхронизация)
 16. [UNIVERSAL_FIELD_MAP: нормализация имён полей NTC](#1219-universal_field_map-нормализация-имён-полей-ntc)
+17. [MAC-таблица и port-security: добавление нового вендора](#1220-mac-таблица-и-port-security-добавление-нового-вендора)
 
 ---
 
@@ -2846,6 +2847,136 @@ UNIVERSAL_FIELD_MAP = {
 # Посмотреть какие поля возвращает TextFSM для платформы
 python -m network_collector interfaces --format parsed --host 10.0.0.1
 ```
+
+---
+
+## 12.20 MAC-таблица и port-security: добавление нового вендора
+
+### Обзор
+
+Для нового коммутатора доступа (access switch) часто нужны две вещи:
+1. **MAC-таблица** — основной сбор MAC-адресов (`show mac address-table`)
+2. **Port-security sticky MAC** — MAC из `show running-config` для обнаружения offline устройств
+
+Эти механизмы работают **независимо**: MAC-таблица собирается всегда, port-security — только при `--with-port-security` и только если есть соответствующий TextFSM-шаблон.
+
+### Добавление MAC-таблицы
+
+**Минимум (если вывод как Cisco):**
+
+```python
+# core/constants/commands.py
+COLLECTOR_COMMANDS["mac"]["newplatform"] = "show mac address-table"
+```
+
+NTC Templates подхватит парсинг автоматически через `NTC_PLATFORM_MAP`.
+
+**Если формат вывода отличается:**
+
+```python
+# 1. Создать шаблон: templates/newplatform_show_mac_address_table.textfsm
+# Обязательные поля: VLAN, MAC, TYPE, INTERFACE
+
+# 2. Зарегистрировать:
+CUSTOM_TEXTFSM_TEMPLATES[("newplatform", "show mac address-table")] = \
+    "newplatform_show_mac_address_table.textfsm"
+```
+
+### Добавление port-security sticky MAC
+
+Port-security работает через **виртуальный ключ команды** `"port-security"` — фактическая SSH-команда всегда `show running-config`, но парсинг использует специальный TextFSM-шаблон.
+
+#### Как работает fallback (безопасность)
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ _collect_sticky_macs(device.platform = "newplatform")        │
+│                                                               │
+│ 1. Ищет ("newplatform", "port-security") в CUSTOM_TEXTFSM    │
+│    └── Не найден                                              │
+│                                                               │
+│ 2. Ищет ("cisco_ios", "port-security") в CUSTOM_TEXTFSM      │
+│    └── Найден! → cisco_ios_port_security.textfsm              │
+│                                                               │
+│ 3. Парсит show running-config шаблоном cisco_ios              │
+│    └── Если формат совпадает → sticky MAC собраны!            │
+│    └── Если формат другой → пустой результат (не ошибка)      │
+│                                                               │
+│ 4. При любом Exception → logger.warning() → return []        │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Вывод:** добавление новой платформы без шаблона port-security **ничего не ломает**.
+
+#### Когда нужен свой шаблон
+
+| Формат running-config | Свой шаблон? |
+|-----------------------|-------------|
+| `switchport port-security mac-address sticky XXXX.XXXX.XXXX` (как IOS) | Нет, fallback сработает |
+| Другой синтаксис (NX-OS: `...sticky XXXX.XXXX.XXXX vlan NNN`) | Да |
+| Другой формат MAC (Huawei: `XXXX-XXXX-XXXX`) | Да |
+| Нет port-security на платформе | Не нужен, пустой `[]` |
+
+#### Создание шаблона port-security
+
+```textfsm
+# templates/newplatform_port_security.textfsm
+# Обязательные поля: INTERFACE, MAC, TYPE. Опционально: VLAN.
+
+Value Required INTERFACE (\S+)
+Value VLAN (\d+)
+Value Required MAC ([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})
+Value TYPE (sticky)
+
+Start
+  ^interface\s+${INTERFACE} -> Interface
+
+Interface
+  ^\s+switchport\s+access\s+vlan\s+${VLAN}
+  ^\s+switchport\s+port-security\s+mac-address\s+${TYPE}\s+${MAC} -> Record
+  ^interface\s+${INTERFACE} -> Continue.Clearall
+  ^interface\s+${INTERFACE} -> Interface
+  ^end -> End
+```
+
+**Адаптация под платформу:**
+- Regex для MAC: `[0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4}` — Cisco формат (XXXX.XXXX.XXXX)
+- Для Huawei: `[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}` (XXXX-XXXX-XXXX)
+- Для Linux/общий: `[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}`
+
+**Регистрация:**
+
+```python
+# core/constants/commands.py
+CUSTOM_TEXTFSM_TEMPLATES[("newplatform", "port-security")] = \
+    "newplatform_port_security.textfsm"
+```
+
+### Полный чеклист для нового access-коммутатора
+
+| # | Действие | Файл | Обязат.? |
+|---|----------|------|----------|
+| 1 | Маппинги (4 словаря) | `core/constants/platforms.py` | Да |
+| 2 | Команда MAC | `core/constants/commands.py` | Да |
+| 3 | TextFSM для MAC (если вывод не как Cisco) | `templates/` + `commands.py` | Условно |
+| 4 | TextFSM для port-security (если синтаксис не как IOS) | `templates/` + `commands.py` | Нет |
+| 5 | Fixture с реальным выводом | `tests/fixtures/newplatform/` | Да |
+| 6 | Тест парсинга | `tests/test_parsers/` | Да |
+| 7 | Проверка: `mac --format json` | — | Да |
+| 8 | Проверка: `mac --with-port-security --format json` | — | Рекомендуется |
+| 9 | Полный тест-сьют: `pytest tests/ -v` | — | Да |
+
+### Что если что-то пойдёт не так
+
+| Ситуация | Последствие | Решение |
+|----------|------------|---------|
+| Нет команды в COLLECTOR_COMMANDS["mac"] | MAC не соберутся (warning в логе) | Добавить команду |
+| NTC не парсит вывод, нет кастомного шаблона | MAC таблица пустая | Создать TextFSM шаблон |
+| Нет шаблона port-security | Sticky MAC = `[]`, основная таблица работает | Создать шаблон или оставить |
+| Ошибка в TextFSM regex | Пустой результат парсинга | Отладить: `--format parsed` |
+| Неправильный Netmiko маппинг | Ошибка при push-descriptions | Проверить `NETMIKO_PLATFORM_MAP` |
+
+Подробный разбор с примерами кода: [docs/learning/20_MAC_MATCH_PUSH.md](learning/20_MAC_MATCH_PUSH.md).
 
 ---
 

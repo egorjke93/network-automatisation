@@ -686,6 +686,252 @@ class TestMyPlatformMAC:
 
 Плюс маппинг интерфейсов если у платформы уникальные имена (как `TFGigabitEthernet` у QTech).
 
+### Port-security: добавление sticky MAC для новой платформы
+
+Port-security (sticky MAC) — это отдельный механизм, работающий поверх основной MAC-таблицы. Он собирает MAC-адреса из `show running-config` (а не из `show mac address-table`). Для новой платформы его нужно добавлять **отдельно** от основной MAC-таблицы.
+
+#### Почему это безопасно
+
+Код спроектирован так, что **отсутствие поддержки port-security не ломает ничего**:
+
+```python
+# collectors/mac.py → _collect_sticky_macs()
+def _collect_sticky_macs(self, conn, device, interface_status):
+    platform = device.platform
+
+    # 1. Ищем шаблон для платформы
+    template_key = (platform, "port-security")
+    if template_key not in CUSTOM_TEXTFSM_TEMPLATES:
+        # 2. Пробуем fallback на cisco_ios
+        template_key = ("cisco_ios", "port-security")
+        if template_key not in CUSTOM_TEXTFSM_TEMPLATES:
+            # 3. Нет шаблона → пустой список (не ошибка!)
+            logger.debug(f"Нет шаблона port-security для {platform}")
+            return []
+
+    try:
+        response = conn.send_command("show running-config")
+        parsed = self._textfsm_parser.parse(output, platform, "port-security")
+        # ...обработка результатов...
+    except Exception as e:
+        # 4. Любая ошибка → предупреждение + пустой список
+        logger.warning(f"Ошибка сбора sticky MAC: {e}")
+
+    return sticky_macs
+```
+
+**Четыре уровня защиты:**
+
+| # | Защита | Что происходит |
+|---|--------|----------------|
+| 1 | Шаблон не найден для платформы | Пробует cisco_ios как fallback |
+| 2 | cisco_ios шаблон тоже не найден | Возвращает пустой список `[]` |
+| 3 | Шаблон найден, но парсинг вернул пустоту | Возвращает пустой список `[]` |
+| 4 | Любое исключение (SSH, парсинг, etc.) | Логирует warning, возвращает `[]` |
+
+Это значит: **если ты добавляешь новую платформу и не создаёшь port-security шаблон — ничего не упадёт**. Просто sticky MAC не будут собираться, а основная MAC-таблица будет работать нормально.
+
+#### Когда нужен свой шаблон port-security
+
+Свой шаблон нужен если формат `show running-config` отличается от Cisco IOS.
+
+**Cisco IOS/IOS-XE формат** (текущий шаблон покрывает):
+```
+interface GigabitEthernet0/1
+ switchport access vlan 100
+ switchport port-security mac-address sticky aabb.ccdd.eeff
+!
+```
+
+**Если твоя платформа использует тот же формат** — дополнительный шаблон не нужен! Fallback на cisco_ios сработает автоматически:
+
+```python
+# Это уже есть в CUSTOM_TEXTFSM_TEMPLATES:
+("cisco_ios", "port-security"): "cisco_ios_port_security.textfsm",
+("cisco_iosxe", "port-security"): "cisco_ios_port_security.textfsm",
+```
+
+**Если формат другой** — нужен свой шаблон. Примеры отличий:
+
+| Платформа | Синтаксис port-security | Нужен свой шаблон? |
+|-----------|------------------------|-------------------|
+| Cisco IOS/IOS-XE | `switchport port-security mac-address sticky XXXX.XXXX.XXXX` | Нет (уже есть) |
+| NX-OS | `switchport port-security mac-address sticky XXXX.XXXX.XXXX vlan NNN` | Да (VLAN в той же строке) |
+| QTech | `mac-address-table static XXXX.XXXX.XXXX vlan NNN interface GiX/X` | Да (другой синтаксис) |
+| Eltex MES | `switchport port-security mac-address sticky XXXX.XXXX.XXXX` | Нет (как у Cisco) |
+| Huawei | `mac-address sticky XXXX-XXXX-XXXX interface GiX/0/X vlan NNN` | Да (другой формат MAC) |
+
+#### Пошаговое добавление port-security для новой платформы
+
+**Пример:** добавляем port-security для NX-OS (Nexus).
+
+**Шаг 1.** Узнать формат вывода — подключись к устройству и посмотри running-config:
+
+```
+ssh admin@nexus-switch
+show running-config | include "port-security|interface"
+```
+
+Вывод NX-OS:
+```
+interface Ethernet1/1
+  switchport access vlan 100
+  switchport port-security mac-address sticky 0011.2233.4455 vlan 100
+```
+
+Отличие от IOS: `vlan NNN` в конце строки с MAC.
+
+**Шаг 2.** Сохранить образец вывода в fixtures:
+
+```bash
+# Скопировать вывод running-config в файл
+# tests/fixtures/cisco_nxos/show_running_config_port_security.txt
+```
+
+**Шаг 3.** Создать TextFSM-шаблон (`templates/cisco_nxos_port_security.textfsm`):
+
+```textfsm
+Value Required INTERFACE (\S+)
+Value VLAN (\d+)
+Value Required MAC ([0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})
+Value TYPE (sticky)
+
+Start
+  ^interface\s+${INTERFACE} -> Interface
+
+Interface
+  ^\s+switchport\s+access\s+vlan\s+${VLAN}
+  ^\s+switchport\s+port-security\s+mac-address\s+${TYPE}\s+${MAC} -> Record
+  ^\s+switchport\s+port-security\s+mac-address\s+${TYPE}\s+${MAC}\s+vlan\s+${VLAN} -> Record
+  ^interface\s+${INTERFACE} -> Continue.Clearall
+  ^interface\s+${INTERFACE} -> Interface
+  ^end -> End
+```
+
+**Важно:** поля должны называться точно `INTERFACE`, `VLAN`, `MAC`, `TYPE` — это имена, которые ожидает `_collect_sticky_macs()`.
+
+**Шаг 4.** Зарегистрировать шаблон (`core/constants/commands.py`):
+
+```python
+CUSTOM_TEXTFSM_TEMPLATES = {
+    # ...существующие...
+    ("cisco_nxos", "port-security"): "cisco_nxos_port_security.textfsm",
+}
+```
+
+**Шаг 5.** Написать тест:
+
+```python
+# tests/test_parsers/test_nxos_port_security.py
+from pathlib import Path
+from network_collector.parsers.textfsm_parser import NTCParser
+
+class TestNXOSPortSecurity:
+    def test_parse_sticky_mac(self):
+        """Парсинг sticky MAC из NX-OS running-config."""
+        fixture = Path("tests/fixtures/cisco_nxos/show_running_config_port_security.txt")
+        output = fixture.read_text()
+
+        parser = NTCParser()
+        result = parser.parse(output, "cisco_nxos", "port-security")
+
+        assert len(result) > 0
+        row = result[0]
+        assert row["interface"]
+        assert row["mac"]
+        assert row["type"] == "sticky"
+
+    def test_parse_empty_config(self):
+        """Если port-security не настроен — пустой список."""
+        output = "interface Ethernet1/1\n  no shutdown\n!\nend"
+        parser = NTCParser()
+        result = parser.parse(output, "cisco_nxos", "port-security")
+        assert result == []
+```
+
+**Шаг 6.** Проверить:
+
+```bash
+# Тесты
+cd /home/sa/project
+python -m pytest network_collector/tests/test_parsers/test_nxos_port_security.py -v
+
+# Реальный сбор
+python -m network_collector mac --with-port-security --format json
+```
+
+#### Чеклист безопасности при добавлении платформы
+
+```
+✅ Добавить маппинги в platforms.py (4 словаря)
+✅ Добавить команду MAC в commands.py
+✅ [Если нужно] Создать TextFSM шаблон для MAC-таблицы
+✅ [Если нужно] Создать TextFSM шаблон для port-security
+✅ Зарегистрировать шаблоны в CUSTOM_TEXTFSM_TEMPLATES
+✅ Сохранить fixture с реальным выводом устройства
+✅ Написать тесты для парсинга
+✅ Проверить с --format json (без push!)
+✅ Убедиться что старые платформы не сломались: pytest tests/ -v
+```
+
+#### Что будет если что-то пойдёт не так
+
+| Проблема | Что произойдёт | Как исправить |
+|----------|---------------|---------------|
+| Шаблон не найден | Fallback на cisco_ios → пустой `[]` | Зарегистрировать в CUSTOM_TEXTFSM_TEMPLATES |
+| Шаблон не парсит вывод | `parsed = []`, sticky MAC пустой | Исправить regex в шаблоне |
+| Ошибка SSH (show running-config) | `logger.warning(...)`, sticky MAC = `[]` | Проверить права доступа |
+| Неправильные имена полей в шаблоне | Пустые значения в mac/interface | Переименовать поля в INTERFACE, MAC, VLAN, TYPE |
+| Новый формат MAC (не `XXXX.XXXX.XXXX`) | MAC не нормализуется | `normalize_mac()` поддерживает все форматы |
+| Неправильный NETMIKO_PLATFORM_MAP | Ошибка при push-descriptions | Проверить маппинг, попробовать `cisco_ios` |
+
+#### Полная диаграмма: что где добавлять для MAC + port-security
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ ФАЙЛ: core/constants/platforms.py                                │
+│                                                                   │
+│ SCRAPLI_PLATFORM_MAP["newplatform"] = "cisco_iosxe"  # SSH       │
+│ NTC_PLATFORM_MAP["newplatform"] = "cisco_ios"         # TextFSM  │
+│ NETMIKO_PLATFORM_MAP["newplatform"] = "cisco_ios"     # Netmiko  │
+│ VENDOR_MAP["newvendor"] = ["newplatform"]              # Группа   │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ ФАЙЛ: core/constants/commands.py                                 │
+│                                                                   │
+│ COLLECTOR_COMMANDS["mac"]["newplatform"] = "show mac address-table"
+│                                                                   │
+│ CUSTOM_TEXTFSM_TEMPLATES = {                                      │
+│     ("newplatform", "show mac address-table"):                    │
+│         "newplatform_show_mac_address_table.textfsm",  # если нужен
+│     ("newplatform", "port-security"):                             │
+│         "newplatform_port_security.textfsm",           # если нужен
+│ }                                                                 │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ ПАПКА: templates/                                                 │
+│                                                                   │
+│ newplatform_show_mac_address_table.textfsm    # MAC-таблица       │
+│ newplatform_port_security.textfsm             # Sticky MAC        │
+│                                                                   │
+│ Поля MAC:     VLAN, MAC, TYPE, INTERFACE                          │
+│ Поля Sticky:  INTERFACE, VLAN, MAC, TYPE                          │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ ПАПКА: tests/                                                     │
+│                                                                   │
+│ fixtures/newplatform/show_mac_address_table.txt  # Реальный вывод │
+│ fixtures/newplatform/show_running_config_ps.txt  # Port-security  │
+│ test_parsers/test_newplatform_mac.py             # Тесты парсинга │
+└──────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## 10. Тестирование
